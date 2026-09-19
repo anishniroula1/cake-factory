@@ -49,6 +49,53 @@ class CatalogMultiSearchClient:
         return {"responses": [{"hits": {"hits": []}}]}
 
 
+class CatalogPageClient:
+    def __init__(self):
+        self.request = None
+
+    def search(self, **request):
+        self.request = request
+        return {
+            "aggregations": {
+                "matches": {
+                    "buckets": [
+                        self._bucket("key-1", 1.0),
+                        self._bucket("key-2", 0.96),
+                        self._bucket("key-3", 0.955),
+                    ]
+                }
+            }
+        }
+
+    @staticmethod
+    def _bucket(sentence_key, score):
+        return {
+            "key": {"sentenceKey": sentence_key},
+            "sample": {
+                "hits": {
+                    "hits": [
+                        {
+                            "_score": score,
+                            "_source": {
+                                "sentenceKey": sentence_key,
+                                "sentenceContent": f"Sentence {sentence_key}",
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+
+
+class EligibleSentenceClient:
+    def __init__(self):
+        self.request = None
+
+    def count(self, **request):
+        self.request = request
+        return {"count": 1}
+
+
 class AliasIndexClient:
     class Indices:
         def __init__(self):
@@ -209,6 +256,49 @@ def test_catalog_msearch_adds_the_catalog_alias_before_each_body():
         body,
     ]
     assert responses == [{"hits": {"hits": []}}]
+
+
+def test_catalog_page_returns_unique_keys_and_composite_cursor():
+    client = CatalogPageClient()
+    store = OpenSearchStore(config, client)
+
+    result = store.catalog_match_page(
+        "key-1",
+        [0.0] * 512,
+        90,
+        2,
+        None,
+    )
+
+    composite = client.request["body"]["aggs"]["matches"]["composite"]
+    assert composite["size"] == 3
+    assert [match["sentenceKey"] for match in result["matches"]] == [
+        "key-1",
+        "key-2",
+    ]
+    assert result["matches"][0]["matchType"] == "exact"
+    assert result["matches"][1]["similarityPercentage"] == 92.0
+    assert result["nextAfterKey"] == {"sentenceKey": "key-2"}
+
+
+def test_source_sentence_eligibility_uses_all_matching_filters():
+    client = EligibleSentenceClient()
+    store = OpenSearchStore(config, client)
+
+    exists = store.eligible_application_sentence_exists(
+        "A1",
+        "key-1",
+        "Asylee",
+    )
+
+    assert exists is True
+    assert client.request["body"]["query"]["bool"]["filter"] == [
+        {"term": {"applicationId": "A1"}},
+        {"term": {"sentenceKey": "key-1"}},
+        {"term": {"analysisGroup": "Asylee"}},
+        {"term": {"isTracer": False}},
+        {"term": {"isFormLanguage": False}},
+    ]
 
 
 def test_reset_deletes_configured_indexes_and_existing_alias_targets():

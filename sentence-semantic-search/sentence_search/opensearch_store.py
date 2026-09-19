@@ -457,81 +457,111 @@ class OpenSearchStore:
         matches = []
         after_key = None
         while True:
-            composite = {
-                "size": CATALOG_PAGE_SIZE,
-                "sources": [{"sentenceKey": {"terms": {"field": "sentenceKey"}}}],
-            }
-            if after_key:
-                composite["after"] = after_key
-            response = self.client.search(
-                index=self.config.catalog_alias,
-                body={
-                    "size": 0,
-                    "track_total_hits": False,
-                    "query": {
-                        "bool": {
-                            "should": [
-                                {"term": {"sentenceKey": source_key}},
-                                {
-                                    "knn": {
-                                        VECTOR_FIELD: {
-                                            "vector": vector,
-                                            "min_score": minimum_opensearch_score(
-                                                threshold
-                                            ),
-                                            "method_parameters": {
-                                                "nprobes": self.config.ivf_nprobes,
-                                            },
-                                        }
-                                    }
-                                },
-                            ],
-                            "minimum_should_match": 1,
-                        }
-                    },
-                    "aggs": {
-                        "matches": {
-                            "composite": composite,
-                            "aggs": {
-                                "sample": {
-                                    "top_hits": {
-                                        "size": 1,
-                                        "_source": [
-                                            "sentenceKey",
-                                            "sentenceContent",
-                                        ],
+            page = self.catalog_match_page(
+                source_key,
+                vector,
+                threshold,
+                CATALOG_PAGE_SIZE,
+                after_key,
+            )
+            matches.extend(page["matches"])
+            after_key = page["nextAfterKey"]
+            if after_key is None:
+                break
+        return matches
+
+    def catalog_match_page(
+        self,
+        source_key: str,
+        vector: list,
+        threshold: int,
+        page_size: int,
+        after_key: dict | None,
+    ) -> dict:
+        """Return one unique catalog-match page and its composite cursor."""
+
+        # Ask for one extra bucket so the API knows whether another catalog
+        # page really exists without returning an empty final page.
+        composite = {
+            "size": page_size + 1,
+            "sources": [{"sentenceKey": {"terms": {"field": "sentenceKey"}}}],
+        }
+        if after_key:
+            composite["after"] = after_key
+        response = self.client.search(
+            index=self.config.catalog_alias,
+            body={
+                "size": 0,
+                "track_total_hits": False,
+                "query": {
+                    "bool": {
+                        "should": [
+                            {"term": {"sentenceKey": source_key}},
+                            {
+                                "knn": {
+                                    VECTOR_FIELD: {
+                                        "vector": vector,
+                                        "min_score": minimum_opensearch_score(
+                                            threshold
+                                        ),
+                                        "method_parameters": {
+                                            "nprobes": self.config.ivf_nprobes,
+                                        },
                                     }
                                 }
                             },
-                        }
-                    },
+                        ],
+                        "minimum_should_match": 1,
+                    }
                 },
-            )
-            result = response["aggregations"]["matches"]
-            for bucket in result["buckets"]:
-                hit = bucket["sample"]["hits"]["hits"][0]
-                candidate = hit["_source"]
-                candidate_key = candidate["sentenceKey"]
-                if candidate_key == source_key:
-                    percentage = 100.0
-                    match_type = "exact"
-                else:
-                    percentage = cosine_percentage(float(hit["_score"]))
-                    match_type = "similar"
-                if percentage >= threshold:
-                    matches.append(
-                        {
-                            "sentenceKey": candidate_key,
-                            "sentenceContent": candidate["sentenceContent"],
-                            "similarityPercentage": percentage,
-                            "matchType": match_type,
-                        }
-                    )
+                "aggs": {
+                    "matches": {
+                        "composite": composite,
+                        "aggs": {
+                            "sample": {
+                                "top_hits": {
+                                    "size": 1,
+                                    "_source": [
+                                        "sentenceKey",
+                                        "sentenceContent",
+                                    ],
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+        )
+        buckets = response["aggregations"]["matches"]["buckets"]
+        page_buckets = buckets[:page_size]
+        matches = []
+        for bucket in page_buckets:
+            hit = bucket["sample"]["hits"]["hits"][0]
+            candidate = hit["_source"]
+            candidate_key = candidate["sentenceKey"]
+            if candidate_key == source_key:
+                percentage = 100.0
+                match_type = "exact"
+            else:
+                percentage = cosine_percentage(float(hit["_score"]))
+                match_type = "similar"
+            if percentage >= threshold:
+                matches.append(
+                    {
+                        "sentenceKey": candidate_key,
+                        "sentenceContent": candidate["sentenceContent"],
+                        "similarityPercentage": percentage,
+                        "matchType": match_type,
+                    }
+                )
 
-            after_key = result.get("after_key")
-            if not after_key or not result["buckets"]:
-                break
-        return matches
+        next_after_key = None
+        if len(buckets) > page_size and page_buckets:
+            next_after_key = page_buckets[-1]["key"]
+        return {
+            "matches": matches,
+            "nextAfterKey": next_after_key,
+        }
 
     def multi_search_catalog(self, bodies: list) -> list:
         """Send many catalog searches in one OpenSearch request."""
@@ -597,6 +627,32 @@ class OpenSearchStore:
             "nextAfterGlobalId": next_after,
             "totalSentences": total,
         }
+
+    def eligible_application_sentence_exists(
+        self,
+        application_id: str,
+        sentence_key: str,
+        analysis_group: str,
+    ) -> bool:
+        """Check that an eligible source sentence belongs to the application."""
+
+        response = self.client.count(
+            index=self.config.occurrence_alias,
+            body={
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"applicationId": application_id}},
+                            {"term": {"sentenceKey": sentence_key}},
+                            {"term": {"analysisGroup": analysis_group}},
+                            {"term": {"isTracer": False}},
+                            {"term": {"isFormLanguage": False}},
+                        ]
+                    }
+                }
+            },
+        )
+        return int(response["count"]) > 0
 
     def occurrence_counts_by_key(
         self,

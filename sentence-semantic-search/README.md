@@ -92,11 +92,16 @@ GET /applications/A1/sentences/semantic-search
 
 The API:
 
-1. Reads the saved vector for sentenceKey.
-2. Runs a live vector search in the catalog.
-3. Keeps catalog results at or above the requested cosine percentage.
-4. Reads matching occurrences outside the provided application.
-5. Returns every result with matchType exact or similar and matchPercentage.
+1. Checks that sentenceKey belongs to the provided application and analysis
+   group.
+2. Rejects a source sentence when it is a tracer or form-language sentence.
+3. Reads the saved vector for sentenceKey.
+4. Runs a live vector search in the catalog.
+5. Keeps catalog results at or above the requested cosine percentage.
+6. Reads matching occurrences outside the provided application.
+
+Returned occurrences must use the requested analysisGroup. Tracer and
+form-language occurrences are always removed.
 
 No Titan call is made during this search because the vector already exists.
 For IVF, the API searches the number of closest buckets configured by
@@ -112,10 +117,28 @@ GET /applications/A1/sentences/semantic-search-paginated
     &pageSize=50
 ```
 
-This endpoint returns at most pageSize matches. Its totalMatches,
-exactMatchCount, and similarMatchCount values cover only the returned page.
-matchingCountScope is currentPage. It does not count every matching occurrence
-before returning the page. Send nextToken back unchanged to read the next page.
+Pagination happens in the semantic catalog. The endpoint returns at most
+pageSize unique matching sentence keys. For every returned key, it includes:
+
+- sentenceContent
+- matchPercentage
+- matchType
+- occurrenceCount
+- every eligible occurrence for that key
+
+The occurrence records are loaded with internal OpenSearch search-after pages,
+but there is no public occurrence token. The public nextToken moves to the next
+catalog page. Send it back unchanged.
+
+totalMatches, exactMatchCount, and similarMatchCount cover unique catalog
+matches on the current page. returnedOccurrences is the combined number of
+occurrence records inside those matches. matchingCountScope is
+currentCatalogPage.
+
+A catalog key with no occurrence in the requested analysis group is skipped.
+The endpoint continues reading catalog keys until it fills the requested page
+or reaches the end. A page can still be large when its keys have many
+occurrences.
 
 The original semantic-search endpoint still returns every match. Its
 matchingCountScope is allResults. Use that endpoint only when the caller really

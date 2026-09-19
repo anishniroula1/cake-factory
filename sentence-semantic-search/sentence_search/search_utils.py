@@ -55,10 +55,10 @@ def decode_page_token(token: str) -> dict:
         json.JSONDecodeError,
     ) as error:
         raise ValueError("Invalid nextToken") from error
-    if (
-        not isinstance(state, dict)
-        or "afterGlobalId" not in state
-        or state["afterGlobalId"] is None
-    ):
+    if not isinstance(state, dict):
+        raise ValueError("Invalid nextToken")
+    has_global_id_cursor = state.get("afterGlobalId") is not None
+    has_catalog_cursor = state.get("afterKey") is not None
+    if not has_global_id_cursor and not has_catalog_cursor:
         raise ValueError("Invalid nextToken")
     return state

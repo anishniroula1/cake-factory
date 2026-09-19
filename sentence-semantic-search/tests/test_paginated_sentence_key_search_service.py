@@ -4,59 +4,107 @@ from sentence_search.paginated_sentence_key_search_service import (
 from sentence_search.sentence_key_search_service import SentenceKeySearchService
 
 SOURCE_KEY = "a" * 64
-SIMILAR_KEY = "b" * 64
+SIMILAR_KEY_B = "b" * 64
+SIMILAR_KEY_C = "c" * 64
+SIMILAR_KEY_D = "d" * 64
 
 
 class FakeOpenSearchStore:
     def __init__(self):
-        self.page_requests = []
+        self.catalog_page_requests = []
+        self.occurrence_requests = []
+
+    def eligible_application_sentence_exists(
+        self,
+        application_id,
+        sentence_key,
+        analysis_group,
+    ):
+        return (
+            application_id == "A1"
+            and sentence_key == SOURCE_KEY
+            and analysis_group == "Asylee"
+        )
 
     def catalog_vector(self, sentence_key):
         assert sentence_key == SOURCE_KEY
         return [1.0, 0.0]
 
-    def catalog_matches(self, sentence_key, vector, threshold):
-        return [
-            {"sentenceKey": SOURCE_KEY, "similarityPercentage": 100.0},
-            {"sentenceKey": SIMILAR_KEY, "similarityPercentage": 92.0},
-        ]
+    def catalog_match_page(
+        self,
+        sentence_key,
+        vector,
+        threshold,
+        page_size,
+        after_key,
+    ):
+        assert sentence_key == SOURCE_KEY
+        assert vector == [1.0, 0.0]
+        assert threshold == 90
+        self.catalog_page_requests.append(
+            {"pageSize": page_size, "afterKey": after_key}
+        )
+        if after_key is None:
+            return {
+                "matches": [
+                    self._candidate(SOURCE_KEY, 100.0, "exact"),
+                    self._candidate(SIMILAR_KEY_B, 94.0, "similar"),
+                ],
+                "nextAfterKey": {"sentenceKey": SIMILAR_KEY_B},
+            }
+        if after_key == {"sentenceKey": SIMILAR_KEY_B}:
+            return {
+                "matches": [
+                    self._candidate(SIMILAR_KEY_C, 92.0, "similar"),
+                ],
+                "nextAfterKey": {"sentenceKey": SIMILAR_KEY_C},
+            }
+        return {
+            "matches": [
+                self._candidate(SIMILAR_KEY_D, 91.0, "similar"),
+            ],
+            "nextAfterKey": None,
+        }
 
-    def matching_occurrence_page(
+    def matching_occurrences(
         self,
         sentence_keys,
         excluded_application_id,
         analysis_group,
-        page_size,
-        after_global_id,
-        include_total,
     ):
-        self.page_requests.append(
-            {
-                "keys": sentence_keys,
-                "pageSize": page_size,
-                "afterGlobalId": after_global_id,
-                "includeTotal": include_total,
-            }
-        )
-        if after_global_id is None:
-            return {
-                "matches": [
-                    {"globalId": 10, "sentenceKey": SOURCE_KEY},
-                    {"globalId": 11, "sentenceKey": SIMILAR_KEY},
-                ],
-                "nextAfterGlobalId": 11,
-                "totalMatches": None,
-            }
-        return {
-            "matches": [
-                {"globalId": 12, "sentenceKey": SIMILAR_KEY},
+        assert excluded_application_id == "A1"
+        assert analysis_group == "Asylee"
+        self.occurrence_requests.append(sentence_keys)
+        occurrences = {
+            SOURCE_KEY: [],
+            SIMILAR_KEY_B: [
+                {"globalId": 10, "sentenceKey": SIMILAR_KEY_B},
+                {"globalId": 11, "sentenceKey": SIMILAR_KEY_B},
             ],
-            "nextAfterGlobalId": None,
-            "totalMatches": None,
+            SIMILAR_KEY_C: [
+                {"globalId": 12, "sentenceKey": SIMILAR_KEY_C},
+            ],
+            SIMILAR_KEY_D: [
+                {"globalId": 13, "sentenceKey": SIMILAR_KEY_D},
+            ],
+        }
+        return [
+            occurrence
+            for key in sentence_keys
+            for occurrence in occurrences[key]
+        ]
+
+    @staticmethod
+    def _candidate(sentence_key, percentage, match_type):
+        return {
+            "sentenceKey": sentence_key,
+            "sentenceContent": f"Sentence for {sentence_key[0]}",
+            "similarityPercentage": percentage,
+            "matchType": match_type,
         }
 
 
-def test_paginated_sentence_search_counts_only_the_current_page():
+def test_paginated_sentence_search_pages_catalog_and_returns_all_occurrences():
     opensearch = FakeOpenSearchStore()
     shared_search = SentenceKeySearchService(opensearch)
     service = PaginatedSentenceKeySearchService(opensearch, shared_search)
@@ -71,14 +119,24 @@ def test_paginated_sentence_search_counts_only_the_current_page():
         first["nextToken"],
     )
 
-    assert first["matchingCountScope"] == "currentPage"
+    # The exact catalog key had no occurrence outside A1, so the service
+    # continued scanning until it filled the first page with eligible keys.
+    assert opensearch.catalog_page_requests == [
+        {"pageSize": 2, "afterKey": None},
+        {"pageSize": 1, "afterKey": {"sentenceKey": SIMILAR_KEY_B}},
+        {"pageSize": 2, "afterKey": {"sentenceKey": SIMILAR_KEY_C}},
+    ]
+    assert first["matchingCountScope"] == "currentCatalogPage"
     assert first["totalMatches"] == 2
-    assert first["exactMatchCount"] == 1
-    assert first["similarMatchCount"] == 1
+    assert first["returnedOccurrences"] == 3
+    assert first["matches"][0]["sentenceKey"] == SIMILAR_KEY_B
+    assert first["matches"][0]["matchPercentage"] == 94.0
+    assert first["matches"][0]["occurrenceCount"] == 2
+    assert len(first["matches"][0]["occurrences"]) == 2
     assert first["pagination"]["hasNextPage"] is True
+
     assert second["totalMatches"] == 1
-    assert second["exactMatchCount"] == 0
-    assert second["similarMatchCount"] == 1
+    assert second["returnedOccurrences"] == 1
+    assert second["matches"][0]["sentenceKey"] == SIMILAR_KEY_D
     assert second["pagination"]["page"] == 2
     assert second["pagination"]["hasNextPage"] is False
-    assert all(not request["includeTotal"] for request in opensearch.page_requests)

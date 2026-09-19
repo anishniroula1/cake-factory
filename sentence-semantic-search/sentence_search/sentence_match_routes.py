@@ -14,7 +14,10 @@ router = APIRouter()
 SENTENCE_KEY_QUERY = Query(
     min_length=64,
     max_length=64,
-    description="SHA-256 sentenceKey already saved during ingestion.",
+    description=(
+        "Saved SHA-256 key for a non-tracer, non-form sentence in the "
+        "requested application and analysis group."
+    ),
 )
 THRESHOLD_QUERY = Query(
     ge=1,
@@ -57,10 +60,20 @@ def paginated_sentence_key_semantic_search(
     sentenceKey: Annotated[str, SENTENCE_KEY_QUERY],
     analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
     threshold: Annotated[int, THRESHOLD_QUERY] = config.match_threshold,
-    pageSize: Annotated[int, Query(ge=1, le=100)] = 100,
-    nextToken: str | None = None,
+    pageSize: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=100,
+            description="Number of unique catalog matches to return.",
+        ),
+    ] = 100,
+    nextToken: Annotated[
+        str | None,
+        Query(description="Catalog cursor returned by the previous page."),
+    ] = None,
 ):
-    """Return one match page and counts for only that page."""
+    """Page unique catalog matches and include all their occurrences."""
 
     try:
         return paginated_sentence_key_search_service.search(

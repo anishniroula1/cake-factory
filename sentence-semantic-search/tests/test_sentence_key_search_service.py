@@ -1,3 +1,5 @@
+import pytest
+
 from sentence_search.sentence_key_search_service import SentenceKeySearchService
 
 SOURCE_KEY = "a" * 64
@@ -8,6 +10,18 @@ LOW_SCORE_KEY = "c" * 64
 class FakeOpenSearchStore:
     def __init__(self):
         self.search_keys = None
+        self.source_is_eligible = True
+
+    def eligible_application_sentence_exists(
+        self,
+        application_id,
+        sentence_key,
+        analysis_group,
+    ):
+        assert application_id == "A1"
+        assert sentence_key == SOURCE_KEY
+        assert analysis_group == "Asylee"
+        return self.source_is_eligible
 
     def catalog_vector(self, sentence_key):
         assert sentence_key == SOURCE_KEY
@@ -98,3 +112,12 @@ def test_lower_query_threshold_returns_more_live_matches():
         92.0,
         83.0,
     }
+
+
+def test_sentence_key_search_rejects_an_ineligible_source_sentence():
+    opensearch = FakeOpenSearchStore()
+    opensearch.source_is_eligible = False
+    service = SentenceKeySearchService(opensearch)
+
+    with pytest.raises(ValueError, match="not an eligible sentence"):
+        service.search("A1", SOURCE_KEY, "Asylee", 90)

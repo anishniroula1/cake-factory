@@ -25,6 +25,16 @@ def test_application_page_token_round_trip():
     assert decode_page_token(token) == state
 
 
+def test_catalog_page_token_round_trip():
+    state = {
+        "type": "sentenceSearch",
+        "afterKey": {"sentenceKey": "key-100"},
+        "returnedMatches": 100,
+    }
+    token = encode_page_token(state)
+    assert decode_page_token(token) == state
+
+
 def test_invalid_threshold_is_rejected():
     with pytest.raises(ValueError):
         minimum_opensearch_score(0)
