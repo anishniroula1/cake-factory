@@ -25,7 +25,6 @@ class SentenceKeySearchService:
         """
 
         sentence_key = self.validate_source_sentence(
-            application_id,
             sentence_key,
             analysis_group,
         )
@@ -62,27 +61,24 @@ class SentenceKeySearchService:
 
     def validate_source_sentence(
         self,
-        application_id: str,
         sentence_key: str,
         analysis_group: str,
     ) -> str:
         """Require an eligible source sentence from the requested application.
 
-        Input: application A1, a saved key, and analysis group Asylee.
+        Input: a saved key and analysis group Asylee.
         Output: the normalized key when its source sentence can be matched.
         """
 
         sentence_key = sentence_key.strip().lower()
         if not SENTENCE_KEY_PATTERN.fullmatch(sentence_key):
             raise ValueError("sentenceKey must be a 64-character SHA-256 value")
-        if not self.opensearch.eligible_application_sentence_exists(
-            application_id,
+        if not self.opensearch.eligible_sentence_exists(
             sentence_key,
             analysis_group,
         ):
             raise ValueError(
-                "sentenceKey is not an eligible sentence for this "
-                "application and analysisGroup"
+                "sentenceKey is not an eligible sentence for this analysisGroup"
             )
         return sentence_key
 

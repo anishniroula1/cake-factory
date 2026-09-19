@@ -92,8 +92,8 @@ GET /applications/A1/sentences/semantic-search
 
 The API:
 
-1. Checks that sentenceKey belongs to the provided application and analysis
-   group.
+1. Checks that sentenceKey has an eligible occurrence in the requested
+   analysis group.
 2. Rejects a source sentence when it is a tracer or form-language sentence.
 3. Reads the saved vector for sentenceKey.
 4. Runs a live vector search in the catalog.
@@ -102,6 +102,9 @@ The API:
 
 Returned occurrences must use the requested analysisGroup. Tracer and
 form-language occurrences are always removed.
+
+applicationId is used only to exclude that application's occurrences from the
+results. The matching sentence key does not have to belong to that application.
 
 No Titan call is made during this search because the vector already exists.
 For IVF, the API searches the number of closest buckets configured by
@@ -118,22 +121,22 @@ GET /applications/A1/sentences/semantic-search-paginated
 ```
 
 Pagination happens in the semantic catalog. The endpoint returns at most
-pageSize unique matching sentence keys. For every returned key, it includes:
+pageSize unique matching sentence keys. It then puts every eligible occurrence
+for those keys directly in one flat matches list. There is no catalog object
+with a nested occurrences list.
 
-- sentenceContent
-- matchPercentage
-- matchType
-- occurrenceCount
-- every eligible occurrence for that key
+Each occurrence includes its normal sentence fields plus matchPercentage and
+matchType. The flat list is sorted by matchPercentage from highest to lowest.
+Equal scores are sorted by sentenceKey and globalId.
 
 The occurrence records are loaded with internal OpenSearch search-after pages,
 but there is no public occurrence token. The public nextToken moves to the next
 catalog page. Send it back unchanged.
 
-totalMatches, exactMatchCount, and similarMatchCount cover unique catalog
-matches on the current page. returnedOccurrences is the combined number of
-occurrence records inside those matches. matchingCountScope is
-currentCatalogPage.
+returnedCatalogMatches tells how many unique catalog keys produced the current
+page. totalMatches, returnedMatches, exactMatchCount, and similarMatchCount
+cover the flat occurrence records. matchingCountScope is
+currentCatalogPageOccurrences.
 
 A catalog key with no occurrence in the requested analysis group is skipped.
 The endpoint continues reading catalog keys until it fills the requested page

@@ -15,8 +15,8 @@ SENTENCE_KEY_QUERY = Query(
     min_length=64,
     max_length=64,
     description=(
-        "Saved SHA-256 key for a non-tracer, non-form sentence in the "
-        "requested application and analysis group."
+        "Saved SHA-256 key with a non-tracer, non-form occurrence in the "
+        "requested analysis group."
     ),
 )
 THRESHOLD_QUERY = Query(
@@ -73,7 +73,7 @@ def paginated_sentence_key_semantic_search(
         Query(description="Catalog cursor returned by the previous page."),
     ] = None,
 ):
-    """Page unique catalog matches and include all their occurrences."""
+    """Page catalog keys and return their occurrences as one sorted list."""
 
     try:
         return paginated_sentence_key_search_service.search(

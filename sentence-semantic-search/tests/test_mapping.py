@@ -285,15 +285,13 @@ def test_source_sentence_eligibility_uses_all_matching_filters():
     client = EligibleSentenceClient()
     store = OpenSearchStore(config, client)
 
-    exists = store.eligible_application_sentence_exists(
-        "A1",
+    exists = store.eligible_sentence_exists(
         "key-1",
         "Asylee",
     )
 
     assert exists is True
     assert client.request["body"]["query"]["bool"]["filter"] == [
-        {"term": {"applicationId": "A1"}},
         {"term": {"sentenceKey": "key-1"}},
         {"term": {"analysisGroup": "Asylee"}},
         {"term": {"isTracer": False}},

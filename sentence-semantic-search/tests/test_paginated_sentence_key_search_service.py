@@ -14,16 +14,13 @@ class FakeOpenSearchStore:
         self.catalog_page_requests = []
         self.occurrence_requests = []
 
-    def eligible_application_sentence_exists(
+    def eligible_sentence_exists(
         self,
-        application_id,
         sentence_key,
         analysis_group,
     ):
         return (
-            application_id == "A1"
-            and sentence_key == SOURCE_KEY
-            and analysis_group == "Asylee"
+            sentence_key == SOURCE_KEY and analysis_group == "Asylee"
         )
 
     def catalog_vector(self, sentence_key):
@@ -55,7 +52,7 @@ class FakeOpenSearchStore:
         if after_key == {"sentenceKey": SIMILAR_KEY_B}:
             return {
                 "matches": [
-                    self._candidate(SIMILAR_KEY_C, 92.0, "similar"),
+                    self._candidate(SIMILAR_KEY_C, 96.0, "similar"),
                 ],
                 "nextAfterKey": {"sentenceKey": SIMILAR_KEY_C},
             }
@@ -126,17 +123,22 @@ def test_paginated_sentence_search_pages_catalog_and_returns_all_occurrences():
         {"pageSize": 1, "afterKey": {"sentenceKey": SIMILAR_KEY_B}},
         {"pageSize": 2, "afterKey": {"sentenceKey": SIMILAR_KEY_C}},
     ]
-    assert first["matchingCountScope"] == "currentCatalogPage"
-    assert first["totalMatches"] == 2
-    assert first["returnedOccurrences"] == 3
-    assert first["matches"][0]["sentenceKey"] == SIMILAR_KEY_B
-    assert first["matches"][0]["matchPercentage"] == 94.0
-    assert first["matches"][0]["occurrenceCount"] == 2
-    assert len(first["matches"][0]["occurrences"]) == 2
+    assert first["matchingCountScope"] == "currentCatalogPageOccurrences"
+    assert first["returnedCatalogMatches"] == 2
+    assert first["totalMatches"] == 3
+    assert first["returnedMatches"] == 3
+    assert [match["globalId"] for match in first["matches"]] == [12, 10, 11]
+    assert [match["matchPercentage"] for match in first["matches"]] == [
+        96.0,
+        94.0,
+        94.0,
+    ]
+    assert all("occurrences" not in match for match in first["matches"])
+    assert all("occurrenceCount" not in match for match in first["matches"])
     assert first["pagination"]["hasNextPage"] is True
 
     assert second["totalMatches"] == 1
-    assert second["returnedOccurrences"] == 1
+    assert second["returnedCatalogMatches"] == 1
     assert second["matches"][0]["sentenceKey"] == SIMILAR_KEY_D
     assert second["pagination"]["page"] == 2
     assert second["pagination"]["hasNextPage"] is False

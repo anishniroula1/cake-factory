@@ -628,13 +628,12 @@ class OpenSearchStore:
             "totalSentences": total,
         }
 
-    def eligible_application_sentence_exists(
+    def eligible_sentence_exists(
         self,
-        application_id: str,
         sentence_key: str,
         analysis_group: str,
     ) -> bool:
-        """Check that an eligible source sentence belongs to the application."""
+        """Check that the key has an eligible occurrence in the analysis group."""
 
         response = self.client.count(
             index=self.config.occurrence_alias,
@@ -642,7 +641,6 @@ class OpenSearchStore:
                 "query": {
                     "bool": {
                         "filter": [
-                            {"term": {"applicationId": application_id}},
                             {"term": {"sentenceKey": sentence_key}},
                             {"term": {"analysisGroup": analysis_group}},
                             {"term": {"isTracer": False}},

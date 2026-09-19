@@ -12,13 +12,11 @@ class FakeOpenSearchStore:
         self.search_keys = None
         self.source_is_eligible = True
 
-    def eligible_application_sentence_exists(
+    def eligible_sentence_exists(
         self,
-        application_id,
         sentence_key,
         analysis_group,
     ):
-        assert application_id == "A1"
         assert sentence_key == SOURCE_KEY
         assert analysis_group == "Asylee"
         return self.source_is_eligible

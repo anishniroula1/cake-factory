@@ -3,6 +3,16 @@ from sentence_search.search_utils import decode_page_token, encode_page_token
 from sentence_search.sentence_key_search_service import SentenceKeySearchService
 
 
+def _occurrence_match_sort_key(match: dict) -> tuple:
+    """Put the highest score first and keep equal scores stable."""
+
+    return (
+        -float(match["matchPercentage"]),
+        str(match["sentenceKey"]),
+        int(match["globalId"]),
+    )
+
+
 class PaginatedSentenceKeySearchService:
     def __init__(
         self,
@@ -23,14 +33,13 @@ class PaginatedSentenceKeySearchService:
         page_size: int,
         next_token: str | None,
     ) -> dict:
-        """Return one catalog page with all eligible occurrences per match.
+        """Return flat occurrences for one page of unique catalog matches.
 
         Input: one saved sentence key, threshold 90, and page size 50.
-        Output: up to 50 unique matches with every occurrence for those keys.
+        Output: every occurrence for up to 50 unique matching keys.
         """
 
         sentence_key = self.sentence_search.validate_source_sentence(
-            application_id,
             sentence_key,
             analysis_group,
         )
@@ -48,23 +57,25 @@ class PaginatedSentenceKeySearchService:
                 page_size,
             )
             after_key = state["afterKey"]
-            returned_before = int(state["returnedMatches"])
+            returned_before = int(state["returnedCatalogMatches"])
         else:
             after_key = None
             returned_before = 0
 
         source_vector = self.opensearch.catalog_vector(sentence_key)
-        matches, next_after_key = self._catalog_page_with_occurrences(
-            application_id,
-            sentence_key,
-            source_vector,
-            analysis_group,
-            threshold,
-            page_size,
-            after_key,
+        catalog_matches, matches, next_after_key = (
+            self._catalog_page_with_occurrences(
+                application_id,
+                sentence_key,
+                source_vector,
+                analysis_group,
+                threshold,
+                page_size,
+                after_key,
+            )
         )
 
-        returned_after = returned_before + len(matches)
+        returned_catalog_after = returned_before + len(catalog_matches)
         new_token = None
         if next_after_key:
             new_token = encode_page_token(
@@ -76,26 +87,28 @@ class PaginatedSentenceKeySearchService:
                     "threshold": threshold,
                     "pageSize": page_size,
                     "afterKey": next_after_key,
-                    "returnedMatches": returned_after,
+                    "returnedCatalogMatches": returned_catalog_after,
                 }
             )
 
         exact_count = sum(match["matchType"] == "exact" for match in matches)
         similar_count = len(matches) - exact_count
+        catalog_similar_count = sum(
+            match["matchType"] == "similar" for match in catalog_matches
+        )
+        matches.sort(key=_occurrence_match_sort_key)
         return {
             "applicationId": application_id,
             "analysisGroup": analysis_group,
             "sentenceKey": sentence_key,
             "thresholdPercentage": threshold,
-            "matchingCountScope": "currentCatalogPage",
-            "directMatchingKeyCount": similar_count,
+            "matchingCountScope": "currentCatalogPageOccurrences",
+            "returnedCatalogMatches": len(catalog_matches),
+            "directMatchingKeyCount": catalog_similar_count,
             "exactMatchCount": exact_count,
             "similarMatchCount": similar_count,
             "totalMatches": len(matches),
             "returnedMatches": len(matches),
-            "returnedOccurrences": sum(
-                match["occurrenceCount"] for match in matches
-            ),
             "pagination": {
                 "page": (returned_before // page_size) + 1,
                 "pageSize": page_size,
@@ -119,10 +132,11 @@ class PaginatedSentenceKeySearchService:
     ) -> tuple:
         """Fill one page with catalog keys having eligible occurrences."""
 
+        catalog_matches = []
         matches = []
         next_after_key = after_key
-        while len(matches) < page_size:
-            remaining = page_size - len(matches)
+        while len(catalog_matches) < page_size:
+            remaining = page_size - len(catalog_matches)
             page = self.opensearch.catalog_match_page(
                 sentence_key,
                 source_vector,
@@ -133,24 +147,24 @@ class PaginatedSentenceKeySearchService:
             candidates = page["matches"]
             next_after_key = page["nextAfterKey"]
             if candidates:
-                matches.extend(
-                    self._matches_with_occurrences(
-                        candidates,
-                        application_id,
-                        analysis_group,
-                    )
+                eligible, occurrence_matches = self._matches_with_occurrences(
+                    candidates,
+                    application_id,
+                    analysis_group,
                 )
+                catalog_matches.extend(eligible)
+                matches.extend(occurrence_matches)
             if next_after_key is None:
                 break
-        return matches, next_after_key
+        return catalog_matches, matches, next_after_key
 
     def _matches_with_occurrences(
         self,
         candidates: list,
         application_id: str,
         analysis_group: str,
-    ) -> list:
-        """Attach every eligible occurrence to each unique catalog match."""
+    ) -> tuple:
+        """Return eligible catalog matches and a flat occurrence list."""
 
         candidate_keys = [candidate["sentenceKey"] for candidate in candidates]
         occurrences = self.opensearch.matching_occurrences(
@@ -162,6 +176,7 @@ class PaginatedSentenceKeySearchService:
         for occurrence in occurrences:
             occurrences_by_key[occurrence["sentenceKey"]].append(occurrence)
 
+        eligible_candidates = []
         matches = []
         for candidate in candidates:
             occurrence_list = occurrences_by_key[candidate["sentenceKey"]]
@@ -169,17 +184,18 @@ class PaginatedSentenceKeySearchService:
             # eligible occurrence in the requested analysis group.
             if not occurrence_list:
                 continue
-            matches.append(
-                {
-                    "sentenceKey": candidate["sentenceKey"],
-                    "sentenceContent": candidate["sentenceContent"],
-                    "matchPercentage": candidate["similarityPercentage"],
-                    "matchType": candidate["matchType"],
-                    "occurrenceCount": len(occurrence_list),
-                    "occurrences": occurrence_list,
-                }
-            )
-        return matches
+            eligible_candidates.append(candidate)
+            for occurrence in occurrence_list:
+                matches.append(
+                    {
+                        **occurrence,
+                        "matchPercentage": candidate[
+                            "similarityPercentage"
+                        ],
+                        "matchType": candidate["matchType"],
+                    }
+                )
+        return eligible_candidates, matches
 
     @staticmethod
     def _validate_token(
@@ -203,6 +219,6 @@ class PaginatedSentenceKeySearchService:
         for name, value in expected.items():
             if state.get(name) != value:
                 raise ValueError("nextToken does not belong to this request")
-        required = {"afterKey", "returnedMatches"}
+        required = {"afterKey", "returnedCatalogMatches"}
         if not required.issubset(state):
             raise ValueError("Invalid nextToken")
