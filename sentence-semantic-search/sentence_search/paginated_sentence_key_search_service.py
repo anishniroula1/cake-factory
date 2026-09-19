@@ -1,16 +1,9 @@
 from sentence_search.opensearch_store import OpenSearchStore
 from sentence_search.search_utils import decode_page_token, encode_page_token
-from sentence_search.sentence_key_search_service import SentenceKeySearchService
-
-
-def _occurrence_match_sort_key(match: dict) -> tuple:
-    """Put the highest score first and keep equal scores stable."""
-
-    return (
-        -float(match["matchPercentage"]),
-        str(match["sentenceKey"]),
-        int(match["globalId"]),
-    )
+from sentence_search.sentence_key_search_service import (
+    SentenceKeySearchService,
+    occurrence_match_sort_key,
+)
 
 
 class PaginatedSentenceKeySearchService:
@@ -96,7 +89,7 @@ class PaginatedSentenceKeySearchService:
         catalog_similar_count = sum(
             match["matchType"] == "similar" for match in catalog_matches
         )
-        matches.sort(key=_occurrence_match_sort_key)
+        matches.sort(key=occurrence_match_sort_key)
         return {
             "applicationId": application_id,
             "analysisGroup": analysis_group,

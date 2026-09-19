@@ -101,7 +101,9 @@ The API:
 6. Reads matching occurrences outside the provided application.
 
 Returned occurrences must use the requested analysisGroup. Tracer and
-form-language occurrences are always removed.
+form-language occurrences are always removed. Results are sorted by
+matchPercentage from highest to lowest, followed by sentenceKey and globalId
+when scores are equal.
 
 applicationId is used only to exclude that application's occurrences from the
 results. The matching sentence key does not have to belong to that application.

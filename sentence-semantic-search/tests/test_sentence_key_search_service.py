@@ -53,8 +53,8 @@ class FakeOpenSearchStore:
         assert excluded_application_id == "A1"
         assert analysis_group == "Asylee"
         occurrences = [
-            {"globalId": 10, "sentenceKey": SOURCE_KEY},
             {"globalId": 11, "sentenceKey": SIMILAR_KEY},
+            {"globalId": 10, "sentenceKey": SOURCE_KEY},
             {"globalId": 12, "sentenceKey": LOW_SCORE_KEY},
         ]
         return [
@@ -78,6 +78,7 @@ def test_sentence_key_search_runs_live_and_applies_threshold():
     assert result["matches"][0]["matchPercentage"] == 100.0
     assert result["matches"][1]["matchType"] == "similar"
     assert result["matches"][1]["matchPercentage"] == 92.0
+    assert [match["globalId"] for match in result["matches"]] == [10, 11]
     assert result["thresholdPercentage"] == 90
     assert result["matchingCountScope"] == "allResults"
     assert result["directMatchingKeyCount"] == 1

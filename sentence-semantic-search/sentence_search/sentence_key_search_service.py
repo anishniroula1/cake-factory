@@ -5,6 +5,16 @@ from sentence_search.opensearch_store import OpenSearchStore
 SENTENCE_KEY_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
+def occurrence_match_sort_key(match: dict) -> tuple:
+    """Put the highest score first and keep equal scores stable."""
+
+    return (
+        -float(match["matchPercentage"]),
+        str(match["sentenceKey"]),
+        int(match["globalId"]),
+    )
+
+
 class SentenceKeySearchService:
     def __init__(self, opensearch: OpenSearchStore):
         """Save the OpenSearch store used by sentence-key search."""
@@ -41,6 +51,7 @@ class SentenceKeySearchService:
             sentence_key,
             score_by_key,
         )
+        matches.sort(key=occurrence_match_sort_key)
         exact_count = sum(match["matchType"] == "exact" for match in matches)
         similar_count = len(matches) - exact_count
 
