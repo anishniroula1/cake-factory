@@ -7,6 +7,7 @@ from opensearchpy.helpers.errors import BulkIndexError
 
 from sentence_search.config import config
 from sentence_search.opensearch_store import (
+    BULK_RETRY_SECONDS,
     OpenSearchStore,
     catalog_index_definition,
     occurrence_index_definition,
@@ -120,33 +121,6 @@ class AliasIndexClient:
 
     def __init__(self):
         self.indices = self.Indices()
-
-
-class ClientThatMustNotRun:
-    def mget(self, **request):
-        raise AssertionError("Duplicate input should fail before OpenSearch")
-
-
-class ExistingOccurrenceClient:
-    def mget(self, **request):
-        assert request["body"]["ids"] == ["1"]
-        return {
-            "docs": [
-                {
-                    "_id": "1",
-                    "found": True,
-                    "_source": {
-                        "applicationId": "A1",
-                        "tspId": "T1",
-                        "sectionName": "Affidavit",
-                        "analysisGroup": "Asylee",
-                        "sentenceKey": "key-1",
-                        "isTracer": False,
-                        "isFormLanguage": False,
-                    },
-                }
-            ]
-        }
 
 
 class CatalogPreviewClient:
@@ -316,7 +290,11 @@ def test_reset_deletes_configured_indexes_and_existing_alias_targets():
     assert client.indices.deleted == result["deletedIndexes"]
 
 
-def test_catalog_retry_keeps_only_temporary_failed_documents():
+@pytest.mark.parametrize(
+    "status",
+    [408, 424, 429, 500, 502, 503, 504],
+)
+def test_catalog_retry_keeps_only_temporary_failed_documents(status):
     store = OpenSearchStore(config, EmptySearchClient())
     actions = [
         {"_id": "key-1", "_source": {"sentenceKey": "key-1"}},
@@ -324,12 +302,75 @@ def test_catalog_retry_keeps_only_temporary_failed_documents():
     ]
     error = BulkIndexError(
         "one temporary failure",
-        [{"index": {"_id": "key-2", "status": 500}}],
+        [{"index": {"_id": "key-2", "status": status}}],
     )
 
-    retry_actions = store._retryable_catalog_actions(error, actions)
+    retry_actions = store._retryable_actions(error, actions)
 
     assert retry_actions == [actions[1]]
+
+
+def test_bulk_retry_waits_only_inside_the_failed_worker(monkeypatch):
+    bulk_calls = []
+    sleep_calls = []
+    actions = [
+        {"_id": "key-1", "_source": {"sentenceKey": "key-1"}},
+        {"_id": "key-2", "_source": {"sentenceKey": "key-2"}},
+    ]
+
+    def fail_once(client, pending, chunk_size, raise_on_error):
+        bulk_calls.append(list(pending))
+        if len(bulk_calls) == 1:
+            raise BulkIndexError(
+                "one temporary failure",
+                [{"index": {"_id": "key-2", "status": 500}}],
+            )
+
+    def capture_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("sentence_search.opensearch_store.helpers.bulk", fail_once)
+    monkeypatch.setattr("sentence_search.opensearch_store.time.sleep", capture_sleep)
+    store = OpenSearchStore(config, EmptySearchClient())
+
+    store._bulk_with_retry(actions, "catalog")
+
+    assert bulk_calls == [actions, [actions[1]]]
+    assert sleep_calls == [BULK_RETRY_SECONDS]
+
+
+def test_occurrence_bulk_retries_only_its_failed_documents(monkeypatch):
+    bulk_calls = []
+    sleep_calls = []
+    documents = [
+        {"globalId": 101, "sentenceContent": "First"},
+        {"globalId": 102, "sentenceContent": "Second"},
+    ]
+
+    def fail_second_document_once(client, actions, chunk_size, raise_on_error):
+        bulk_calls.append(list(actions))
+        if len(bulk_calls) == 1:
+            raise BulkIndexError(
+                "one temporary occurrence failure",
+                [{"index": {"_id": "102", "status": 503}}],
+            )
+
+    def capture_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(
+        "sentence_search.opensearch_store.helpers.bulk",
+        fail_second_document_once,
+    )
+    monkeypatch.setattr("sentence_search.opensearch_store.time.sleep", capture_sleep)
+    store = OpenSearchStore(config, EmptySearchClient())
+
+    indexed = store.bulk_index_occurrences(documents)
+
+    assert indexed == 2
+    assert [action["_id"] for action in bulk_calls[0]] == ["101", "102"]
+    assert [action["_id"] for action in bulk_calls[1]] == ["102"]
+    assert sleep_calls == [BULK_RETRY_SECONDS]
 
 
 def test_catalog_preview_returns_the_decoded_embedding_list():
@@ -414,29 +455,22 @@ def test_sentence_key_search_uses_terms_and_never_knn():
     assert {"term": {"applicationId": "A1"}} in body["query"]["bool"]["must_not"]
 
 
-def test_duplicate_global_id_cannot_have_different_sentence_keys():
-    store = OpenSearchStore(config, ClientThatMustNotRun())
-    first = _occurrence_identity("key-1")
-    second = _occurrence_identity("key-2")
+def test_occurrence_bulk_uses_global_id_as_an_index_upsert(monkeypatch):
+    actions_sent = []
 
-    with pytest.raises(ValueError, match="different sentence data"):
-        store.validate_occurrence_identity([first, second])
+    def capture_bulk(client, actions, chunk_size, raise_on_error):
+        actions_sent.extend(actions)
 
+    monkeypatch.setattr(
+        "sentence_search.opensearch_store.helpers.bulk",
+        capture_bulk,
+    )
+    store = OpenSearchStore(config, object())
+    first = {"globalId": 101, "sentenceContent": "Old sentence"}
+    replacement = {"globalId": 101, "sentenceContent": "New sentence"}
 
-def test_numeric_global_id_uses_string_document_id_for_mget():
-    store = OpenSearchStore(config, ExistingOccurrenceClient())
+    store.bulk_index_occurrences([first, replacement])
 
-    store.validate_occurrence_identity([_occurrence_identity("key-1")])
-
-
-def _occurrence_identity(sentence_key):
-    return {
-        "globalId": 1,
-        "applicationId": "A1",
-        "tspId": "T1",
-        "sectionName": "Affidavit",
-        "analysisGroup": "Asylee",
-        "sentenceKey": sentence_key,
-        "isTracer": False,
-        "isFormLanguage": False,
-    }
+    assert [action["_id"] for action in actions_sent] == ["101", "101"]
+    assert all(action["_op_type"] == "index" for action in actions_sent)
+    assert actions_sent[-1]["_source"] == replacement

@@ -117,23 +117,46 @@ class SeedService:
         self.config = config
         self.opensearch = opensearch
 
+    def _process_batch(
+        self,
+        sources: list,
+        catalog_sources: list,
+        catalog_dependencies: list,
+    ) -> dict:
+        """Save one batch's catalog vectors before saving its occurrences.
+
+        Input: occurrences, missing catalog records, and earlier batches that
+        own a repeated sentence key.
+        Output: counts for this fully saved batch.
+        """
+
+        catalog_count = self.opensearch.bulk_index_catalog(catalog_sources)
+        # A repeated sentence key can belong to an earlier worker. Wait for
+        # that worker so this occurrence never points to an unfinished vector.
+        for dependency in catalog_dependencies:
+            dependency.result()
+        occurrence_count = self.opensearch.bulk_index_occurrences(sources)
+        return {
+            "occurrencesIndexed": occurrence_count,
+            "catalogDocumentsIndexed": catalog_count,
+        }
+
     def _complete_wave(self, pending_batches: list) -> dict:
         """Finish one bounded group of catalog and occurrence work.
 
-        Input: up to SEED_WORKERS batches whose Titan work is running.
+        Input: up to SEED_WORKERS complete batch tasks running in workers.
         Output: counts for records fully saved in this wave.
         """
 
         occurrence_count = 0
         catalog_count = 0
 
-        # Futures are read in CSV order. This means an occurrence batch is
-        # saved only after its own catalog vectors have finished successfully.
+        # Each future performs both writes. Reading results in CSV order does
+        # not block work because every worker continues independently.
         for pending in pending_batches:
-            pending["catalogFuture"].result()
-            batch_sources = pending["sources"]
-            occurrence_count += self.opensearch.bulk_index_occurrences(batch_sources)
-            catalog_count += pending["catalogCount"]
+            result = pending.result()
+            occurrence_count += result["occurrencesIndexed"]
+            catalog_count += result["catalogDocumentsIndexed"]
 
         # One refresh makes the entire wave visible. With 16 workers and the
         # default batch size, this replaces 16 separate refresh operations.
@@ -165,6 +188,7 @@ class SeedService:
         completed_waves = 0
         known_catalog_keys = set()
         pending_batches = []
+        pending_catalog_futures = {}
 
         with ThreadPoolExecutor(
             max_workers=self.config.seed_workers,
@@ -174,12 +198,13 @@ class SeedService:
                 sources = [record.model_dump(mode="json") for record in batch]
                 records_read += len(sources)
 
-                # Stop this batch before indexing if a global ID changed its text.
-                self.opensearch.validate_occurrence_identity(sources)
-
                 catalog_by_key = {}
+                catalog_dependencies = set()
                 for source in sources:
                     key = source["sentenceKey"]
+                    dependency = pending_catalog_futures.get(key)
+                    if dependency is not None:
+                        catalog_dependencies.add(dependency)
                     if key not in known_catalog_keys:
                         catalog_by_key.setdefault(
                             key,
@@ -194,19 +219,17 @@ class SeedService:
                 catalog_reused += len(existing)
                 known_catalog_keys.update(candidate_keys)
 
-                # Only catalog work runs here. The bounded pending list keeps
-                # at most SEED_WORKERS batches in memory at one time.
-                catalog_future = executor.submit(
-                    self.opensearch.bulk_index_catalog,
+                # One worker creates this batch's missing vectors and then
+                # immediately saves the related occurrence records.
+                batch_future = executor.submit(
+                    self._process_batch,
+                    sources,
                     new_catalog_sources,
+                    list(catalog_dependencies),
                 )
-                pending_batches.append(
-                    {
-                        "catalogFuture": catalog_future,
-                        "catalogCount": len(new_catalog_sources),
-                        "sources": sources,
-                    }
-                )
+                pending_batches.append(batch_future)
+                for catalog_source in new_catalog_sources:
+                    pending_catalog_futures[catalog_source["sentenceKey"]] = batch_future
 
                 if len(pending_batches) == self.config.seed_workers:
                     result = self._complete_wave(pending_batches)
@@ -215,6 +238,7 @@ class SeedService:
                     completed_batches += len(pending_batches)
                     completed_waves += 1
                     pending_batches = []
+                    pending_catalog_futures = {}
 
             if pending_batches:
                 result = self._complete_wave(pending_batches)

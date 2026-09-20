@@ -1,4 +1,4 @@
-from threading import Barrier, Lock
+from threading import Barrier, Lock, current_thread
 from types import SimpleNamespace
 
 import pytest
@@ -52,6 +52,7 @@ class FakeParallelOpenSearchStore:
     def __init__(self, workers):
         self.catalog_keys = set()
         self.occurrence_ids = []
+        self.occurrence_thread_names = []
         self.refresh_calls = 0
         self._workers = workers
         self._first_wave = Barrier(workers)
@@ -64,9 +65,6 @@ class FakeParallelOpenSearchStore:
         return None
 
     def ensure_indices(self):
-        return None
-
-    def validate_occurrence_identity(self, sources):
         return None
 
     def existing_catalog_keys(self, keys):
@@ -91,7 +89,9 @@ class FakeParallelOpenSearchStore:
     def bulk_index_occurrences(self, sources):
         required_keys = {source["sentenceKey"] for source in sources}
         assert required_keys <= self.catalog_keys
-        self.occurrence_ids.extend(source["globalId"] for source in sources)
+        with self._lock:
+            self.occurrence_ids.extend(source["globalId"] for source in sources)
+            self.occurrence_thread_names.append(current_thread().name)
         return len(sources)
 
     def refresh_indices(self):
@@ -123,7 +123,11 @@ def test_seed_runs_bounded_catalog_workers_without_matching(tmp_path):
 
     result = service.seed(csv_file, reset=True)
 
-    assert opensearch.occurrence_ids == list(range(1, 7))
+    assert sorted(opensearch.occurrence_ids) == list(range(1, 7))
+    assert all(
+        name.startswith("sentence-seed")
+        for name in opensearch.occurrence_thread_names
+    )
     assert opensearch.max_active_catalog_calls == workers
     assert opensearch.refresh_calls == 1
     assert result["completedBatches"] == 3
@@ -132,3 +136,27 @@ def test_seed_runs_bounded_catalog_workers_without_matching(tmp_path):
     assert result["seedWorkers"] == workers
     assert result["matchProcessing"] == "searchTime"
     assert "matchesCalculated" not in result
+
+
+def test_repeated_sentence_waits_for_the_worker_creating_its_vector(tmp_path):
+    workers = 2
+    csv_file = tmp_path / "repeated-sentence.csv"
+    csv_file.write_text(
+        "applicationId,tspId,sectionName,globalId,sentIdLocal,"
+        "sentenceContent,isTracer,isFormLanguage,sentenceKey,"
+        "sourceType,createdAt,updatedAt,analysisGroup\n"
+        "A1,T1,Statement,1,1,Same sentence,false,false,,document,,,Asylee\n"
+        "A2,T2,Statement,2,1,Same sentence,false,false,,document,,,Asylee\n",
+        encoding="utf-8",
+    )
+    opensearch = FakeParallelOpenSearchStore(workers)
+    service = SeedService(
+        SimpleNamespace(seed_batch_size=1, seed_workers=workers),
+        opensearch,
+    )
+
+    result = service.seed(csv_file, reset=True)
+
+    assert opensearch.occurrence_ids == [1, 2]
+    assert result["catalogDocumentsIndexed"] == 1
+    assert result["occurrencesIndexed"] == 2

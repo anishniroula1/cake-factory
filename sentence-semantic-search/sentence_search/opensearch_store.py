@@ -2,7 +2,6 @@ import base64
 import binascii
 import logging
 import struct
-import threading
 import time
 
 from opensearchpy import NotFoundError, RequestError, TransportError, helpers
@@ -21,9 +20,11 @@ CATALOG_PAGE_SIZE = 1_000  # Catalog matches read from one aggregation page.
 TERMS_BATCH_SIZE = 10_000  # Sentence keys sent in one terms filter.
 VECTOR_BATCH_SIZE = 1_000  # Catalog vectors read in one OpenSearch request.
 MATCH_RESULT_BATCH_SIZE = 5_000  # Occurrences read per internal search page.
-CATALOG_RETRY_ATTEMPTS = 10  # Remote embedding failures allowed per batch.
-CATALOG_RETRY_SECONDS = 5  # Pause before retrying a failed Titan batch.
-RETRYABLE_STATUSES = {408, 429, 500, 502, 503, 504}
+BULK_RETRY_ATTEMPTS = 10  # Temporary OpenSearch failures allowed per batch.
+BULK_RETRY_SECONDS = 5  # Failed worker pause before retrying its own batch.
+# Bedrock can return 408, 424, 429, 500, or 503. The Lasso or HTTP gateway can
+# also return 502 or 504 while forwarding the same temporary failure.
+RETRYABLE_STATUSES = {408, 424, 429, 500, 502, 503, 504}
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +90,6 @@ class OpenSearchStore:
 
         self.config = config
         self.client = client or OpenSearchClient(config).create_client()
-        self._catalog_backoff_lock = threading.Lock()
-        self._catalog_cooldown_until = 0.0
 
     def wait_until_ready(self, attempts: int = 60):
         """Wait for OpenSearch during application startup."""
@@ -176,52 +175,6 @@ class OpenSearchStore:
                     existing.add(str(document["_id"]))
         return existing
 
-    def validate_occurrence_identity(self, records: list):
-        """Stop a global ID from being reused for different sentence data."""
-
-        incoming = {}
-        identity_fields = (
-            "applicationId",
-            "tspId",
-            "sectionName",
-            "analysisGroup",
-            "sentenceKey",
-            "isTracer",
-            "isFormLanguage",
-        )
-        for record in records:
-            # OpenSearch metadata IDs are strings even though globalId is a
-            # numeric long inside the document source.
-            global_id = str(record["globalId"])
-            identity = {field: record[field] for field in identity_fields}
-            previous = incoming.get(global_id)
-            if previous and previous != identity:
-                raise ValueError(
-                    f"The same globalId has different sentence data: {global_id}"
-                )
-            incoming[global_id] = identity
-
-        global_ids = list(incoming)
-        for offset in range(0, len(global_ids), 1_000):
-            batch = global_ids[offset : offset + 1_000]
-            response = self.client.mget(
-                index=self.config.occurrence_alias,
-                body={"ids": batch},
-            )
-            for document in response["docs"]:
-                if not document.get("found"):
-                    continue
-                global_id = str(document["_id"])
-                existing = document["_source"]
-                if any(
-                    existing[field] != incoming[global_id][field]
-                    for field in identity_fields
-                ):
-                    raise ValueError(
-                        "globalId cannot change sentence or matching metadata "
-                        f"without reset: {global_id}"
-                    )
-
     def bulk_index_catalog(self, documents: list):
         """Index new catalog texts and retry temporary embedding failures."""
 
@@ -255,25 +208,17 @@ class OpenSearchStore:
                     "_source": document,
                 }
             )
-        helpers.bulk(
-            self.client,
-            actions,
-            chunk_size=self.config.seed_batch_size,
-            raise_on_error=True,
-        )
+        self._bulk_with_retry(actions, "occurrence")
         return len(actions)
 
     def _bulk_with_retry(self, actions: list, label: str):
-        """Retry failed catalog records after a shared five-second pause."""
+        """Retry temporary bulk failures inside the worker handling the batch."""
 
         if not actions:
             return
         pending_actions = actions
         last_error = None
-        for attempt in range(1, CATALOG_RETRY_ATTEMPTS + 1):
-            # If one worker sees a proxy failure, every catalog worker waits
-            # before sending more Titan requests through the same proxy.
-            self._wait_for_catalog_cooldown()
+        for attempt in range(1, BULK_RETRY_ATTEMPTS + 1):
             try:
                 helpers.bulk(
                     self.client,
@@ -284,7 +229,7 @@ class OpenSearchStore:
                 return
             except (BulkIndexError, TransportError) as error:
                 last_error = error
-                retry_actions = self._retryable_catalog_actions(
+                retry_actions = self._retryable_actions(
                     error,
                     pending_actions,
                 )
@@ -293,46 +238,29 @@ class OpenSearchStore:
                         f"Non-retryable OpenSearch {label} bulk failure: {error}"
                     ) from error
 
-                if attempt == CATALOG_RETRY_ATTEMPTS:
+                if attempt == BULK_RETRY_ATTEMPTS:
                     break
                 pending_actions = retry_actions
                 logger.warning(
-                    "Catalog batch attempt %s/%s failed; retrying %s "
+                    "OpenSearch %s batch attempt %s/%s failed; retrying %s "
                     "document(s) after %s seconds",
+                    label,
                     attempt,
-                    CATALOG_RETRY_ATTEMPTS,
+                    BULK_RETRY_ATTEMPTS,
                     len(pending_actions),
-                    CATALOG_RETRY_SECONDS,
+                    BULK_RETRY_SECONDS,
                 )
-                self._start_catalog_cooldown()
+                # Only the worker handling this failed batch pauses. Other
+                # workers continue sending their own catalog or occurrence work.
+                time.sleep(BULK_RETRY_SECONDS)
 
         raise RuntimeError(
             f"OpenSearch {label} bulk failed after "
-            f"{CATALOG_RETRY_ATTEMPTS} attempts: {last_error}"
+            f"{BULK_RETRY_ATTEMPTS} attempts: {last_error}"
         ) from last_error
 
-    def _start_catalog_cooldown(self):
-        """Start one shared delay for all catalog workers."""
-
-        with self._catalog_backoff_lock:
-            self._catalog_cooldown_until = max(
-                self._catalog_cooldown_until,
-                time.monotonic() + CATALOG_RETRY_SECONDS,
-            )
-        self._wait_for_catalog_cooldown()
-
-    def _wait_for_catalog_cooldown(self):
-        """Wait until catalog workers may call the embedding proxy again."""
-
-        while True:
-            with self._catalog_backoff_lock:
-                remaining = self._catalog_cooldown_until - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(remaining)
-
     @staticmethod
-    def _retryable_catalog_actions(
+    def _retryable_actions(
         error: BulkIndexError | TransportError,
         actions: list,
     ) -> list | None:

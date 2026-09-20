@@ -10,9 +10,6 @@ class FakeOpenSearchStore:
     def existing_catalog_keys(self, keys):
         return set()
 
-    def validate_occurrence_identity(self, records):
-        return None
-
     def bulk_index_catalog(self, documents):
         self.catalog_documents.extend(documents)
 

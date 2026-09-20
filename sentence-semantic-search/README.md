@@ -29,6 +29,11 @@ globalId is stored as an OpenSearch long, so its value must be numeric. The
 internal OpenSearch document _id is the string form of that same number. Values
 with letters are rejected, and leading zeros are not preserved.
 
+If the same globalId is indexed again, OpenSearch replaces the old occurrence.
+It does not create a second occurrence. The latest row wins. If its sentence
+text changed, the new sentence key gets a catalog vector. The old catalog entry
+is kept because another occurrence may still use it.
+
 The sentenceKey is a SHA-256 value made from normalized sentence text. The same
 sentence text always gets the same key.
 
@@ -56,12 +61,15 @@ once. All occurrence records use the same sentenceKey.
 3. Check which sentence keys already exist in the catalog.
 4. Send only new catalog records through the OpenSearch ingest pipeline. The
    pipeline calls Titan and creates the 512-dimension vector.
-5. Save the occurrence records after their catalog batch succeeds.
+5. Each worker saves its occurrence batch immediately after that batch's
+   catalog vectors succeed. Occurrence writes retry temporary failures too.
 6. Refresh both indexes once per worker wave.
 
 The seed flow does not search for matches. It does not build summaries. The
-SEED_WORKERS setting controls how many catalog batches can call the ingest
-pipeline at the same time.
+SEED_WORKERS controls how many complete batches can run at the same time. Each
+worker creates missing catalog vectors first and then saves that batch's
+occurrences. If another worker owns the same sentenceKey, the later worker
+waits for that vector before saving its occurrences.
 
 Input CSV columns:
 

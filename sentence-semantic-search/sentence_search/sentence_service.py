@@ -15,9 +15,6 @@ class SentenceService:
         """Index one sentence and create its catalog vector when needed."""
 
         source = sentence.model_dump(mode="json")
-        # Validate first so a changed global ID cannot leave the two indexes
-        # pointing at different sentence content.
-        self.opensearch.validate_occurrence_identity([source])
         key = source["sentenceKey"]
         existing = self.opensearch.existing_catalog_keys([key])
         catalog_indexed = False
