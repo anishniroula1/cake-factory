@@ -2,6 +2,7 @@ import base64
 import binascii
 import logging
 import struct
+import threading
 import time
 
 from opensearchpy import NotFoundError, RequestError, TransportError, helpers
@@ -21,7 +22,7 @@ TERMS_BATCH_SIZE = 10_000  # Sentence keys sent in one terms filter.
 VECTOR_BATCH_SIZE = 1_000  # Catalog vectors read in one OpenSearch request.
 MATCH_RESULT_BATCH_SIZE = 5_000  # Occurrences read per internal search page.
 BULK_RETRY_ATTEMPTS = 10  # Temporary OpenSearch failures allowed per batch.
-BULK_RETRY_SECONDS = 5  # Failed worker pause before retrying its own batch.
+BULK_RETRY_SECONDS = 5  # Catalog shares this pause; occurrence uses it locally.
 # Bedrock can return 408, 424, 429, 500, or 503. The Lasso or HTTP gateway can
 # also return 502 or 504 while forwarding the same temporary failure.
 RETRYABLE_STATUSES = {408, 424, 429, 500, 502, 503, 504}
@@ -90,6 +91,8 @@ class OpenSearchStore:
 
         self.config = config
         self.client = client or OpenSearchClient(config).create_client()
+        self._catalog_backoff_lock = threading.Lock()
+        self._catalog_cooldown_until = 0.0
 
     def wait_until_ready(self, attempts: int = 60):
         """Wait for OpenSearch during application startup."""
@@ -190,7 +193,11 @@ class OpenSearchStore:
                     "_source": document,
                 }
             )
-        self._bulk_with_retry(actions, "catalog")
+        self._bulk_with_retry(
+            actions,
+            "catalog",
+            shared_catalog_cooldown=True,
+        )
         return len(actions)
 
     def bulk_index_occurrences(self, documents: list):
@@ -211,7 +218,12 @@ class OpenSearchStore:
         self._bulk_with_retry(actions, "occurrence")
         return len(actions)
 
-    def _bulk_with_retry(self, actions: list, label: str):
+    def _bulk_with_retry(
+        self,
+        actions: list,
+        label: str,
+        shared_catalog_cooldown: bool = False,
+    ):
         """Retry temporary bulk failures inside the worker handling the batch."""
 
         if not actions:
@@ -219,6 +231,8 @@ class OpenSearchStore:
         pending_actions = actions
         last_error = None
         for attempt in range(1, BULK_RETRY_ATTEMPTS + 1):
+            if shared_catalog_cooldown:
+                self._wait_for_catalog_cooldown()
             try:
                 helpers.bulk(
                     self.client,
@@ -250,14 +264,38 @@ class OpenSearchStore:
                     len(pending_actions),
                     BULK_RETRY_SECONDS,
                 )
-                # Only the worker handling this failed batch pauses. Other
-                # workers continue sending their own catalog or occurrence work.
-                time.sleep(BULK_RETRY_SECONDS)
+                if shared_catalog_cooldown:
+                    # One Lasso or Titan failure pauses new catalog attempts
+                    # from every worker. Requests already in flight continue.
+                    self._start_catalog_cooldown()
+                else:
+                    # Occurrence indexing does not call Lasso or Titan, so
+                    # only its own worker needs to pause before retrying.
+                    time.sleep(BULK_RETRY_SECONDS)
 
         raise RuntimeError(
             f"OpenSearch {label} bulk failed after "
             f"{BULK_RETRY_ATTEMPTS} attempts: {last_error}"
         ) from last_error
+
+    def _start_catalog_cooldown(self):
+        """Set one shared retry time for all catalog workers."""
+
+        with self._catalog_backoff_lock:
+            self._catalog_cooldown_until = max(
+                self._catalog_cooldown_until,
+                time.monotonic() + BULK_RETRY_SECONDS,
+            )
+
+    def _wait_for_catalog_cooldown(self):
+        """Wait until catalog workers may call Lasso and Titan again."""
+
+        while True:
+            with self._catalog_backoff_lock:
+                remaining = self._catalog_cooldown_until - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(remaining)
 
     @staticmethod
     def _retryable_actions(

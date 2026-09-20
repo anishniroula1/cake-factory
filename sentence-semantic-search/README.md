@@ -71,6 +71,11 @@ worker creates missing catalog vectors first and then saves that batch's
 occurrences. If another worker owns the same sentenceKey, the later worker
 waits for that vector before saving its occurrences.
 
+If Lasso or Titan temporarily fails, all catalog workers share a five-second
+cooldown before their next catalog attempt. Requests already running are not
+cancelled. An occurrence failure pauses only the worker that owns that batch
+because occurrence writes do not call Lasso or Titan.
+
 Input CSV columns:
 
 ```text

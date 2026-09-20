@@ -310,7 +310,7 @@ def test_catalog_retry_keeps_only_temporary_failed_documents(status):
     assert retry_actions == [actions[1]]
 
 
-def test_bulk_retry_waits_only_inside_the_failed_worker(monkeypatch):
+def test_occurrence_retry_waits_only_inside_the_failed_worker(monkeypatch):
     bulk_calls = []
     sleep_calls = []
     actions = [
@@ -333,10 +333,50 @@ def test_bulk_retry_waits_only_inside_the_failed_worker(monkeypatch):
     monkeypatch.setattr("sentence_search.opensearch_store.time.sleep", capture_sleep)
     store = OpenSearchStore(config, EmptySearchClient())
 
-    store._bulk_with_retry(actions, "catalog")
+    store._bulk_with_retry(actions, "occurrence")
 
     assert bulk_calls == [actions, [actions[1]]]
     assert sleep_calls == [BULK_RETRY_SECONDS]
+
+
+def test_catalog_retry_uses_the_shared_cooldown(monkeypatch):
+    bulk_calls = []
+    cooldown_waits = []
+    cooldown_starts = []
+    documents = [
+        {"sentenceKey": "key-1", "sentenceContent": "First"},
+        {"sentenceKey": "key-2", "sentenceContent": "Second"},
+    ]
+
+    def fail_second_document_once(client, actions, chunk_size, raise_on_error):
+        bulk_calls.append(list(actions))
+        if len(bulk_calls) == 1:
+            raise BulkIndexError(
+                "one temporary catalog failure",
+                [{"index": {"_id": "key-2", "status": 429}}],
+            )
+
+    def capture_cooldown_wait():
+        cooldown_waits.append(True)
+
+    def capture_cooldown_start():
+        cooldown_starts.append(True)
+
+    monkeypatch.setattr(
+        "sentence_search.opensearch_store.helpers.bulk",
+        fail_second_document_once,
+    )
+    store = OpenSearchStore(config, EmptySearchClient())
+    monkeypatch.setattr(store, "_wait_for_catalog_cooldown", capture_cooldown_wait)
+    monkeypatch.setattr(store, "_start_catalog_cooldown", capture_cooldown_start)
+
+    indexed = store.bulk_index_catalog(documents)
+
+    assert indexed == 2
+    assert [action["_id"] for action in bulk_calls[0]] == ["key-1", "key-2"]
+    assert [action["_id"] for action in bulk_calls[1]] == ["key-2"]
+    assert len(cooldown_starts) == 1
+    assert len(cooldown_waits) == 2
 
 
 def test_occurrence_bulk_retries_only_its_failed_documents(monkeypatch):
