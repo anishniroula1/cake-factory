@@ -39,21 +39,19 @@ sentence text always gets the same key.
 
 ### Semantic catalog
 
-Index: sentence_semantic_catalog-ivf-pq64-v1
-Alias: sentence_semantic_catalog_ivf_pq
+Production design: Faiss IVF-SQ16 with 512-dimension Titan vectors and cosine
+similarity.
 
 This index stores one record for each unique sentenceKey. It contains the
-sentence text and its 512-dimension Titan vector. The vector uses FAISS with
-cosine similarity and the trained IVF-PQ model configured by
-OPENSEARCH_IVF_MODEL_ID.
+sentence text and its 512-dimension Titan vector. The physical index and alias
+come from OPENSEARCH_CATALOG_INDEX and OPENSEARCH_CATALOG_ALIAS. Production
+must point them at the approved SQ16 catalog, not the older PQ comparison
+catalog.
 
-The PQ alias is separate from the existing SQ alias. The application does not
-move or delete sentence_semantic_catalog when it creates the PQ catalog. This
-keeps both versions available for result, speed, and storage comparisons.
-
-Titan creates the embedding. The IVF-PQ model does not create embeddings; it
-organizes existing embeddings into buckets. The search uses radial min_score
-with OPENSEARCH_IVF_NPROBES, so no fixed top-K limit is used.
+Titan creates the embedding. The trained IVF-SQ16 model does not create
+embeddings; it organizes existing embeddings into buckets and stores their
+values as 16-bit numbers. The search uses radial min_score with
+OPENSEARCH_IVF_NPROBES, so no fixed top-K limit is used.
 
 If the same sentence appears in many documents, its vector is created only
 once. All occurrence records use the same sentenceKey.
@@ -263,25 +261,32 @@ Copy .env.example to .env and fill in the AWS and OpenSearch values.
 Important values:
 
 ```text
+AWS_REGION=us-east-1
 OPENSEARCH_HOST=search-your-domain.us-east-1.es.amazonaws.com
 OPENSEARCH_SEMANTIC_MODEL_ID=<deployed OpenSearch model ID>
-OPENSEARCH_IVF_MODEL_ID=<created OpenSearch k-NN IVF-PQ model ID>
-OPENSEARCH_IVF_NPROBES=64
+OPENSEARCH_IVF_MODEL_ID=sentence-ivf-sq16-512-nlist16384-v1
+OPENSEARCH_IVF_NPROBES=128
 OPENSEARCH_INGEST_PIPELINE=sentence_bedrock_embedding_pipeline
-OPENSEARCH_CATALOG_INDEX=sentence_semantic_catalog-ivf-pq64-v1
-OPENSEARCH_CATALOG_ALIAS=sentence_semantic_catalog_ivf_pq
+OPENSEARCH_CATALOG_INDEX=sentence_semantic_catalog-ivf-sq16-100m-v1
+OPENSEARCH_CATALOG_ALIAS=sentence_semantic_catalog
 VECTOR_DIMENSION=512
+INDEX_SHARDS=18
+INDEX_REPLICAS=1
 SEED_BATCH_SIZE=100
 SEED_WORKERS=4
 MATCH_THRESHOLD=90
 ```
 
-The deployed Titan model, ingest pipeline, trained IVF-PQ model, and catalog must
+The deployed Titan model, ingest pipeline, trained IVF-SQ16 model, and catalog must
 all use dimension 512. A different dimension causes index creation or indexing
 to fail.
 
-For the complete IVF-PQ training, reindexing, validation, and side-by-side
-comparison steps, read [IVF_PQ_MIGRATION.md](IVF_PQ_MIGRATION.md).
+The final 100-million-vector resources, shard count, training values, cost, and
+production checks are in
+[IVF_SQ16_100M_FINAL_CAPACITY_COST.md](IVF_SQ16_100M_FINAL_CAPACITY_COST.md).
+
+[IVF_PQ_MIGRATION.md](IVF_PQ_MIGRATION.md) is kept only as the old PQ comparison
+guide. PQ is not the final production choice.
 
 The older [IVF_CATALOG_MIGRATION.md](IVF_CATALOG_MIGRATION.md) explains the
 original IVF migration that moves one shared catalog alias.
