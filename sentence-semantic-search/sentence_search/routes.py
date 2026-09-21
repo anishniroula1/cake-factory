@@ -77,7 +77,7 @@ def index_documents(
 
 @router.post("/admin/init", tags=["Admin"])
 def initialize_storage():
-    """Create the occurrence index and trained-model IVF catalog."""
+    """Create the occurrence index and separate IVF-PQ catalog."""
 
     try:
         opensearch_store.ensure_indices()
@@ -87,6 +87,7 @@ def initialize_storage():
         "message": "Sentence semantic-search storage is ready",
         "occurrenceIndex": config.occurrence_index,
         "catalogIndex": config.catalog_index,
+        "catalogAlias": config.catalog_alias,
         "ivfModelId": config.ivf_model_id,
         "ivfNprobes": config.ivf_nprobes,
     }

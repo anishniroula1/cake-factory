@@ -128,7 +128,7 @@ class AliasIndexClient:
         def get_alias(self, name):
             if name == config.occurrence_alias:
                 return {"sentence_occurrences-old-v1": {}}
-            return {"sentence_semantic_catalog-hnsw-v1": {}}
+            return {"sentence_semantic_catalog-ivf-pq64-old-v1": {}}
 
         def exists(self, index):
             return True
@@ -301,9 +301,10 @@ def test_reset_deletes_configured_indexes_and_existing_alias_targets():
             config.occurrence_index,
             config.catalog_index,
             "sentence_occurrences-old-v1",
-            "sentence_semantic_catalog-hnsw-v1",
+            "sentence_semantic_catalog-ivf-pq64-old-v1",
         }
     )
+    assert "sentence_semantic_catalog-ivf-sq16-v1" not in result["deletedIndexes"]
     assert client.indices.deleted == result["deletedIndexes"]
 
 

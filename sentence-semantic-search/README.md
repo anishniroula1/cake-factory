@@ -39,15 +39,19 @@ sentence text always gets the same key.
 
 ### Semantic catalog
 
-Index: sentence_semantic_catalog-ivf-v1
-Alias: sentence_semantic_catalog
+Index: sentence_semantic_catalog-ivf-pq64-v1
+Alias: sentence_semantic_catalog_ivf_pq
 
 This index stores one record for each unique sentenceKey. It contains the
 sentence text and its 512-dimension Titan vector. The vector uses FAISS with
-cosine similarity and the trained IVF model configured by
+cosine similarity and the trained IVF-PQ model configured by
 OPENSEARCH_IVF_MODEL_ID.
 
-Titan creates the embedding. The IVF model does not create embeddings; it
+The PQ alias is separate from the existing SQ alias. The application does not
+move or delete sentence_semantic_catalog when it creates the PQ catalog. This
+keeps both versions available for result, speed, and storage comparisons.
+
+Titan creates the embedding. The IVF-PQ model does not create embeddings; it
 organizes existing embeddings into buckets. The search uses radial min_score
 with OPENSEARCH_IVF_NPROBES, so no fixed top-K limit is used.
 
@@ -261,22 +265,26 @@ Important values:
 ```text
 OPENSEARCH_HOST=search-your-domain.us-east-1.es.amazonaws.com
 OPENSEARCH_SEMANTIC_MODEL_ID=<deployed OpenSearch model ID>
-OPENSEARCH_IVF_MODEL_ID=<created OpenSearch k-NN IVF model ID>
+OPENSEARCH_IVF_MODEL_ID=<created OpenSearch k-NN IVF-PQ model ID>
 OPENSEARCH_IVF_NPROBES=64
 OPENSEARCH_INGEST_PIPELINE=sentence_bedrock_embedding_pipeline
-OPENSEARCH_CATALOG_INDEX=sentence_semantic_catalog-ivf-v1
+OPENSEARCH_CATALOG_INDEX=sentence_semantic_catalog-ivf-pq64-v1
+OPENSEARCH_CATALOG_ALIAS=sentence_semantic_catalog_ivf_pq
 VECTOR_DIMENSION=512
 SEED_BATCH_SIZE=100
 SEED_WORKERS=4
 MATCH_THRESHOLD=90
 ```
 
-The deployed Titan model, ingest pipeline, trained IVF model, and catalog must
+The deployed Titan model, ingest pipeline, trained IVF-PQ model, and catalog must
 all use dimension 512. A different dimension causes index creation or indexing
 to fail.
 
-For the complete training, reindexing, validation, alias switch, and rollback
-steps, read [IVF_CATALOG_MIGRATION.md](IVF_CATALOG_MIGRATION.md).
+For the complete IVF-PQ training, reindexing, validation, and side-by-side
+comparison steps, read [IVF_PQ_MIGRATION.md](IVF_PQ_MIGRATION.md).
+
+The older [IVF_CATALOG_MIGRATION.md](IVF_CATALOG_MIGRATION.md) explains the
+original IVF migration that moves one shared catalog alias.
 
 After creating an IVF-SQ16 test index, use
 [IVF_SQ16_STORAGE_CHECK.md](IVF_SQ16_STORAGE_CHECK.md) to compare its disk

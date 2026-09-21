@@ -61,7 +61,7 @@ def occurrence_index_definition(config: Config) -> dict:
 
 
 def catalog_index_definition(config: Config) -> dict:
-    """Make the Titan-backed catalog using the trained Faiss IVF model."""
+    """Make the Titan-backed catalog using the trained Faiss IVF-PQ model."""
 
     return {
         "settings": {

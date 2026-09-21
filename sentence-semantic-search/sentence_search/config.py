@@ -77,11 +77,11 @@ class Config:
             ).strip(),
             catalog_index=os.getenv(
                 "OPENSEARCH_CATALOG_INDEX",
-                "sentence_semantic_catalog-ivf-v1",
+                "sentence_semantic_catalog-ivf-pq-v1",
             ).strip(),
             catalog_alias=os.getenv(
                 "OPENSEARCH_CATALOG_ALIAS",
-                "sentence_semantic_catalog",
+                "sentence_semantic_catalog_ivf_pq",
             ).strip(),
             index_shards=_integer("INDEX_SHARDS", 3),
             index_replicas=_integer("INDEX_REPLICAS", 1, 0),
