@@ -59,6 +59,11 @@ def decode_page_token(token: str) -> dict:
         raise ValueError("Invalid nextToken")
     has_global_id_cursor = state.get("afterGlobalId") is not None
     has_catalog_cursor = state.get("afterKey") is not None
-    if not has_global_id_cursor and not has_catalog_cursor:
+    has_application_offset = state.get("applicationOffset") is not None
+    if not (
+        has_global_id_cursor
+        or has_catalog_cursor
+        or has_application_offset
+    ):
         raise ValueError("Invalid nextToken")
     return state

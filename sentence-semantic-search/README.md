@@ -162,6 +162,31 @@ The original semantic-search endpoint still returns every match. Its
 matchingCountScope is allResults. Use that endpoint only when the caller really
 needs all matching rows in one response.
 
+### Compare one application with other applications
+
+Use this endpoint to rank other applications by matching sentence pairs:
+
+```text
+GET /applications/A1/sentences/application-matches
+    ?analysisGroup=Asylee
+    &threshold=90
+```
+
+The endpoint returns 10 applications per page, ranked by matchCount from high
+to low. One match means one source globalId paired with one target globalId.
+For example, one source sentence matching three sentences in another
+application adds three matches. If a second source sentence matches one of
+those targets, that source-target pair adds another match.
+
+Every returned match shows the source location, target location, matchType,
+and matchPercentage. Both sides must use the requested analysisGroup. Tracer
+and form-language sentences are excluded on both sides. Use nextToken exactly
+as returned to read the next 10 applications.
+
+The ranking requires evaluating the complete source application before the
+top 10 applications are known. Pagination limits the response size, but it
+does not remove that full comparison work.
+
 ### Application summary
 
 ```text
@@ -214,6 +239,7 @@ GET    /applications/{applicationId}/sentences/semantic-summary
 GET    /applications/{applicationId}/sentences/semantic-summary-all
 GET    /applications/{applicationId}/sentences/semantic-search
 GET    /applications/{applicationId}/sentences/semantic-search-paginated
+GET    /applications/{applicationId}/sentences/application-matches
 POST   /admin/init
 POST   /admin/seed?reset=false&csvPath=data/seed.csv
 POST   /sentences

@@ -126,3 +126,17 @@ def test_paginated_sentence_search_has_page_inputs():
         "pageSize",
         "nextToken",
     }
+
+
+def test_application_matches_has_fixed_ten_application_pages():
+    operation = app.openapi()["paths"][
+        "/applications/{applicationId}/sentences/application-matches"
+    ]["get"]
+    parameters = {item["name"] for item in operation["parameters"]}
+
+    assert parameters == {
+        "applicationId",
+        "analysisGroup",
+        "threshold",
+        "nextToken",
+    }

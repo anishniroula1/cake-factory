@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from opensearchpy.exceptions import OpenSearchException
 
 from sentence_search.components import (
+    application_match_service,
     paginated_sentence_key_search_service,
     sentence_key_search_service,
 )
@@ -24,6 +25,34 @@ THRESHOLD_QUERY = Query(
     le=100,
     description="Minimum cosine percentage for this search.",
 )
+
+
+@router.get(
+    "/applications/{applicationId}/sentences/application-matches",
+    tags=["Sentence matches"],
+)
+def application_sentence_matches(
+    applicationId: str,
+    analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
+    threshold: Annotated[int, THRESHOLD_QUERY] = config.match_threshold,
+    nextToken: Annotated[
+        str | None,
+        Query(description="Application-page token returned by the previous page."),
+    ] = None,
+):
+    """Rank other applications by every matching sentence pair."""
+
+    try:
+        return application_match_service.compare(
+            applicationId,
+            analysisGroup,
+            threshold,
+            nextToken,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except (OpenSearchException, RuntimeError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @router.get(

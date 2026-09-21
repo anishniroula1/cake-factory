@@ -32,6 +32,23 @@ class EmptySearchClient:
         return {"hits": {"total": {"value": 0}, "hits": []}}
 
 
+class ApplicationComparisonClient:
+    def __init__(self):
+        self.requests = []
+
+    def search(self, **request):
+        self.requests.append(request)
+        if request["body"]["size"] == 0:
+            return {
+                "aggregations": {
+                    "matches": {
+                        "buckets": [],
+                    }
+                }
+            }
+        return {"hits": {"hits": []}}
+
+
 class CatalogMatchesClient:
     def __init__(self):
         self.request = None
@@ -493,6 +510,55 @@ def test_sentence_key_search_uses_terms_and_never_knn():
     assert '"terms": {"sentenceKey": ["key-1", "key-2"]}' in query_text
     assert '"knn"' not in query_text
     assert {"term": {"applicationId": "A1"}} in body["query"]["bool"]["must_not"]
+
+
+def test_application_comparison_counts_only_eligible_other_applications():
+    client = ApplicationComparisonClient()
+    store = OpenSearchStore(config, client)
+
+    result = store.occurrence_counts_by_application_and_key(
+        ["key-1", "key-2"],
+        "A1",
+        "Asylee",
+    )
+
+    assert result == []
+    body = client.requests[0]["body"]
+    filters = body["query"]["bool"]["filter"]
+    assert {"term": {"analysisGroup": "Asylee"}} in filters
+    assert {"term": {"isTracer": False}} in filters
+    assert {"term": {"isFormLanguage": False}} in filters
+    assert {"term": {"applicationId": "A1"}} in body["query"]["bool"][
+        "must_not"
+    ]
+    sources = body["aggs"]["matches"]["composite"]["sources"]
+    assert sources == [
+        {"applicationId": {"terms": {"field": "applicationId"}}},
+        {"sentenceKey": {"terms": {"field": "sentenceKey"}}},
+    ]
+
+
+def test_application_comparison_details_filter_selected_applications():
+    client = ApplicationComparisonClient()
+    store = OpenSearchStore(config, client)
+
+    result = store.matching_occurrences_for_applications(
+        ["key-1"],
+        ["A2", "A3"],
+        "A1",
+        "Asylee",
+    )
+
+    assert result == []
+    body = client.requests[0]["body"]
+    filters = body["query"]["bool"]["filter"]
+    assert {"terms": {"applicationId": ["A2", "A3"]}} in filters
+    assert {"term": {"analysisGroup": "Asylee"}} in filters
+    assert {"term": {"isTracer": False}} in filters
+    assert {"term": {"isFormLanguage": False}} in filters
+    assert {"term": {"applicationId": "A1"}} in body["query"]["bool"][
+        "must_not"
+    ]
 
 
 def test_occurrence_bulk_uses_global_id_as_an_index_upsert(monkeypatch):

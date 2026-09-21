@@ -157,6 +157,25 @@ class SentenceSummaryService:
     ) -> dict:
         """Find catalog matches for all source keys using batched msearch."""
 
+        scores = self.matching_key_scores(source_keys, threshold)
+        similar_keys = {}
+        for source_key in source_keys:
+            similar_keys[source_key] = sorted(
+                key for key in scores[source_key] if key != source_key
+            )
+        return similar_keys
+
+    def matching_key_scores(
+        self,
+        source_keys: list,
+        threshold: int,
+    ) -> dict:
+        """Return matching catalog keys and scores for many source keys.
+
+        Input: saved source sentence keys and threshold 90.
+        Output: each source key mapped to exact and similar key percentages.
+        """
+
         if not source_keys:
             return {}
         vectors = self.opensearch.catalog_vectors(source_keys)
@@ -166,7 +185,7 @@ class SentenceSummaryService:
                 f"Catalog vector does not exist for {missing_keys[0]}"
             )
 
-        qualified = {key: set() for key in source_keys}
+        qualified = {key: {key: 100.0} for key in source_keys}
         pending = [(key, vectors[key], None) for key in source_keys]
         while pending:
             next_pending = []
@@ -197,7 +216,7 @@ class SentenceSummaryService:
                             continue
                         percentage = cosine_percentage(float(hit["_score"]))
                         if percentage >= threshold:
-                            qualified[source_key].add(candidate_key)
+                            qualified[source_key][candidate_key] = percentage
 
                     next_after_key = result.get("after_key")
                     if (
@@ -209,10 +228,7 @@ class SentenceSummaryService:
                         )
             pending = next_pending
 
-        return {
-            source_key: sorted(qualified[source_key])
-            for source_key in source_keys
-        }
+        return qualified
 
     def _catalog_search_body(
         self,

@@ -1,4 +1,5 @@
 from sentence_search.all_sentence_summary_service import AllSentenceSummaryService
+from sentence_search.application_match_service import ApplicationMatchService
 from sentence_search.config import config
 from sentence_search.deletion_service import SentenceDeletionService
 from sentence_search.opensearch_store import OpenSearchStore
@@ -23,4 +24,8 @@ sentence_key_search_service = SentenceKeySearchService(opensearch_store)
 paginated_sentence_key_search_service = PaginatedSentenceKeySearchService(
     opensearch_store,
     sentence_key_search_service,
+)
+application_match_service = ApplicationMatchService(
+    opensearch_store,
+    sentence_summary_service,
 )
