@@ -11,6 +11,13 @@ transformation design is documented in
 Its editable architecture diagram is
 [FINAL_SENTENCE_PROCESSING_ARCHITECTURE.drawio](FINAL_SENTENCE_PROCESSING_ARCHITECTURE.drawio).
 
+The final production plan uses three OpenSearch indexes. The current demo
+below still has two indexes; the third tracer/form-language reference catalog
+belongs to the planned Sentence Similarity flow.
+
+The complete PostgreSQL table, index, bidirectional-write, and lookup SQL is
+in [POSTGRES_SENTENCE_MATCHING_SCHEMA.md](POSTGRES_SENTENCE_MATCHING_SCHEMA.md).
+
 That final plan supersedes the older PostgreSQL restore guide for future
 implementation decisions. The current demo behavior below still describes the
 code that is present today.
@@ -279,7 +286,7 @@ OPENSEARCH_SEMANTIC_MODEL_ID=<deployed OpenSearch model ID>
 OPENSEARCH_IVF_MODEL_ID=sentence-ivf-sq16-512-nlist16384-v1
 OPENSEARCH_IVF_NPROBES=128
 OPENSEARCH_INGEST_PIPELINE=sentence_bedrock_embedding_pipeline
-OPENSEARCH_CATALOG_INDEX=sentence_semantic_catalog-ivf-sq16-100m-v1
+OPENSEARCH_CATALOG_INDEX=sentence_semantic_catalog-ivf-sq16-v1
 OPENSEARCH_CATALOG_ALIAS=sentence_semantic_catalog
 VECTOR_DIMENSION=512
 INDEX_SHARDS=18

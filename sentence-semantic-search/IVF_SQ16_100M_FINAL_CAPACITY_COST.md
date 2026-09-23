@@ -223,7 +223,7 @@ Create a new physical index. Do not change the existing vector mapping in
 place.
 
 ```http
-PUT /sentence_semantic_catalog-ivf-sq16-100m-v1
+PUT /sentence_semantic_catalog-ivf-sq16-v1
 {
   "settings": {
     "number_of_shards": 18,
@@ -435,7 +435,7 @@ After a restart, deployment, shard move, or blue/green change, the native vector
 index may not be in memory. Warm the production catalog before opening traffic:
 
 ```http
-GET /_plugins/_knn/warmup/sentence_semantic_catalog-ivf-sq16-100m-v1
+GET /_plugins/_knn/warmup/sentence_semantic_catalog-ivf-sq16-v1
 ```
 
 Then run a small set of normal searches. Do not warm old comparison indexes on
@@ -459,8 +459,8 @@ Also check shard placement and index size:
 ```http
 GET /_cat/nodes?v&h=name,ip,node.role,cpu,heap.percent,ram.percent,load_1m
 GET /_cat/allocation?v
-GET /_cat/shards/sentence_semantic_catalog-ivf-sq16-100m-v1?v
-GET /_cat/indices/sentence_semantic_catalog-ivf-sq16-100m-v1,sentence_occurrences-v1?v&bytes=gb
+GET /_cat/shards/sentence_semantic_catalog-ivf-sq16-v1?v
+GET /_cat/indices/sentence_semantic_catalog-ivf-sq16-v1,sentence_occurrences-v1?v&bytes=gb
 GET /_plugins/_knn/stats
 ```
 
