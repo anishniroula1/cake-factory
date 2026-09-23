@@ -1,0 +1,91 @@
+<mxfile host="Electron" agent="Codex">
+  <diagram id="vertical-sentence-flow" name="Vertical Architecture">
+    <mxGraphModel dx="1341" dy="923" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=26;fontColor=#17233C;" value="&lt;b&gt;Sentence Processing and Matching&lt;/b&gt;" vertex="1">
+          <mxGeometry height="45" width="600" x="400" y="25" as="geometry" />
+        </mxCell>
+        <mxCell id="SNnzAs_7YPKRwi2ID2P--1" edge="1" parent="1" source="docSection" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=5;" target="similaritySection">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="docSection" parent="1" style="swimlane;html=1;horizontal=1;startSize=50;rounded=1;arcSize=6;fillColor=#F7FBFF;swimlaneFillColor=#D9EAF7;strokeColor=#4A86C5;strokeWidth=2;fontColor=#17365D;fontSize=18;" value="&lt;b&gt;1 · DOC2Vec Service&lt;/b&gt;" vertex="1">
+          <mxGeometry height="830" width="590" x="60" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="docInput" parent="docSection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4A86C5;fontSize=13;" value="&lt;b&gt;Receive document&lt;/b&gt;&lt;br&gt;tsp_id + full text" vertex="1">
+          <mxGeometry height="65" width="330" x="130" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare" parent="docSection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4A86C5;fontSize=13;" value="&lt;b&gt;Prepare sentences&lt;/b&gt;&lt;br&gt;Split text in order&lt;br&gt;Mark tracer and form language&lt;br&gt;Create sentence_key" vertex="1">
+          <mxGeometry height="105" width="380" x="105" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="sentenceVector" parent="docSection" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=13;" value="&lt;b&gt;Insert sentences_vector&lt;/b&gt;&lt;br&gt;Save every sentence&lt;br&gt;Receive every global_id" vertex="1">
+          <mxGeometry height="105" width="330" x="130" y="345" as="geometry" />
+        </mxCell>
+        <mxCell id="openSearch" parent="docSection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=13;" value="&lt;b&gt;Index OpenSearch&lt;/b&gt;&lt;br&gt;Occurrence index: every global_id&lt;br&gt;Catalog: one vector per sentence_key&lt;br&gt;Retry Lasso/Titan failures" vertex="1">
+          <mxGeometry height="120" width="380" x="105" y="500" as="geometry" />
+        </mxCell>
+        <mxCell id="docComplete" parent="docSection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=13;" value="&lt;b&gt;DOC2Vec complete&lt;/b&gt;&lt;br&gt;Send tsp_id to Sentence Similarity" vertex="1">
+          <mxGeometry height="75" width="330" x="130" y="675" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="docSection" source="docInput" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#4A86C5;strokeWidth=2;" target="prepare">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="docSection" source="prepare" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#4A86C5;strokeWidth=2;" target="sentenceVector">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="docSection" source="sentenceVector" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#4A86C5;strokeWidth=2;" target="openSearch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="docSection" source="openSearch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#82B366;strokeWidth=2;" target="docComplete">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="similaritySection" parent="1" style="swimlane;html=1;horizontal=1;startSize=50;rounded=1;arcSize=6;fillColor=#FCF9FE;swimlaneFillColor=#EADCF2;strokeColor=#8E5EA2;strokeWidth=2;fontColor=#4C2B63;fontSize=18;" value="&lt;b&gt;2 · Sentence Similarity Service&lt;/b&gt;" vertex="1">
+          <mxGeometry height="830" width="590" x="750" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="similarityInput" parent="similaritySection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8E5EA2;fontSize=13;" value="&lt;b&gt;Receive tsp_id&lt;/b&gt;&lt;br&gt;Start after DOC2Vec completes" vertex="1">
+          <mxGeometry height="65" width="330" x="130" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="oneSentence" parent="similaritySection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8E5EA2;fontSize=13;" value="&lt;b&gt;Take one eligible sentence&lt;/b&gt;&lt;br&gt;Skip tracer and form language&lt;br&gt;Keep its global_id and sentence_key" vertex="1">
+          <mxGeometry height="90" width="380" x="105" y="185" as="geometry" />
+        </mxCell>
+        <mxCell id="findMatches" parent="similaritySection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8E5EA2;fontSize=13;" value="&lt;b&gt;Find this sentence&#39;s matches&lt;/b&gt;&lt;br&gt;Exact: same sentence_key&lt;br&gt;Similar: one OpenSearch vector search&lt;br&gt;Exclude the same application" vertex="1">
+          <mxGeometry height="110" width="380" x="105" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="dualWrite" parent="similaritySection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8E5EA2;strokeWidth=2;fontSize=13;" value="&lt;b&gt;Update both tables&lt;/b&gt;&lt;br&gt;Write both directions and commit&lt;br&gt;Then take the next sentence" vertex="1">
+          <mxGeometry height="85" width="330" x="130" y="465" as="geometry" />
+        </mxCell>
+        <mxCell id="oldMatches" parent="similaritySection" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=12;" value="&lt;b&gt;Existing tsp.matches&lt;/b&gt;&lt;br&gt;Global-ID JSONB list&lt;br&gt;API Transform reads this now" vertex="1">
+          <mxGeometry height="115" width="255" x="25" y="600" as="geometry" />
+        </mxCell>
+        <mxCell id="newMatches" parent="similaritySection" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontSize=12;" value="&lt;b&gt;New sentence_key_matches&lt;/b&gt;&lt;br&gt;Key + group + distance&lt;br&gt;Write only until history finishes" vertex="1">
+          <mxGeometry height="115" width="255" x="310" y="600" as="geometry" />
+        </mxCell>
+        <mxCell id="transition" parent="similaritySection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=12;" value="&lt;b&gt;Do not switch reads yet&lt;/b&gt;&lt;br&gt;Use the new table only after every historical document finishes and validation passes." vertex="1">
+          <mxGeometry height="60" width="400" x="95" y="755" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="similaritySection" source="similarityInput" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#8E5EA2;strokeWidth=2;" target="oneSentence">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="similaritySection" source="oneSentence" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#8E5EA2;strokeWidth=2;" target="findMatches">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="similaritySection" source="findMatches" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#8E5EA2;strokeWidth=2;" target="dualWrite">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="similaritySection" source="dualWrite" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#D79B00;strokeWidth=2;" target="oldMatches">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="similaritySection" source="dualWrite" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#9673A6;strokeWidth=2;" target="newMatches">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="similaritySection" source="oldMatches" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#82B366;dashed=1;" target="transition">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="similaritySection" source="newMatches" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#82B366;dashed=1;" target="transition">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

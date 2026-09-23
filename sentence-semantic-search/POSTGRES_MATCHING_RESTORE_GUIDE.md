@@ -1,4 +1,11 @@
-# PostgreSQL Matching Restore Guide
+# Legacy PostgreSQL Matching Restore Guide
+
+This guide has been superseded by
+[FINAL_SENTENCE_PROCESSING_ARCHITECTURE.md](FINAL_SENTENCE_PROCESSING_ARCHITECTURE.md).
+Do not use this older text-array design for the final implementation. It is
+kept only as history for the OpenSearch-only demo. The final design uses a
+composite `(sentence_key, analysis_group)` primary key and JSONB matching-key
+to distance values.
 
 This file saves the PostgreSQL design that was removed from the sentence
 semantic-search project. Keep this file in the project. When PostgreSQL is

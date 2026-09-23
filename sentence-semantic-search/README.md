@@ -3,6 +3,18 @@
 This API saves sentences in OpenSearch and uses Amazon Titan vectors to find
 sentences with the same or similar meaning.
 
+## Final production processing plan
+
+The approved DOC2Vec, sentence-similarity, PostgreSQL, OpenSearch, and UI
+transformation design is documented in
+[FINAL_SENTENCE_PROCESSING_ARCHITECTURE.md](FINAL_SENTENCE_PROCESSING_ARCHITECTURE.md).
+Its editable architecture diagram is
+[FINAL_SENTENCE_PROCESSING_ARCHITECTURE.drawio](FINAL_SENTENCE_PROCESSING_ARCHITECTURE.drawio).
+
+That final plan supersedes the older PostgreSQL restore guide for future
+implementation decisions. The current demo behavior below still describes the
+code that is present today.
+
 The project currently uses OpenSearch only. There is no PostgreSQL connection,
 table, background matching job, or saved match list. This makes seeding much
 simpler and faster. Matches are calculated when a search endpoint is called.
