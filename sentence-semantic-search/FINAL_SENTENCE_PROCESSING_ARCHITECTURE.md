@@ -19,10 +19,11 @@ it searches the much larger sentence catalog. If the sentence is a
 non-matcher, the service saves no relationships and moves to the next
 sentence. This avoids an unnecessary main-catalog search.
 
-For now, accepted relationships are written to both the existing
-`matches` table and the new `sentence_key_matches` table. API Transform
-continues reading `matches` until historical processing and validation are
-complete.
+For now, accepted relationships are written to both the existing `matches`
+table and the new bucketed `sentence_key_matches` table. One sentence key can
+use up to 32 smaller JSONB rows instead of one JSONB row that keeps growing.
+API Transform continues reading `matches` until historical processing and
+validation are complete.
 
 ## Simple flow
 
@@ -45,7 +46,7 @@ Sentence Similarity receives tsp_id
     -> No non-matcher found: search the main sentence catalog
     -> Remove ineligible and same-application targets
     -> Update matches in both directions
-    -> Update sentence_key_matches in both directions
+    -> Update the required sentence_key_matches buckets in both directions
     -> Commit and take the next sentence
 ```
 
@@ -444,7 +445,7 @@ Update the occurrence document with the same global_id and values.
 Do not search the main sentence catalog.
 Do not add exact matches.
 Do not update matches.
-Do not update sentence_key_matches.
+Do not update any sentence_key_matches bucket.
 Commit the sentence classification.
 Move to the next source sentence.
 ```
@@ -575,12 +576,14 @@ matches row 10 adds global ID 1
 If `KEY-A` matches `KEY-B`:
 
 ```text
-sentence_key_matches KEY-A adds KEY-B and the distance
-sentence_key_matches KEY-B adds KEY-A and the same distance
+KEY-A updates bucket(KEY-B) with KEY-B and the distance
+KEY-B updates bucket(KEY-A) with KEY-A and the same distance
 ```
 
-A retry replaces the existing relationship value instead of adding a
-duplicate. The service commits this sentence and then takes the next one.
+Only those two bucket rows are changed. A retry replaces the existing distance
+inside the same buckets instead of adding a duplicate. The service locks the
+affected bucket rows in a stable order, commits both directions together, and
+then takes the next sentence.
 
 ## 4. Existing and new PostgreSQL match tables
 
@@ -594,32 +597,139 @@ API Transform continues reading this table during historical processing.
 
 ### New `sentence_key_matches`
 
-The new table stores one row for each sentence key and analysis group:
+The new table stores one sentence key across up to 32 JSONB bucket rows. The
+matching key decides the bucket, so the same relationship always goes to the
+same row:
+
+```text
+bucketNumber = first byte of matching sentence key % 32
+```
+
+For a lowercase SHA-256 key, the calculation is:
+
+```sql
+CREATE OR REPLACE FUNCTION sentence_match_bucket(
+    sentence_key_value TEXT
+)
+RETURNS SMALLINT
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT (
+        get_byte(decode(sentence_key_value, 'hex'), 0) % 32
+    )::SMALLINT;
+$$;
+```
+
+PostgreSQL does not provide `jsonb_object_length`, so this immutable helper
+calculates the generated count for each bucket:
+
+```sql
+CREATE OR REPLACE FUNCTION sentence_match_jsonb_object_size(
+    jsonb_value JSONB
+)
+RETURNS INTEGER
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT COUNT(*)::INTEGER
+    FROM jsonb_object_keys(jsonb_value);
+$$;
+```
+
+The table is:
 
 ```sql
 CREATE TABLE sentence_key_matches (
-    sentence_key TEXT NOT NULL,
     analysis_group TEXT NOT NULL,
+    sentence_key TEXT NOT NULL,
+    match_bucket_number SMALLINT NOT NULL,
     matches JSONB NOT NULL DEFAULT '{}'::JSONB,
+
+    match_key_count INTEGER GENERATED ALWAYS AS (
+        sentence_match_jsonb_object_size(matches)
+    ) STORED,
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (sentence_key, analysis_group),
+
+    PRIMARY KEY (
+        analysis_group,
+        sentence_key,
+        match_bucket_number
+    ),
+
+    CHECK (sentence_key ~ '^[0-9a-f]{64}$'),
+    CHECK (match_bucket_number BETWEEN 0 AND 31),
     CHECK (jsonb_typeof(matches) = 'object')
 );
 ```
 
-Example:
+Empty bucket rows are not created. Example:
 
-```json
-{
-  "KEY-B": 0.10,
-  "KEY-C": 0.30
-}
+| analysisGroup | sentenceKey | bucketNumber | matches |
+|---|---|---:|---|
+| Asylee | KEY-A (`3107...d828`) | 11 | `{"KEY-B": 0.10}` |
+| Asylee | KEY-B (`abbe...99c1`) | 17 | `{"KEY-A": 0.10}` |
+
+`KEY-A` and `KEY-B` are short labels for the full 64-character hashes shown in
+the sentence-catalog example. `KEY-B` starts with hexadecimal `ab`, so it goes
+into bucket 11 under `KEY-A`. `KEY-A` starts with hexadecimal `31`, so the
+reverse match goes into bucket 17 under `KEY-B`.
+
+`match_key_count` counts one bucket. The total number of matching keys for a
+sentence is the sum of `match_key_count` across its bucket rows. Fetching all
+buckets uses the primary-key prefix:
+
+```sql
+SELECT match_bucket_number, matches, match_key_count
+FROM sentence_key_matches
+WHERE analysis_group = :analysisGroup
+  AND sentence_key = :sentenceKey
+ORDER BY match_bucket_number;
 ```
 
-Exact occurrences use the same sentence key, so the key is not related to
-itself in this table. Exact global-ID relationships are still saved in
-`matches`.
+### Why the bucket and TOAST design is needed
+
+A common sentence may eventually have 10,000 or even 100,000 matching keys. If
+all matches are kept in one JSONB value, adding one key creates a new version
+of that entire value. The row stays locked during the update, and PostgreSQL
+creates more WAL (Write-Ahead Log), dead-row, and vacuum work.
+
+PostgreSQL TOAST helps store large JSONB values. It compresses them and can
+move them outside the main table page. TOAST does not make a large JSONB value
+an in-place document. Updating one property still creates a new version of the
+large value and its TOAST data.
+
+Splitting matches across 32 deterministic buckets reduces the amount of JSONB
+rewritten and locked by each relationship:
+
+| Matches for one sentence | One JSONB row | Average per bucket |
+|---:|---:|---:|
+| 1,000 | 1,000 keys | about 31 keys |
+| 10,000 | 10,000 keys | about 313 keys |
+| 100,000 | 100,000 keys | about 3,125 keys |
+
+Some large buckets may still use TOAST, but an update rewrites only one bucket
+instead of every match for that sentence. Two workers can also update different
+buckets for the same sentence without locking one shared JSONB row.
+
+The tradeoff is more table rows and reading up to 32 rows for one sentence.
+That is acceptable because the primary key starts with `analysis_group` and
+`sentence_key`, so all buckets are found through one indexed lookup.
+
+The bidirectional database function receives one source sentence key and its
+matching-key JSONB object. It calculates forward and reverse bucket numbers,
+locks the affected bucket identities in a stable order, and upserts both
+directions in one transaction. The incoming distance replaces the old distance
+when the relationship already exists.
+
+Exact occurrences use the same sentence key, so a key is not related to itself
+in this table. Exact global-ID relationships are still saved in `matches`.
 
 ## 5. Historical processing and switching reads
 
@@ -630,7 +740,8 @@ flow, including the non-matcher catalog check.
 During backfill:
 
 - API Transform reads only `matches`.
-- `sentence_key_matches` is populated but is not a production read source.
+- The required `sentence_key_matches` bucket rows are populated, but the table
+  is not a production read source.
 - Every historical `tsp_id` must complete successfully.
 
 Before changing API Transform, verify:
@@ -640,6 +751,9 @@ Before changing API Transform, verify:
 - No relationship contains a non-matcher sentence.
 - No key matches itself.
 - No relationship crosses `analysis_group`.
+- Every matching key is stored in its deterministic bucket.
+- Summing `match_key_count` across a key's buckets equals its unique match
+  count.
 - Expanding new-table keys returns the same eligible global IDs as the old
   table for test documents.
 
@@ -666,8 +780,11 @@ decision.
 9. The main catalog is searched only for an allowed source sentence.
 10. Ineligible targets and same-application targets are never saved.
 11. Accepted relationships are bidirectional in both PostgreSQL match tables.
-12. Retrying the same sentence does not create duplicate relationships.
-13. Existing production reads remain on `matches` until backfill and
+12. `sentence_key_matches` uses 32 deterministic JSONB buckets and creates only
+    bucket rows that contain matches.
+13. Retrying the same sentence updates the saved distance without creating a
+    duplicate relationship or bucket row.
+14. Existing production reads remain on `matches` until backfill and
     validation are complete.
-14. Every occurrence classification records whether the non-matcher check has
+15. Every occurrence classification records whether the non-matcher check has
     actually completed; unchecked rows are never treated as eligible.
