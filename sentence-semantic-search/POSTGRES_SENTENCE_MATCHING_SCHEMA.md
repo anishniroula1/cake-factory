@@ -1,5 +1,11 @@
 # PostgreSQL Sentence Matching Tables and Indexes
 
+> The scalable bucket revision for `sentence_key_matches` is documented in
+> [POSTGRES_SENTENCE_MATCH_BUCKET_DESIGN.md](POSTGRES_SENTENCE_MATCH_BUCKET_DESIGN.md).
+> Its bucketed table and upsert function supersede the original one-row table
+> and function in Sections 4 and 5 below. The remaining occurrence-table,
+> legacy-match, cleanup, and lookup guidance remains useful.
+
 Status: Final database design  
 Target: PostgreSQL 15 or newer
 
@@ -235,12 +241,25 @@ has to update the GIN index.
 One row belongs to one sentence key and one analysis group.
 
 ```sql
+CREATE OR REPLACE FUNCTION sentence_match_jsonb_object_size(
+    jsonb_value JSONB
+)
+RETURNS INTEGER
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT COUNT(*)::INTEGER
+    FROM jsonb_object_keys(jsonb_value);
+$$;
+
 CREATE TABLE IF NOT EXISTS sentence_key_matches (
     sentence_key TEXT NOT NULL,
     analysis_group TEXT NOT NULL,
     matches JSONB NOT NULL DEFAULT '{}'::JSONB,
     match_key_count INTEGER GENERATED ALWAYS AS (
-        jsonb_object_length(matches)
+        sentence_match_jsonb_object_size(matches)
     ) STORED,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

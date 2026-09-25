@@ -18,6 +18,15 @@ belongs to the planned Sentence Similarity flow.
 The complete PostgreSQL table, index, bidirectional-write, and lookup SQL is
 in [POSTGRES_SENTENCE_MATCHING_SCHEMA.md](POSTGRES_SENTENCE_MATCHING_SCHEMA.md).
 
+The scalable JSONB bucket design for sentence-key relationships is documented
+in
+[POSTGRES_SENTENCE_MATCH_BUCKET_DESIGN.md](POSTGRES_SENTENCE_MATCH_BUCKET_DESIGN.md).
+It explains why buckets are used, how PostgreSQL TOAST helps, how Python and
+the shared SQL function write matches, and what must be measured before the
+72-million-record data set grows toward 100–150 million records.
+For the `sentence_key_matches` table and its upsert function, the bucket guide
+supersedes the original one-row sections in the complete schema guide.
+
 That final plan supersedes the older PostgreSQL restore guide for future
 implementation decisions. The current demo behavior below still describes the
 code that is present today.
