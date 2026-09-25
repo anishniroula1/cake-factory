@@ -1149,36 +1149,114 @@ Story number: 22
 
 ### Value
 
-Create a Flyway migration for the new `sentence_key_matches` table and the
-`sentences_vector` indexes required to find and expand matching sentence keys
-without scanning the full table.
+Create the PostgreSQL objects used to store bidirectional sentence-key matches
+across 32 smaller JSONB buckets. A popular sentence can have thousands of
+matches, so one large JSONB row would be expensive to rewrite and lock. Buckets
+keep each update smaller and allow workers to update different buckets for the
+same sentence independently.
 
-### Table migration
+### Flyway table migration
+
+Create the bucket calculation and JSONB count functions before creating the
+table:
+
+```sql
+CREATE OR REPLACE FUNCTION sentence_match_bucket(
+    sentence_key_value TEXT
+)
+RETURNS SMALLINT
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT (
+        get_byte(decode(sentence_key_value, 'hex'), 0) % 32
+    )::SMALLINT;
+$$;
+
+CREATE OR REPLACE FUNCTION sentence_match_jsonb_object_size(
+    jsonb_value JSONB
+)
+RETURNS INTEGER
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT COUNT(*)::INTEGER
+    FROM jsonb_object_keys(jsonb_value);
+$$;
+```
 
 ```sql
 CREATE TABLE IF NOT EXISTS sentence_key_matches (
-    sentence_key TEXT NOT NULL,
     analysis_group TEXT NOT NULL,
+    sentence_key TEXT NOT NULL,
+    match_bucket_number SMALLINT NOT NULL,
     matches JSONB NOT NULL DEFAULT '{}'::JSONB,
     match_key_count INTEGER GENERATED ALWAYS AS (
-        jsonb_object_length(matches)
+        sentence_match_jsonb_object_size(matches)
     ) STORED,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    PRIMARY KEY (sentence_key, analysis_group),
+    CONSTRAINT pk_sentence_key_matches
+        PRIMARY KEY (
+            analysis_group,
+            sentence_key,
+            match_bucket_number
+        ),
 
-    CONSTRAINT sentence_key_matches_key_format
+    CONSTRAINT ck_sentence_key_matches_key_format
         CHECK (sentence_key ~ '^[0-9a-f]{64}$'),
 
-    CONSTRAINT sentence_key_matches_json_object
+    CONSTRAINT ck_sentence_key_matches_bucket_range
+        CHECK (match_bucket_number BETWEEN 0 AND 31),
+
+    CONSTRAINT ck_sentence_key_matches_json_object
         CHECK (jsonb_typeof(matches) = 'object')
 );
 ```
 
-### Index migrations
+Empty bucket rows are not created. If sentence key A has matches in buckets 3,
+11, and 25, only those three rows exist. `match_key_count` is the count for one
+bucket. The total count for A is the sum of `match_key_count` across A's rows.
 
-Create the following indexes against the existing `sentences_vector` table:
+### Flyway bidirectional upsert function
+
+The same transactional migration must create:
+
+```text
+upsert_bidirectional_sentence_key_matches(
+    analysisGroup,
+    sourceSentenceKey,
+    matchesJsonb
+)
+```
+
+The function must:
+
+- calculate each forward bucket from the matching sentence key;
+- calculate each reverse bucket from the source sentence key;
+- acquire transaction advisory locks for affected bucket rows in stable order;
+- upsert all forward and reverse bucket rows in the same transaction;
+- replace the saved distance when the same key is received again;
+- return the number of non-self relationships processed.
+
+Java calls the function once for one source sentence:
+
+```sql
+SELECT upsert_bidirectional_sentence_key_matches(
+    :analysisGroup,
+    :sourceSentenceKey,
+    CAST(:matches AS JSONB)
+);
+```
+
+### Sentence-key index migration
+
+Create these indexes against the existing `sentences_vector` table:
 
 ```sql
 CREATE INDEX CONCURRENTLY IF NOT EXISTS
@@ -1200,12 +1278,12 @@ ON sentences_vector (sentence_key)
 WHERE is_current = TRUE;
 ```
 
-Create the table in a normal Flyway migration. Run the
+Create the functions and table in a normal Flyway migration. Run the
 `CREATE INDEX CONCURRENTLY` statements in a separate Flyway migration with
-`executeInTransaction=false` because PostgreSQL does not allow concurrent index
+`executeInTransaction=false`. PostgreSQL does not allow concurrent index
 creation inside a transaction.
 
-After the migration finishes, run:
+After the migrations finish, run:
 
 ```sql
 ANALYZE sentences_vector;
@@ -1216,33 +1294,34 @@ ANALYZE sentence_key_matches;
 
 | Table | Index | Why it is needed |
 |---|---|---|
-| `sentence_key_matches` | Primary key on `(sentence_key, analysis_group)` | This is the normal lookup path. Sentence Similarity and API reads know the source key and analysis group, so PostgreSQL can fetch one JSONB match object directly. The same index is also the conflict target for safe retries and bidirectional upserts. It prevents duplicate rows for the same key and analysis group. |
-| `sentences_vector` | `ix_sentences_vector_eligible_group_key` | This expands one exact or similar sentence key into all eligible occurrence `global_id` values in the same analysis group. The partial conditions keep tracer, form-language, non-matcher, unchecked, old-version rows out of the index. The included columns provide the IDs and document information used by the matching response without placing the large sentence text in the index. |
-| `sentences_vector` | `ix_sentences_vector_current_key` | This quickly answers whether a sentence key is still used by any current occurrence. It is used for catalog checks and cleanup even when the occurrence is a tracer or form-language sentence, which is why this smaller index filters only on `is_current`. |
+| `sentence_key_matches` | Primary key on `(analysis_group, sentence_key, match_bucket_number)` | Fetches every bucket for one sentence through the `analysis_group` and `sentence_key` prefix. It also finds one exact bucket for an upsert and prevents duplicate bucket rows. |
+| `sentences_vector` | `ix_sentences_vector_eligible_group_key` | Expands a matching sentence key into its occurrence `global_id` values for the same analysis group. Included document columns can be returned from the index without adding the large sentence content to it. |
+| `sentences_vector` | `ix_sentences_vector_current_key` | Quickly checks whether a sentence key is still used by any current occurrence. This supports catalog cleanup and includes current tracer or form-language occurrences. |
 
-Do not create a JSONB GIN index on `sentence_key_matches` for the initial
-release. Every accepted relationship is stored in both directions, so the
-application reads the target row through the composite primary key instead of
-searching every JSONB object for a reverse key. A GIN index would consume more
-storage and make every JSONB update more expensive. It should be added later
-only if frequent whole-table reverse-key audit queries become a real
-requirement.
+Do not add a JSONB GIN index for the initial release. Matches are saved in both
+directions, so reads use the primary key instead of searching every JSONB
+object. A GIN index would increase storage and make every match update more
+expensive.
 
 ### Acceptance Criteria
 
 ```gherkin
 Given the Flyway migrations are deployed
-When the migration completes
-Then sentence_key_matches exists with the composite primary key and JSONB constraints
+When the migrations complete
+Then sentence_key_matches stores matches using bucket numbers 0 through 31
+And its primary key is analysis_group, sentence_key, and match_bucket_number
+And match_key_count automatically counts the keys in each bucket
 And ix_sentences_vector_eligible_group_key exists
 And ix_sentences_vector_current_key exists
-And the concurrent-index Flyway migration uses executeInTransaction=false
+And the concurrent-index migration uses executeInTransaction=false
 ```
 
 ```gherkin
-Given a sentence key and analysis group are provided
-When Java reads or upserts sentence_key_matches
-Then PostgreSQL uses the composite primary key without scanning the table
-And matching keys can be expanded through ix_sentences_vector_eligible_group_key
-And retrying the same relationship does not create another sentence_key_matches row
+Given sentence key A matches sentence keys B and C
+When Java calls upsert_bidirectional_sentence_key_matches
+Then A stores B and C in the buckets calculated from B and C
+And B and C store A in the bucket calculated from A
+And retrying the same relationship does not create a duplicate key or bucket row
+And a new distance replaces the saved distance in both directions
+And all forward and reverse changes commit or roll back together
 ```
