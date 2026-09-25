@@ -7,9 +7,15 @@ from sqlalchemy.orm import Session
 
 from bucket_demo.database import getSession
 from bucket_demo.database import initializeDatabase
+from bucket_demo.init_service import generateFakeListRequest
 from bucket_demo.init_service import generateFakeRequest
+from bucket_demo.list_python_service import insertListMatchesWithPython
+from bucket_demo.list_sql_function_service import (
+    insertListMatchesWithSqlFunction,
+)
 from bucket_demo.python_service import insertMatchesWithPython
 from bucket_demo.schemas import InitRequest
+from bucket_demo.schemas import ListMatchRequest
 from bucket_demo.schemas import MatchRequest
 from bucket_demo.sql_function_service import insertMatchesWithSqlFunction
 
@@ -46,10 +52,19 @@ def initialize(request: InitRequest, session: Session = Depends(getSession)):
         initializeDatabase()
 
         if request.clearExisting:
-            session.execute(text("TRUNCATE TABLE sentence_key_matches"))
+            session.execute(
+                text(
+                    """
+                    TRUNCATE TABLE
+                        sentence_key_matches,
+                        matches
+                    """
+                )
+            )
             session.commit()
 
         fakeRequest = generateFakeRequest(request)
+        fakeListRequest = generateFakeListRequest(request)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except SQLAlchemyError as error:
@@ -63,10 +78,11 @@ def initialize(request: InitRequest, session: Session = Depends(getSession)):
         "status": "initialized",
         "tableWasCleared": request.clearExisting,
         "message": (
-            "Copy insertRequest into either insert endpoint. "
+            "Copy the matching request into its insert endpoint. "
             "The fake keys have not been inserted yet."
         ),
         "insertRequest": fakeRequest,
+        "listInsertRequest": fakeListRequest,
     }
 
 
@@ -96,6 +112,46 @@ def pythonInsert(
 
     try:
         return insertMatchesWithPython(session, request)
+    except ValueError as error:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except SQLAlchemyError as error:
+        session.rollback()
+        raise databaseFailure(error) from error
+
+
+@router.post(
+    "/list-matches/sql-function",
+    tags=["5. JSONB list PostgreSQL function"],
+)
+def listSqlFunctionInsert(
+    request: ListMatchRequest,
+    session: Session = Depends(getSession),
+):
+    """Save production-style JSONB lists with a PostgreSQL function."""
+
+    try:
+        return insertListMatchesWithSqlFunction(session, request)
+    except ValueError as error:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except SQLAlchemyError as error:
+        session.rollback()
+        raise databaseFailure(error) from error
+
+
+@router.post(
+    "/list-matches/python",
+    tags=["6. JSONB list Python and SQLAlchemy"],
+)
+def listPythonInsert(
+    request: ListMatchRequest,
+    session: Session = Depends(getSession),
+):
+    """Save production-style JSONB lists with Python bind parameters."""
+
+    try:
+        return insertListMatchesWithPython(session, request)
     except ValueError as error:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(error)) from error

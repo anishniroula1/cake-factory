@@ -3,7 +3,9 @@ from types import SimpleNamespace
 import pytest
 
 from bucket_demo.init_service import generateFakeRequest
+from bucket_demo.init_service import generateFakeListRequest
 from bucket_demo.init_service import sentenceKey
+from bucket_demo.list_python_service import buildListPythonOwnerRows
 from bucket_demo.python_service import buildPythonBucketRows
 from bucket_demo.python_service import pythonMatchBucket
 from bucket_demo.python_service import validatePythonRequest
@@ -78,3 +80,44 @@ def testBadDistanceIsRejected():
 
     with pytest.raises(ValueError, match="between 0 and 2"):
         validatePythonRequest(request)
+
+
+def testFakeListRequestUsesProductionJsonShape():
+    fakeRequest = generateFakeListRequest(initRequest(matchCount=3))
+
+    assert fakeRequest["sourceGlobalId"] == 1
+    assert len(fakeRequest["matches"]) == 3
+    assert set(fakeRequest["matches"][0]) == {
+        "global_id",
+        "distance",
+        "tsp_id",
+        "application_id",
+    }
+
+
+def testListPythonRowsContainBothDirections():
+    fakeRequest = generateFakeListRequest(initRequest(matchCount=3))
+    request = matchRequest(fakeRequest)
+    ownerRows = buildListPythonOwnerRows(request)
+
+    assert len(ownerRows) == 4
+
+    sourceRows = []
+    reverseRows = []
+
+    for row in ownerRows:
+        if row["ownerGlobalId"] == request.sourceGlobalId:
+            sourceRows.append(row)
+        else:
+            reverseRows.append(row)
+
+    assert len(sourceRows) == 1
+    assert sourceRows[0]["incomingMatches"] == request.matches
+    assert len(reverseRows) == 3
+
+    for row in reverseRows:
+        assert len(row["incomingMatches"]) == 1
+        assert (
+            row["incomingMatches"][0]["global_id"]
+            == request.sourceGlobalId
+        )

@@ -39,3 +39,38 @@ def generateFakeRequest(request):
         "sourceSentenceKey": sourceKey,
         "matches": matches,
     }
+
+
+def generateFakeListRequest(request):
+    """Generate production-style global IDs and a JSONB match list."""
+
+    if not request.analysisGroup.strip():
+        raise ValueError("analysisGroup is required")
+
+    if request.matchCount < 1 or request.matchCount > 1_000:
+        raise ValueError("matchCount must be between 1 and 1000")
+
+    randomGenerator = random.Random(request.randomSeed)
+    matches = []
+
+    for number in range(request.matchCount):
+        globalId = number + 10
+        matches.append(
+            {
+                "global_id": globalId,
+                "distance": round(
+                    randomGenerator.uniform(0.01, 0.30),
+                    4,
+                ),
+                "tsp_id": 1_000 + globalId,
+                "application_id": f"APP-{globalId}",
+            }
+        )
+
+    return {
+        "analysisGroup": request.analysisGroup,
+        "sourceGlobalId": 1,
+        "sourceTspId": 1_001,
+        "sourceApplicationId": "APP-1",
+        "matches": matches,
+    }

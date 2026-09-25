@@ -19,24 +19,24 @@ SessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 
-SCHEMA_FILE = (
+SCHEMA_DIRECTORY = (
     Path(__file__).resolve().parent.parent
     / "db"
     / "init"
-    / "001_sentence_match_buckets.sql"
 )
 
 
 def initializeDatabase():
     """Create the demo tables and PostgreSQL functions when missing."""
 
-    schemaSql = SCHEMA_FILE.read_text(encoding="utf-8")
     rawConnection = engine.raw_connection()
 
     try:
         with rawConnection.cursor() as cursor:
-            # prepare=False lets psycopg execute the complete SQL script.
-            cursor.execute(schemaSql, prepare=False)
+            # Run every numbered SQL file in order so each POC owns its schema.
+            for schemaFile in sorted(SCHEMA_DIRECTORY.glob("*.sql")):
+                schemaSql = schemaFile.read_text(encoding="utf-8")
+                cursor.execute(schemaSql, prepare=False)
 
         rawConnection.commit()
     except Exception:

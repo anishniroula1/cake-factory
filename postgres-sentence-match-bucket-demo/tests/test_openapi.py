@@ -1,8 +1,8 @@
 from bucket_demo.main import app
 
 
-def testSwaggerOnlyContainsTheFourRequestedCalls():
-    """Keep the demo API small."""
+def testSwaggerContainsTheRequestedCalls():
+    """Keep both bucket and JSONB-list comparisons visible."""
 
     paths = set(app.openapi()["paths"])
 
@@ -11,4 +11,6 @@ def testSwaggerOnlyContainsTheFourRequestedCalls():
         "/init",
         "/matches/sql-function",
         "/matches/python",
+        "/list-matches/sql-function",
+        "/list-matches/python",
     }

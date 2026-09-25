@@ -46,3 +46,36 @@ class MatchRequest(BaseModel):
             }
         }
     )
+
+
+class ListMatchRequest(BaseModel):
+    analysisGroup: str = "Asylee"
+    sourceGlobalId: int
+    sourceTspId: int
+    sourceApplicationId: str
+    matches: list
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "analysisGroup": "Asylee",
+                "sourceGlobalId": 1,
+                "sourceTspId": 1001,
+                "sourceApplicationId": "APP-1",
+                "matches": [
+                    {
+                        "global_id": 10,
+                        "distance": 0.10,
+                        "tsp_id": 1010,
+                        "application_id": "APP-10",
+                    },
+                    {
+                        "global_id": 40,
+                        "distance": 0.20,
+                        "tsp_id": 1040,
+                        "application_id": "APP-40",
+                    },
+                ],
+            }
+        }
+    )

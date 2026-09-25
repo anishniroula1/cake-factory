@@ -1,11 +1,11 @@
-# PostgreSQL Sentence Match Bucket Demo
+# PostgreSQL Sentence Match POC
 
-This small standalone application compares two ways to save bidirectional
-sentence-key matches:
+This standalone application compares two storage designs and two insert methods:
 
-1. A PostgreSQL function owns the bucket calculation and inserts.
-2. Python calculates the buckets and SQLAlchemy performs a bulk upsert with
-   bind parameters.
+1. Bucketed JSONB objects keyed by SHA-256 sentence key.
+2. Production-style JSONB lists keyed by numeric global ID.
+3. PostgreSQL functions that own the complete bidirectional write.
+4. Python and SQLAlchemy `bindparam` writes.
 
 There is no fake-sentences table. The fake generator only returns SHA-256 keys
 and distances that can be copied into either insert endpoint.
@@ -40,8 +40,9 @@ Call `POST /init`:
 }
 ```
 
-This creates the table and functions, optionally clears existing bucket rows,
-and returns an `insertRequest`. It does not insert the fake matches.
+This creates both tables and functions, optionally clears existing rows, and
+returns two payloads. `insertRequest` is for the bucket endpoints.
+`listInsertRequest` is for the production-style JSONB-list endpoints.
 
 ### 3. Test the PostgreSQL function
 
@@ -109,17 +110,44 @@ cases:
 Both insert endpoints return `sourceMatches` and `reverseMatches`, so the full
 bidirectional result is visible in the same Swagger response.
 
+## Production-style JSONB list comparison
+
+The second table copies the existing shape:
+
+```text
+global_id + analysis_group + tsp_id + matches JSONB list
+```
+
+Each list item contains `global_id`, `distance`, `tsp_id`, and `application_id`.
+Copy `listInsertRequest` from `/init` into one of these endpoints:
+
+- `POST /list-matches/sql-function`
+- `POST /list-matches/python`
+
+The SQL function filters duplicate global IDs inside PostgreSQL. The Python
+version groups the forward and reverse relationships into one row per owner,
+then uses one bulk `INSERT ... ON CONFLICT DO UPDATE`. A new global ID is
+appended. An existing global ID is replaced, so its latest distance and other
+values are saved in both directions. Neither endpoint reads the full saved list
+into Python before saving.
+
 ## Files
 
 - `db/init/001_sentence_match_buckets.sql` contains the PostgreSQL functions and
   bucket table.
+- `db/init/002_sentence_match_lists.sql` contains the production-style JSONB
+  list table and function.
 - `bucket_demo/sql_function_service.py` contains the complete PostgreSQL-function
   endpoint logic.
 - `bucket_demo/python_service.py` contains the complete Python and SQLAlchemy
   endpoint logic.
 - The two service files do not call shared match helpers. Each flow owns its
   validation, insert, forward read, and reverse read.
-- `bucket_demo/routes.py` contains the four API calls.
+- `bucket_demo/list_sql_function_service.py` owns the complete JSONB-list SQL
+  function endpoint.
+- `bucket_demo/list_python_service.py` owns the complete JSONB-list Python
+  endpoint.
+- `bucket_demo/routes.py` contains the six API calls.
 - `generate_project.py` recreates this complete standalone folder.
 
 ## Commands

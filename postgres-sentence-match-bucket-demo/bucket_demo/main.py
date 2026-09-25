@@ -4,11 +4,11 @@ from bucket_demo.routes import router
 
 
 app = FastAPI(
-    title="PostgreSQL Sentence Match Bucket Demo",
+    title="PostgreSQL Sentence Match POC",
     version="1.0.0",
     description=(
-        "Generate a fake sentence-key request and compare bidirectional "
-        "bucket inserts through a PostgreSQL function or Python SQLAlchemy."
+        "Compare bidirectional JSONB bucket and JSONB list inserts through "
+        "PostgreSQL functions or Python SQLAlchemy."
     ),
 )
 
