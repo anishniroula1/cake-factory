@@ -152,8 +152,9 @@ def readListSqlFunctionReverse(session, request):
     for row in rows:
         reverseMatches.append(
             {
-                "ownerGlobalId": int(row["global_id"]),
-                "ownerTspId": int(row["tsp_id"]),
+                "analysisGroup": request.analysisGroup,
+                "globalId": int(row["global_id"]),
+                "tspId": int(row["tsp_id"]),
                 "savedMatch": row["match_item"],
             }
         )

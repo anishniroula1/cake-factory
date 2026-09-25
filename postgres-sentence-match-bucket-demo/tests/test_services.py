@@ -106,7 +106,7 @@ def testListPythonRowsContainBothDirections():
     reverseRows = []
 
     for row in ownerRows:
-        if row["ownerGlobalId"] == request.sourceGlobalId:
+        if row["globalId"] == request.sourceGlobalId:
             sourceRows.append(row)
         else:
             reverseRows.append(row)

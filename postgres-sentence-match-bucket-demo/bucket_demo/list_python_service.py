@@ -107,9 +107,9 @@ def buildListPythonOwnerRows(request):
 
     ownerRows = {
         (request.analysisGroup, request.sourceGlobalId): {
-            "ownerAnalysisGroup": request.analysisGroup,
-            "ownerGlobalId": request.sourceGlobalId,
-            "ownerTspId": request.sourceTspId,
+            "analysisGroup": request.analysisGroup,
+            "globalId": request.sourceGlobalId,
+            "tspId": request.sourceTspId,
             "incomingMatches": [],
         }
     }
@@ -124,9 +124,9 @@ def buildListPythonOwnerRows(request):
             match["global_id"],
         )
         ownerRows[identity] = {
-            "ownerAnalysisGroup": request.analysisGroup,
-            "ownerGlobalId": match["global_id"],
-            "ownerTspId": match["tsp_id"],
+            "analysisGroup": request.analysisGroup,
+            "globalId": match["global_id"],
+            "tspId": match["tsp_id"],
             "incomingMatches": [
                 {
                     "global_id": request.sourceGlobalId,
@@ -144,9 +144,9 @@ def buildListPythonUpsertStatement():
     """Build one upsert that creates owners and merges their match lists."""
 
     baseInsert = insert(listPythonMatches).values(
-        analysis_group=bindparam("ownerAnalysisGroup"),
-        global_id=bindparam("ownerGlobalId"),
-        tsp_id=bindparam("ownerTspId"),
+        analysis_group=bindparam("analysisGroup"),
+        global_id=bindparam("globalId"),
+        tsp_id=bindparam("tspId"),
         matches=bindparam("incomingMatches", type_=JSONB),
     )
 
@@ -287,8 +287,9 @@ def readListPythonReverse(session, request):
     for row in rows:
         reverseMatches.append(
             {
-                "ownerGlobalId": int(row["global_id"]),
-                "ownerTspId": int(row["tsp_id"]),
+                "analysisGroup": request.analysisGroup,
+                "globalId": int(row["global_id"]),
+                "tspId": int(row["tsp_id"]),
                 "savedMatch": row["match_item"],
             }
         )
