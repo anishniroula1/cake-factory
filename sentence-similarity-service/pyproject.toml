@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentence-similarity-worker"
+version = "1.0.0"
+description = "SQS worker for tracer classification and sentence-key matching"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "boto3>=1.40,<2",
+  "opensearch-py>=2.8,<4",
+  "psycopg[binary]>=3.2,<4",
+  "python-dotenv>=1.0,<2",
+  "sqlalchemy>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.14,<1",
+]
+
+[tool.setuptools.packages.find]
+include = ["sentence_similarity*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--cov=sentence_similarity --cov-report=term-missing --cov-fail-under=95"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"

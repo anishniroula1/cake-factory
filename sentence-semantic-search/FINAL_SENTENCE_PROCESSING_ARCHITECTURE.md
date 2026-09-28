@@ -19,11 +19,10 @@ it searches the much larger sentence catalog. If the sentence is a
 non-matcher, the service saves no relationships and moves to the next
 sentence. This avoids an unnecessary main-catalog search.
 
-For now, accepted relationships are written to both the existing `matches`
-table and the new bucketed `sentence_key_matches` table. One sentence key can
-use up to 32 smaller JSONB rows instead of one JSONB row that keeps growing.
-API Transform continues reading `matches` until historical processing and
-validation are complete.
+Accepted relationships are written only to the bucketed
+`sentence_key_matches` table. The old `matches` table is not part of the new
+OpenSearch flow. One sentence key can use up to 32 smaller JSONB rows instead
+of one JSONB row that keeps growing.
 
 ## Simple flow
 
@@ -45,7 +44,6 @@ Sentence Similarity receives tsp_id
     -> Save no relationships and take the next sentence
     -> No non-matcher found: search the main sentence catalog
     -> Remove ineligible and same-application targets
-    -> Update matches in both directions
     -> Update the required sentence_key_matches buckets in both directions
     -> Commit and take the next sentence
 ```
@@ -563,15 +561,8 @@ forward or reverse relationship is saved.
 
 ### Save both directions
 
-After all filters pass, Sentence Similarity updates both tables in one
-transaction for the source sentence.
-
-If global ID 1 matches global ID 10:
-
-```text
-matches row 1 adds global ID 10
-matches row 10 adds global ID 1
-```
+After all filters pass, Sentence Similarity updates the required bucket rows
+for the source sentence.
 
 If `KEY-A` matches `KEY-B`:
 
@@ -585,17 +576,7 @@ inside the same buckets instead of adding a duplicate. The service locks the
 affected bucket rows in a stable order, commits both directions together, and
 then takes the next sentence.
 
-## 4. Existing and new PostgreSQL match tables
-
-### Existing `matches`
-
-The existing table stores occurrence-level relationships. One source
-`global_id` has a JSONB list containing target `global_id`, `application_id`,
-`tsp_id`, and distance.
-
-API Transform continues reading this table during historical processing.
-
-### New `sentence_key_matches`
+## 4. PostgreSQL `sentence_key_matches`
 
 The new table stores one sentence key across up to 32 JSONB bucket rows. The
 matching key decides the bucket, so the same relationship always goes to the
@@ -729,22 +710,20 @@ directions in one transaction. The incoming distance replaces the old distance
 when the relationship already exists.
 
 Exact occurrences use the same sentence key, so a key is not related to itself
-in this table. Exact global-ID relationships are still saved in `matches`.
+in this table. Exact occurrence counts are found by expanding that sentence key
+through `sentences_vector`.
 
-## 5. Historical processing and switching reads
+## 5. Live and historical processing
 
-Sentence Similarity dual-writes every accepted relationship to the old and new
-tables. New and historical documents use the same one-sentence-at-a-time
-flow, including the non-matcher catalog check.
+New and historical documents use the same sentence flow, including the
+non-matcher catalog check and bucket-table write.
 
 During backfill:
 
-- API Transform reads only `matches`.
-- The required `sentence_key_matches` bucket rows are populated, but the table
-  is not a production read source.
+- The required `sentence_key_matches` bucket rows are populated.
 - Every historical `tsp_id` must complete successfully.
 
-Before changing API Transform, verify:
+Verify:
 
 - Every A-to-B relationship has B-to-A.
 - Both directions have the same distance.
@@ -754,12 +733,8 @@ Before changing API Transform, verify:
 - Every matching key is stored in its deterministic bucket.
 - Summing `match_key_count` across a key's buckets equals its unique match
   count.
-- Expanding new-table keys returns the same eligible global IDs as the old
-  table for test documents.
-
-API Transform can switch to `sentence_key_matches` only after historical
-processing and validation pass. Removing `matches` is a later, separate
-decision.
+- Expanding saved keys through `sentences_vector` returns the expected eligible
+  global IDs for test documents.
 
 ## 6. Final acceptance criteria
 
@@ -779,12 +754,11 @@ decision.
    sentence.
 9. The main catalog is searched only for an allowed source sentence.
 10. Ineligible targets and same-application targets are never saved.
-11. Accepted relationships are bidirectional in both PostgreSQL match tables.
+11. Accepted relationships are bidirectional in `sentence_key_matches`.
 12. `sentence_key_matches` uses 32 deterministic JSONB buckets and creates only
     bucket rows that contain matches.
 13. Retrying the same sentence updates the saved distance without creating a
     duplicate relationship or bucket row.
-14. Existing production reads remain on `matches` until backfill and
-    validation are complete.
-15. Every occurrence classification records whether the non-matcher check has
-    actually completed; unchecked rows are never treated as eligible.
+14. Live and historical messages use the same Sentence Similarity flow.
+15. Every source sentence is checked against the non-matcher catalog before it
+    is allowed to create relationships.

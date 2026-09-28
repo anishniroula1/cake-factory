@@ -1,0 +1,10 @@
+.env
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+*.egg-info
+.coverage
+htmlcov
+tests
+doc2vec_service_project.py
