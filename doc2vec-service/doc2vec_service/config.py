@@ -37,6 +37,7 @@ class Config:
     opensearchBatchSize: int
     workerBatchSize: int
     workerCount: int
+    historicalWorkerCount: int
     retrySeconds: int
     vectorDimension: int
     titanEmbeddingType: int
@@ -77,6 +78,9 @@ class Config:
             opensearchBatchSize=readInteger("OPENSEARCH_BATCH_SIZE", 1_000),
             workerBatchSize=readInteger("WORKER_BATCH_SIZE", 30),
             workerCount=readInteger("WORKER_COUNT", 16),
+            historicalWorkerCount=readInteger(
+                "HISTORICAL_WORKER_COUNT", 100
+            ),
             retrySeconds=readInteger("RETRY_SECONDS", 5),
             vectorDimension=readInteger("VECTOR_DIMENSION", 512),
             titanEmbeddingType=readInteger("TITAN_EMBEDDING_TYPE", 2),
@@ -101,6 +105,10 @@ class Config:
             raise ValueError("DOC2VEC_QUEUE_URL is required")
         if self.workerCount > 16:
             raise ValueError("WORKER_COUNT cannot be greater than 16")
+        if self.historicalWorkerCount > 100:
+            raise ValueError(
+                "HISTORICAL_WORKER_COUNT cannot be greater than 100"
+            )
         if self.vectorDimension != 512:
             raise ValueError("VECTOR_DIMENSION must be 512 for Titan embeddings")
         if not 1 <= self.sqsWaitSeconds <= 20:

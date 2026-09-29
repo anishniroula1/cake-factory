@@ -49,6 +49,7 @@ def test_main_builds_handlers_runs_listener_and_closes(monkeypatch):
     monkeypatch.setattr(main, "OpenSearchHelper", ReturnValue(object()))
     monkeypatch.setattr(main, "TrainHandler", ReturnValue(object()))
     monkeypatch.setattr(main, "TracerHandler", ReturnValue(object()))
+    monkeypatch.setattr(main, "HistoricalHandler", ReturnValue(object()))
     monkeypatch.setattr(main, "LiveHandler", ReturnValue(object()))
     monkeypatch.setattr(main, "SqsListener", ReturnValue(listener))
 

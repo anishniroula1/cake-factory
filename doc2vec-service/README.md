@@ -16,6 +16,7 @@ The worker intentionally has one short path:
 3. The listener sends the message to exactly one handler:
    - `handlers/tracer_handler.py` owns the complete TRACER flow.
    - `handlers/train_handler.py` owns the complete TRAIN flow.
+   - `handlers/historical_handler.py` owns the complete HISTORICAL flow.
    - `handlers/live_handler.py` owns the complete LIVE flow.
 4. After the handler finishes, the listener deletes the SQS message.
 
@@ -56,6 +57,23 @@ The service reads all `tracer_sentence` rows in pages of 1,000, decodes the
 saved little-endian 512-float Titan `BYTEA`, and bulk writes it to
 `tracer_form_language_catalog`. Every document uses the `analysis_group` from
 its own database row. No Bedrock call is made for this flow.
+
+### Historical document
+
+Input:
+
+```json
+{"reason": "HISTORICAL", "tsp_id": 1040}
+```
+
+Historical sentences already exist in `sentences_vector`, so this flow does not
+split the document again. It counts the current rows, reads up to 3,000 at a
+time, creates and saves each `sentence_key`, and gives 30-sentence jobs to as
+many as 100 historical workers. A missing catalog key reuses its Titan type-2
+embedding when one exists; otherwise the Bedrock pipeline creates the vector.
+Every row is also written to the occurrence index. After all rows succeed, the
+handler sends the `tsp_id` and `HISTORICAL` reason to Sentence Similarity. The
+listener then deletes the source SQS message.
 
 ### Live document
 

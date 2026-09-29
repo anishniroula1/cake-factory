@@ -22,6 +22,7 @@ def listener(serviceConfig, sqs=None):
         Handler(),
         Handler(),
         Handler(),
+        Handler(),
     )
 
 
@@ -36,6 +37,9 @@ def test_message_parser_accepts_all_supported_names(serviceConfig):
         "tspId": None,
     }
     assert worker._parseMessage('{"tspId":11}')["reason"] == "LIVE"
+    assert worker._parseMessage(
+        '{"reason":"HISTORICAL","tsp_id":12}'
+    ) == {"reason": "HISTORICAL", "tspId": 12}
 
 
 def test_message_parser_rejects_bad_payloads(serviceConfig):
@@ -58,9 +62,11 @@ def test_dispatch_calls_the_handler_for_each_reason(serviceConfig):
     worker = listener(serviceConfig)
     worker._dispatch({"reason": "TRAIN", "tspId": 1})
     worker._dispatch({"reason": "TRACER", "tspId": None})
+    worker._dispatch({"reason": "HISTORICAL", "tspId": 3})
     worker._dispatch({"reason": "LIVE", "tspId": 2})
     assert worker.trainHandler.values == [1]
     assert worker.tracerHandler.values == [None]
+    assert worker.historicalHandler.values == [3]
     assert worker.liveHandler.values == [2]
 
 

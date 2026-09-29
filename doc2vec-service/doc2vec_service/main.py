@@ -4,6 +4,7 @@ import boto3
 
 from doc2vec_service.config import Config
 from doc2vec_service.database import Database
+from doc2vec_service.handlers.historical_handler import HistoricalHandler
 from doc2vec_service.handlers.live_handler import LiveHandler
 from doc2vec_service.handlers.tracer_handler import TracerHandler
 from doc2vec_service.handlers.train_handler import TrainHandler
@@ -29,6 +30,12 @@ def run():
 
     trainHandler = TrainHandler(config, database.sessionFactory, opensearch)
     tracerHandler = TracerHandler(config, database.sessionFactory, opensearch)
+    historicalHandler = HistoricalHandler(
+        config,
+        database.sessionFactory,
+        opensearch,
+        sqsClient,
+    )
     liveHandler = LiveHandler(
         config,
         database.sessionFactory,
@@ -40,6 +47,7 @@ def run():
         sqsClient,
         trainHandler,
         tracerHandler,
+        historicalHandler,
         liveHandler,
     )
 

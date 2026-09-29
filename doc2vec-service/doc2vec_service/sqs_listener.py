@@ -16,14 +16,16 @@ class SqsListener:
         sqsClient,
         trainHandler,
         tracerHandler,
+        historicalHandler,
         liveHandler,
     ):
-        """Keep the queue and the three easy-to-follow reason handlers."""
+        """Keep the queue and the four easy-to-follow reason handlers."""
 
         self.config = config
         self.sqsClient = sqsClient
         self.trainHandler = trainHandler
         self.tracerHandler = tracerHandler
+        self.historicalHandler = historicalHandler
         self.liveHandler = liveHandler
 
     def run(self):
@@ -102,4 +104,6 @@ class SqsListener:
             return self.tracerHandler.process()
         if message["reason"] == "TRAIN":
             return self.trainHandler.process(message["tspId"])
+        if message["reason"] == "HISTORICAL":
+            return self.historicalHandler.process(message["tspId"])
         return self.liveHandler.process(message["tspId"])

@@ -17,11 +17,14 @@ def test_config_reads_defaults_and_validates(monkeypatch):
     baseEnvironment(monkeypatch)
     config = Config.fromEnvironment()
     assert config.workerCount == 16
+    assert config.historicalWorkerCount == 100
     assert config.databaseBatchSize == 1_000
     assert config.vectorDimension == 512
 
     with pytest.raises(ValueError):
         replace(config, workerCount=17).validate()
+    with pytest.raises(ValueError):
+        replace(config, historicalWorkerCount=101).validate()
     with pytest.raises(ValueError):
         replace(config, vectorDimension=1024).validate()
     with pytest.raises(ValueError):

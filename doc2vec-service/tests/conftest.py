@@ -11,6 +11,7 @@ def serviceConfig():
         opensearchBatchSize=1_000,
         workerBatchSize=30,
         workerCount=2,
+        historicalWorkerCount=2,
         retrySeconds=1,
         vectorDimension=2,
         titanEmbeddingType=2,
