@@ -143,5 +143,12 @@ worker without Docker. There is no HTTP port, health endpoint, or Swagger page.
 
 ## Portable copy
 
-Run `make generate`. It creates `doc2vec_service_project.py`. Copy that one file
-to another machine and run it to rebuild this complete folder.
+`generate_project.py` contains an encoded copy of this complete project. Copy
+that one file to another machine and run:
+
+```bash
+python3 generate_project.py /path/to/parent-folder
+```
+
+It creates `/path/to/parent-folder/doc2vec-service`, including a safe `.env`
+copied from `.env.example`. Fill in the real values before starting the worker.
