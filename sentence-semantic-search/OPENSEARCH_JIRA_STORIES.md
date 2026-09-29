@@ -12,9 +12,7 @@ ENABLE_OPENSEARCH_SENTENCE_FLOW
 Use the same environment-variable name for DOC2Vec, Similarity Service, and
 the State Machine configuration.
 
-## Doc2Vec | Add OpenSearch flow toggle
-
-Story number: 1
+## 1. Doc2Vec | Add OpenSearch flow toggle
 
 ### Value
 
@@ -35,9 +33,7 @@ When DOC2Vec processes a document
 Then it continues using the existing flow without any changes
 ```
 
-## Similarity Service | Add OpenSearch flow toggle
-
-Story number: 2
+## 2. Similarity Service | Add OpenSearch flow toggle
 
 ### Value
 
@@ -58,9 +54,7 @@ When Similarity Service processes a document
 Then it continues using the existing flow without any changes
 ```
 
-## State Machine | Route OpenSearch document statuses
-
-Story number: 3
+## 3. State Machine | Route OpenSearch document statuses
 
 ### Value
 
@@ -82,9 +76,7 @@ When the document is processed
 Then the existing document status flow remains unchanged
 ```
 
-## DevOps | Provision OpenSearch Bedrock model and pipeline
-
-Story number: 4
+## 4. DevOps | Provision OpenSearch Bedrock model and pipeline
 
 ### Value
 
@@ -120,9 +112,7 @@ Harness uses these outputs to populate the environment file for the sentence
 services. Connector credentials and other secrets must not appear in plain
 Terraform outputs.
 
-## DevOps | Create initial OpenSearch sentence indexes and aliases
-
-Story number: 5
+## 5. DevOps | Create initial OpenSearch sentence indexes and aliases
 
 ### Value
 
@@ -378,9 +368,7 @@ POST /_aliases
 The production `sentence_semantic_catalog-ivf-sq16-v1` index and its alias are
 created in a separate story after the IVF-SQ16 model state becomes `created`.
 
-## DevOps | Deploy Doc2Vec Backfill
-
-Story number: 6
+## 6. DevOps | Deploy Doc2Vec Backfill
 
 ### Value
 
@@ -406,9 +394,7 @@ Then the work is processed by Doc2Vec Backfill
 And it does not use the existing Doc2Vec Service consumer
 ```
 
-## DevOps | Create Doc2Vec Backfill queue and DLQ
-
-Story number: 7
+## 7. DevOps | Create Doc2Vec Backfill queue and DLQ
 
 ### Value
 
@@ -438,9 +424,7 @@ DOC2VEC_BACKFILL_DLQ_ARN
 And Harness adds DOC2VEC_BACKFILL_QUEUE_URL to the Doc2Vec Backfill environment variables
 ```
 
-## DevOps | Allow Doc Orchestration to send Doc2Vec Backfill messages
-
-Story number: 8
+## 8. DevOps | Allow Doc Orchestration to send Doc2Vec Backfill messages
 
 ### Value
 
@@ -461,9 +445,7 @@ When the message is published
 Then the message is available in the Doc2Vec Backfill queue
 ```
 
-## Doc Orchestration Lambda | Route Doc2Vec Backfill files
-
-Story number: 9
+## 9. Doc Orchestration Lambda | Route Doc2Vec Backfill files
 
 ### Value
 
@@ -504,9 +486,7 @@ Examples:
   | HISTORICAL  | tsp_id               |
 ```
 
-## Doc2Vec Backfill | Load tracer data into OpenSearch and reuse saved vectors
-
-Story number: 10
+## 10. Doc2Vec Backfill | Load tracer data into OpenSearch and reuse saved vectors
 
 ### Value
 
@@ -523,7 +503,6 @@ field out so the Bedrock embedding pipeline creates it.
 Harness must populate these environment variables for Doc2Vec Backfill:
 
 ```text
-AWS_REGION=us-east-1
 IAM_ACCESS_ROLE=<OpenSearch role ARN>
 OPENSEARCH_HOST=<OpenSearch domain host>
 OPENSEARCH_PORT=443
@@ -598,69 +577,37 @@ Then the existing OpenSearch document is updated
 And a duplicate document is not created
 ```
 
-## Doc2Vec Backfill | Load training data by tsp_id and reuse saved vectors
-
-Story number: 11
+## 11. Doc2Vec Backfill | Load training data by tsp_id and reuse saved Titan embeddings
 
 ### Value
 
-Load representative sentence vectors into the OpenSearch training index so the
-Faiss IVF-SQ16 model can be trained later.
-
-Use the AWS-signed OpenSearch client and environment variables defined in Story
-10.
-
-During bulk indexing, include `sentenceContentVector` when the
-`sentences_vector` row already has a saved 512-dimension vector. When it does
-not, leave the vector field out so the Bedrock embedding pipeline creates it.
-
-The training path generates `sentenceKey` from `sentenceContent` in memory. It
-uses the generated key to remove exact duplicates and as the stable OpenSearch
-document `_id`. It does not save the generated key back to the
-`sentences_vector` table during training.
-
-### Processing rules
-
-1. Split the incoming `tsp_ids` into batches and send each batch to a worker.
-2. Each worker creates its own SQLAlchemy session and loads all sentences for
-   its `tsp_id` batch with one database query.
-3. Generate sentence keys in memory and keep one record for each unique key.
-4. Reuse saved vectors and send records without vectors through the Bedrock
-   embedding pipeline.
-5. Bulk-index the records. Vectors created by the Bedrock pipeline remain in
-   OpenSearch and are not saved back to `sentences_vector`.
-6. Retry the complete worker function up to 10 times for a temporary failure,
-   waiting 5 seconds between attempts.
-7. Delete the SQS message only after every worker batch succeeds.
-
-The worker and retry functions must be reusable for tracer processing and
-later OpenSearch backfills.
+Load representative sentence vectors into the OpenSearch training index. Reuse
+the 512-dimension Titan vectors already saved in the `embeddings` table and
+generate only the vectors that are missing.
 
 ### Acceptance Criteria
 
 ```gherkin
-Given Doc2Vec Backfill receives an SQS message with reason TRAIN_MODEL
-And the message contains tsp_ids
+Given Doc2Vec Backfill receives a sqs message with reason TRAIN_MODEL with a tsp_id
 When the message is processed
-Then Doc2Vec Backfill uses the tsp_ids to load the matching global_ids from the sentences_vector table
-And generates a sentence key in memory without saving it to sentences_vector
-And uses the saved embedding when a global_id already has a 512-dimension vector
-And allows the Bedrock embedding pipeline to create the vector when it is missing
-And indexes each unique sentence in the sentence_semantic_training alias
-And deletes the source SQS message only after every worker batch succeeds
+Then sentences_vector and embeddings are loaded for the requested tsp_id
+And sentence keys are generated in memory and used to remove duplicate training sentences
+And the generated keys are not saved to sentences_vector
+And embeddings are loaded by global_id where embedding_type equals 2
+And an existing 512-dimension embedding is sent to OpenSearch
+And the Bedrock pipeline generates a vector only when that embedding is missing
+And every unique sentence is indexed in sentence_semantic_training
 ```
 
 ```gherkin
-Given a training worker has a temporary database, OpenSearch, Lasso, or Bedrock failure
+Given a database, OpenSearch, Lasso, or Bedrock call fails temporarily
 When the worker retries the batch
-Then it reruns the same reusable processor function
-And stable sentence-key document IDs prevent duplicate training documents
-And the SQS message remains available until every batch succeeds
+Then it reruns the same batch without creating duplicate training documents
+And it waits 5 seconds between attempts
+And the source SQS message is deleted only after every batch succeeds
 ```
 
-## DevOps | Train the production IVF-SQ16 model from sentence vectors
-
-Story number: 12
+## 12. DevOps | Train the production IVF-SQ16 model from sentence vectors
 
 ### Value
 
@@ -739,9 +686,7 @@ Check the model status with:
 GET /_plugins/_knn/models/sentence-ivf-sq16-512-nlist16384-v1?filter_path=model_id,state,error,dimension,space_type,method
 ```
 
-## DevOps | Create the production sentence catalog after IVF training
-
-Story number: 13
+## 13. DevOps | Create the production sentence catalog after IVF training
 
 ### Value
 
@@ -814,9 +759,7 @@ When the catalog deployment runs
 Then the deployment stops without creating the sentence catalog
 ```
 
-## Doc2Vec Backfill | Export historical tsp_id values into chunked CSV files
-
-Story number: 14
+## 14. Doc2Vec Backfill | Export historical tsp_id values into chunked CSV files
 
 ### Value
 
@@ -850,139 +793,110 @@ And Doc Orchestration processes the file using the DOC2VEC_BACKFILL rule
 And each tsp_id is routed to the Doc2Vec Backfill SQS queue
 ```
 
-## Doc2Vec Backfill | Process a historical Sentences
-
-Story number: 15
+## 15. Doc2Vec Backfill | Process historical sentences without splitting them again
 
 ### Value
 
-Process every historical sentence for one `tsp_id` from the `sentences_vector`
-table.
+Process every sentence already stored for one historical `tsp_id`. Generate
+and save sentence keys, reuse existing Titan embeddings, and populate both
+OpenSearch indexes without splitting or inserting the sentences again.
 
 Harness must provide `SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL` to Doc2Vec
 Backfill.
 
-### Processing rules
-
-1. Receive a FIFO SQS message containing `reason=HISTORICAL` and one `tsp_id`.
-2. Load rows for that `tsp_id` from `sentences_vector` in database batches.
-3. Generate `sentenceKey` for every sentence and save it to the corresponding
-   `sentences_vector` row.
-4. The coordinator owns one SQLAlchemy session. It flushes each database batch
-   but does not commit while workers are still running.
-5. Workers receive plain record data. A SQLAlchemy session is never shared
-   across worker threads.
-6. Each worker checks the sentence catalog using `sentenceKey` and creates a
-   catalog document only when that key does not already exist.
-7. Each worker bulk-writes the missing sentence catalog documents by
-   `sentenceKey` and every sentence occurrence document by `globalId`.
-8. Existing vectors are reused. Records without vectors use the Bedrock
-   embedding pipeline.
-9. A failed worker reruns the complete batch function. Stable OpenSearch IDs
-   make the retry safe and prevent duplicate documents.
-10. Each worker makes up to 10 immediate attempts and waits 5 seconds after a
-   temporary failure. If the attempts are exhausted, the database transaction
-   is rolled back and the source SQS message is not deleted, allowing SQS to
-   deliver it again under the queue redrive policy.
-11. Commit the database transaction only after all sentences for the `tsp_id`
-    exist in both OpenSearch indexes.
-12. After the commit succeeds, send the `tsp_id` to
-    `SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL`.
-13. Delete the SQS message that Doc2Vec Backfill received.
-
 ### Acceptance Criteria
 
 ```gherkin
-Given Doc2Vec Backfill receives a message with reason HISTORICAL and a tsp_id
+Given Doc2Vec Backfill receives an SQS message with reason HISTORICAL and a tsp_id
 When the tsp_id is processed
-Then its sentences are loaded from sentences_vector in batches
-And sentence keys are generated, saved, and flushed for each batch
-And the sentence catalog is checked using each sentence key
-And only missing sentence keys are added to the sentence catalog
-And multiple workers write the occurrence and sentence catalog documents
-And failed worker batches are safely retried
+Then the total sentence count is read from sentences_vector for that tsp_id
+And its existing sentence rows are loaded in batches of 30
+And the original document text is not loaded or split again
+And duplicate sentence rows are not inserted
+And every row keeps its existing global_id
+And sentenceKey is generated for every row
+And sentences_vector is updated with sentenceKey using global_id
 ```
 
 ```gherkin
-Given every sentence for the tsp_id exists in both OpenSearch indexes
-When processing completes
-Then the sentences_vector transaction is committed once
-And the tsp_id is sent to SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL
-And the SQS message received by Doc2Vec Backfill is deleted
+Given a batch has generated its sentence keys
+When the unique sentenceKey list is checked against sentence_semantic_catalog
+Then keys that already exist are not inserted again
+And missing keys are checked against embeddings using global_id and embedding_type 2
+And a valid existing 512-dimension embedding is included in its catalog document
+And records without a saved embedding are sent without a vector so the OpenSearch Bedrock pipeline creates it
+And only missing unique sentence keys are bulk-inserted into sentence_semantic_catalog
+And every sentence is bulk-inserted into sentence_occurrences
+And sentenceKey is the stable catalog document ID
+And globalId is the stable occurrence document ID
 ```
 
-## Doc2Vec | Add incoming document to OpenSearch sentence occurrence and catalog index
+```gherkin
+Given the tsp_id has historical sentences to process
+When Doc2Vec Backfill creates the worker pool
+Then it starts no more than 100 workers
+And each worker processes one batch of 30 sentences
+And one processing wave handles at most 3000 sentences
+And another wave is started when more than 3000 sentences remain
+And processing continues until the original sentence count is complete
+```
 
-Story number: 16
+```gherkin
+Given a database, OpenSearch, Lasso, or Bedrock operation fails temporarily
+When the worker retries the failed batch
+Then the complete batch function is run again
+And it retries up to 10 times with a 5-second wait between attempts
+And stable sentenceKey and globalId values prevent duplicate OpenSearch documents
+And the received SQS message is not deleted while any batch remains incomplete
+```
+
+```gherkin
+Given every source globalId has an occurrence document
+And every unique sentenceKey has a catalog document and vector
+When the processed count matches the original sentence count
+Then a message containing the tsp_id is sent to SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL
+And the received Doc2Vec Backfill SQS message is deleted only after the new message is sent successfully
+```
+
+## 16. Doc2Vec | Add incoming document to the OpenSearch occurrence and catalog indexes
 
 ### Value
 
-Process incoming real-time sentences in small parallel batches and add them to
-`sentences_vector`, the sentence occurrence index, and the sentence catalog.
-Retry temporary failures without losing sentences or creating duplicate
-records.
-
-The existing Doc2Vec logic already receives the regular SQS message, loads the
-document text using `tsp_id`, and splits the text into sentences. This story
-starts after those steps.
-
-### Processing rules
-
-1. Split the generated sentences into batches of 10.
-2. Send each batch to the configured worker pool. A worker processes one batch
-   and then takes another available batch.
-3. Every worker creates its own SQLAlchemy session. Sessions are never shared
-   between workers.
-4. For each sentence, generate `sentenceKey`, insert or safely reuse its
-   `sentences_vector` row, and flush to receive `globalId`.
-5. Check the sentence catalog using the batch's sentence keys.
-6. Bulk-index only the missing catalog documents and let the Bedrock pipeline
-   create their vectors.
-7. Bulk-index every occurrence document using `globalId` as its stable
-   OpenSearch `_id`.
-8. Commit the worker's database batch only after its catalog and occurrence
-   writes succeed. The worker can then process another batch.
-9. If PostgreSQL, OpenSearch, Lasso, or Bedrock has a temporary failure, roll
-   back that worker's database session and rerun the complete batch function.
-10. Retry each batch up to 10 times and wait 5 seconds between attempts. A
-    Lasso throttling response also activates the shared cooldown so workers do
-    not immediately send more embedding requests.
-11. Retrying a batch must reuse the same database sentence rows, sentence keys,
-    catalog IDs, and occurrence IDs instead of creating duplicates.
-12. If a batch still fails after 10 attempts, do not send the State Machine
-    message and do not delete the regular Doc2Vec SQS message. SQS can deliver
-    the document again according to its redrive policy.
-13. After every sentence batch succeeds, send the existing message to the
-    State Machine and then delete the regular Doc2Vec SQS message using the
-    existing completion flow.
+Use the existing live DOC2Vec flow to split incoming text, save sentence keys,
+reuse any saved Titan embeddings, and index the new sentence occurrences.
 
 ### Acceptance Criteria
 
 ```gherkin
 Given ENABLE_OPENSEARCH_SENTENCE_FLOW is true
-And Doc2Vec has split the incoming document text into sentences
-When the sentences are processed
-Then Doc2Vec splits them into batches of 10
+And DOC2Vec receives a live document tsp_id
+When the existing code loads and splits the document text
+Then sentenceKey is generated for every sentence
+And sentences are inserted into sentences_vector in batches of 100
+And each successful database flush returns the globalId values
 And different workers process the available batches
-And every worker uses its own SQLAlchemy session
-And each successful batch is committed before that worker takes another batch
 ```
 
 ```gherkin
-Given a worker processes a sentence batch
-When it writes the batch to PostgreSQL and OpenSearch
-Then it generates and saves each sentenceKey in sentences_vector
-And receives the globalId values after flushing the database session
-And checks the sentence catalog using each sentenceKey
-And creates a catalog document only when the sentenceKey does not already exist
-And creates one sentence occurrence document for every globalId
-And retries the complete batch after a temporary failure
-And sends the State Machine message and deletes the source SQS message only after every batch succeeds
+Given a live sentence has a globalId, sentenceKey, and other data from sentences_vector
+When DOC2Vec prepares its OpenSearch documents
+Then the sentence catalog is checked using sentenceKey
+And no vector work is done when that key already exists
+And embeddings is checked by global_id and embedding_type 2 for a missing catalog key
+And an existing 512-dimension Titan embedding is reused
+And the Bedrock pipeline generates a vector only when the catalog key and saved embedding are both missing
+And one occurrence document is written using globalId as its OpenSearch document ID
 ```
 
-## DevOps | Create Sentence Similarity Backfill FIFO queue and DLQ
+```gherkin
+Given a database, OpenSearch, Lasso, or Bedrock operation fails temporarily
+When the worker retries the batch
+Then it reruns the complete batch without duplicating sentences or OpenSearch documents
+And it waits 5 seconds between attempts
+And the State Machine message is sent and the source SQS message is deleted only after every batch succeeds
+```
 
-Story number: 17
+## 17. DevOps | Create Sentence Similarity Backfill FIFO queue and DLQ
 
 ### Value
 
@@ -1010,9 +924,7 @@ SENTENCE_SIMILARITY_BACKFILL_DLQ_URL
 SENTENCE_SIMILARITY_BACKFILL_DLQ_ARN
 ```
 
-## DevOps | Deploy Sentence Similarity Backfill with the existing service image
-
-Story number: 18
+## 18. DevOps | Deploy Sentence Similarity Backfill with the existing service image
 
 ### Value
 
@@ -1038,290 +950,152 @@ And the backfill deployment receives SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL as S
 And both deployments call the same sentence-processing function
 ```
 
-## Sentence Similarity | Process tsp_id sentences with shared batch workers
-
-Story number: 19
+## 19. Java | Add Flyway migration for Titan comparison tables
 
 ### Value
 
-Use one reusable batch processor for real-time and historical sentence
-matching. Each deployment receives messages from its own queue but runs the
-same matching code.
-
-### Processing rules
-
-1. Receive an SQS message containing one `tsp_id`.
-2. Load the current sentences for that `tsp_id` from `sentences_vector` in
-   batches of 10.
-3. Send each batch to the configured worker pool.
-4. Every worker creates its own SQLAlchemy session and processes one source
-   sentence at a time from its batch.
-5. Commit one source sentence after its classification and all bidirectional
-   match updates succeed.
-6. Retry a source sentence up to 10 times for temporary PostgreSQL or
-   OpenSearch failures, waiting 5 seconds between attempts.
-7. Stable keys and idempotent database updates must make reprocessing safe.
-8. If any sentence remains failed, do not delete the received SQS message.
-9. Delete the received SQS message only after every sentence for the `tsp_id`
-   succeeds.
+Create separate Titan tables while keeping the existing match and case
+similarity tables unchanged. This allows the previous and Titan results to be
+compared safely.
 
 ### Acceptance Criteria
 
 ```gherkin
-Given either Sentence Similarity deployment receives an SQS message with a tsp_id
+Given the Flyway migration runs
+When the migration completes
+Then titan_matches is created with the same occurrence-level columns, JSONB match-list shape, constraints, and lookup indexes as the existing matches table
+And the primary lookup for one sentence uses global_id
+And document lookup is supported by tsp_id and analysis_group
+And application lookup is supported by application_id and analysis_group
+```
+
+```gherkin
+Given the Flyway migration runs
+When the migration completes
+Then titan_case_similarity is created with the same columns, constraints, and lookup indexes as the existing Case Similarity result table
+And no existing match or Case Similarity table is changed
+And the migration can be rolled back without removing existing-flow data
+```
+
+## 20. Sentence Similarity | Classify tsp_id sentences with tracer workers
+
+### Value
+
+Load the sentences for one `tsp_id`, classify them against the tracer and
+form-language catalog, and save the classification in PostgreSQL and the
+OpenSearch occurrence index before normal similarity matching begins.
+
+### Acceptance Criteria
+
+```gherkin
+Given Sentence Similarity receives an SQS message
 When the message is processed
-Then sentences_vector is read in batches of 10
-And different workers process the available batches
-And each worker uses its own SQLAlchemy session
-And each source sentence is committed only after its complete matching work succeeds
+Then tsp_id is read from the message payload
+And sentences_vector is queried for the sentences belonging to that tsp_id
+And the sentences are loaded in batches of 30
+And a thread pool with 30 workers processes the batch
+And each worker processes one sentence
 ```
 
 ```gherkin
-Given a source sentence has a temporary PostgreSQL or OpenSearch failure
-When the worker retries it
-Then the same reusable sentence processor runs again without duplicate relationships
-And the received SQS message remains available until every sentence succeeds
+Given a worker receives one sentence
+When the sentence vector is checked against tracer_form_language_catalog for the same analysisGroup
+Then the worker determines isNonMatcher, isTracer, and isFormLanguage
+And the sentence row in sentences_vector is updated using global_id
+And the sentence_occurrences document with the same globalId is updated with isNonMatcher, isTracer, and isFormLanguage
+And a sentence marked as a non-matcher is not sent to normal sentence similarity matching
+And an eligible sentence is made available for Story 21
 ```
 
-## Sentence Similarity | Classify tracer and form-language sentences before matching
+```gherkin
+Given a tracer lookup, sentences_vector update, or sentence_occurrences update fails temporarily
+When the worker retries the sentence
+Then the same sentence is processed again without creating a duplicate
+And both saved copies contain the same classification after the retry succeeds
+And the received SQS message is not deleted while any sentence remains unclassified
+```
 
-Story number: 20
+## 21. Sentence Similarity | Search eligible sentences and save Titan matches
 
 ### Value
 
-Check the tracer and form-language catalog before the main sentence catalog so
-non-matcher sentences never receive forward or reverse relationships.
+Continue from the previous story by searching only eligible sentences, saving
+their Titan matches, and completing the SQS workflow.
 
 ### Acceptance Criteria
 
 ```gherkin
-Given a worker begins processing a source sentence
-When its vector is searched against tracer_form_language_catalog for the same analysisGroup
-And a qualifying tracer or form-language reference is found
-Then sentences_vector is updated with isNonMatcher, isTracer, and isFormLanguage
-And the main sentence catalog is not searched for that source sentence
-And no relationship is saved for that source sentence
-```
-
-```gherkin
-Given a source sentence does not match a non-matcher reference
-When the main sentence catalog returns a target sentence
-Then the target is also checked against tracer_form_language_catalog before either relationship is saved
-And an ineligible target is updated in sentences_vector and excluded from both directions
-And an eligible target continues to exact and semantic matching
-```
-
-## Sentence Similarity | Save exact and semantic matches in both directions
-
-Story number: 21
-
-### Value
-
-Find exact and semantic sentence matches and save both directions in the
-existing `matches` JSONB list and the new `sentence_key_matches` table.
-
-### Acceptance Criteria
-
-```gherkin
-Given a source sentence is allowed to participate in matching
-When Sentence Similarity searches for matches
-Then exact occurrences are found using sentenceKey
-And semantic keys are found in sentence_semantic_catalog using the source vector and threshold
-And matching keys are expanded to sentences_vector occurrences in the same analysisGroup
-And occurrences from the same application are excluded
-And tracer, form-language, and other non-matcher occurrences are excluded
-```
-
-```gherkin
-Given an eligible source occurrence matches an eligible target occurrence
-When the database transaction is saved
-Then the source matches JSONB list contains the target occurrence
-And the target matches JSONB list contains the source occurrence
-And sentence_key_matches contains both key directions with the same distance
+Given the previous story has updated the sentences for a tsp_id
+When an eligible sentence requires matching
+Then its saved vector is used to search sentence_semantic_catalog
+And exact and similar sentence results are collected
+And same-application, cross-analysis-group, tracer, form-language, and other non-matcher results are excluded
+And the accepted occurrence matches are written to titan_matches using the bidirectional update logic
+And the source row contains the target occurrence
+And the target row contains the source occurrence with the same distance
 And an existing relationship is updated instead of duplicated
-And concurrent updates use a stable lock order so another worker cannot overwrite a relationship
-And the received SQS message is deleted after every source sentence succeeds
 ```
 
-## Java | Add Flyway migration for sentence_key_matches and sentence-key indexes
+```gherkin
+Given the tsp_id contains multiple eligible sentences
+When Sentence Similarity processes them
+Then the similarity search and titan_matches update are completed for every eligible sentence
+And a temporary failure retries the affected sentence
+And the received SQS message remains available while any sentence is incomplete
+```
 
-Story number: 22
+```gherkin
+Given every sentence for the tsp_id has completed tracer classification and any required similarity matching
+When the full tsp_id succeeds
+Then one SQS message containing the tsp_id is sent to the configured next-step queue
+And the received Sentence Similarity SQS message is deleted only after the next-step message is sent successfully
+```
+
+## 22. API Transform | Keep the existing transformation for Titan matches
 
 ### Value
 
-Create the PostgreSQL objects used to store bidirectional sentence-key matches
-across 32 smaller JSONB buckets. A popular sentence can have thousands of
-matches, so one large JSONB row would be expensive to rewrite and lock. Buckets
-keep each update smaller and allow workers to update different buckets for the
-same sentence independently.
-
-### Flyway table migration
-
-Create the bucket calculation and JSONB count functions before creating the
-table:
-
-```sql
-CREATE OR REPLACE FUNCTION sentence_match_bucket(
-    sentence_key_value TEXT
-)
-RETURNS SMALLINT
-LANGUAGE SQL
-IMMUTABLE
-STRICT
-PARALLEL SAFE
-AS $$
-    SELECT (
-        get_byte(decode(sentence_key_value, 'hex'), 0) % 32
-    )::SMALLINT;
-$$;
-
-CREATE OR REPLACE FUNCTION sentence_match_jsonb_object_size(
-    jsonb_value JSONB
-)
-RETURNS INTEGER
-LANGUAGE SQL
-IMMUTABLE
-STRICT
-PARALLEL SAFE
-AS $$
-    SELECT COUNT(*)::INTEGER
-    FROM jsonb_object_keys(jsonb_value);
-$$;
-```
-
-```sql
-CREATE TABLE IF NOT EXISTS sentence_key_matches (
-    analysis_group TEXT NOT NULL,
-    sentence_key TEXT NOT NULL,
-    match_bucket_number SMALLINT NOT NULL,
-    matches JSONB NOT NULL DEFAULT '{}'::JSONB,
-    match_key_count INTEGER GENERATED ALWAYS AS (
-        sentence_match_jsonb_object_size(matches)
-    ) STORED,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT pk_sentence_key_matches
-        PRIMARY KEY (
-            analysis_group,
-            sentence_key,
-            match_bucket_number
-        ),
-
-    CONSTRAINT ck_sentence_key_matches_key_format
-        CHECK (sentence_key ~ '^[0-9a-f]{64}$'),
-
-    CONSTRAINT ck_sentence_key_matches_bucket_range
-        CHECK (match_bucket_number BETWEEN 0 AND 31),
-
-    CONSTRAINT ck_sentence_key_matches_json_object
-        CHECK (jsonb_typeof(matches) = 'object')
-);
-```
-
-Empty bucket rows are not created. If sentence key A has matches in buckets 3,
-11, and 25, only those three rows exist. `match_key_count` is the count for one
-bucket. The total count for A is the sum of `match_key_count` across A's rows.
-
-### Flyway bidirectional upsert function
-
-The same transactional migration must create:
-
-```text
-upsert_bidirectional_sentence_key_matches(
-    analysisGroup,
-    sourceSentenceKey,
-    matchesJsonb
-)
-```
-
-The function must:
-
-- calculate each forward bucket from the matching sentence key;
-- calculate each reverse bucket from the source sentence key;
-- acquire transaction advisory locks for affected bucket rows in stable order;
-- upsert all forward and reverse bucket rows in the same transaction;
-- replace the saved distance when the same key is received again;
-- return the number of non-self relationships processed.
-
-Java calls the function once for one source sentence:
-
-```sql
-SELECT upsert_bidirectional_sentence_key_matches(
-    :analysisGroup,
-    :sourceSentenceKey,
-    CAST(:matches AS JSONB)
-);
-```
-
-### Sentence-key index migration
-
-Create these indexes against the existing `sentences_vector` table:
-
-```sql
-CREATE INDEX CONCURRENTLY IF NOT EXISTS
-    ix_sentences_vector_eligible_group_key
-ON sentences_vector (analysis_group, sentence_key)
-INCLUDE (
-    global_id,
-    application_id,
-    tsp_id,
-    section_name,
-    sent_id_local
-);
-```
-
-```sql
-CREATE INDEX CONCURRENTLY IF NOT EXISTS
-    ix_sentences_vector_current_key
-ON sentences_vector (sentence_key)
-WHERE is_current = TRUE;
-```
-
-Create the functions and table in a normal Flyway migration. Run the
-`CREATE INDEX CONCURRENTLY` statements in a separate Flyway migration with
-`executeInTransaction=false`. PostgreSQL does not allow concurrent index
-creation inside a transaction.
-
-After the migrations finish, run:
-
-```sql
-ANALYZE sentences_vector;
-ANALYZE sentence_key_matches;
-```
-
-### Why each index is needed
-
-| Table | Index | Why it is needed |
-|---|---|---|
-| `sentence_key_matches` | Primary key on `(analysis_group, sentence_key, match_bucket_number)` | Fetches every bucket for one sentence through the `analysis_group` and `sentence_key` prefix. It also finds one exact bucket for an upsert and prevents duplicate bucket rows. |
-| `sentences_vector` | `ix_sentences_vector_eligible_group_key` | Expands a matching sentence key into its occurrence `global_id` values for the same analysis group. Included document columns can be returned from the index without adding the large sentence content to it. |
-| `sentences_vector` | `ix_sentences_vector_current_key` | Quickly checks whether a sentence key is still used by any current occurrence. This supports catalog cleanup and includes current tracer or form-language occurrences. |
-
-Do not add a JSONB GIN index for the initial release. Matches are saved in both
-directions, so reads use the primary key instead of searching every JSONB
-object. A GIN index would increase storage and make every match update more
-expensive.
+Use the existing API Transform functionality with the occurrence-level Titan
+matches. Do not redesign the summary or response format.
 
 ### Acceptance Criteria
 
 ```gherkin
-Given the Flyway migrations are deployed
-When the migrations complete
-Then sentence_key_matches stores matches using bucket numbers 0 through 31
-And its primary key is analysis_group, sentence_key, and match_bucket_number
-And match_key_count automatically counts the keys in each bucket
-And ix_sentences_vector_eligible_group_key exists
-And ix_sentences_vector_current_key exists
-And the concurrent-index migration uses executeInTransaction=false
+Given ENABLE_OPENSEARCH_SENTENCE_FLOW is true
+And Sentence Similarity has completed a tsp_id
+When API Transform processes the document
+Then it reads the document match information from titan_matches
+And it uses the existing summary and response-building logic
+And the existing output format remains unchanged
 ```
 
 ```gherkin
-Given sentence key A matches sentence keys B and C
-When Java calls upsert_bidirectional_sentence_key_matches
-Then A stores B and C in the buckets calculated from B and C
-And B and C store A in the bucket calculated from A
-And retrying the same relationship does not create a duplicate key or bucket row
-And a new distance replaces the saved distance in both directions
-And all forward and reverse changes commit or roll back together
+Given ENABLE_OPENSEARCH_SENTENCE_FLOW is false or missing
+When API Transform processes the document
+Then it continues using the current match source and behavior without changes
+```
+
+## 23. Case Similarity | Save Titan case results separately for comparison
+
+### Value
+
+Keep the existing Case Similarity calculation and save the Titan result in a
+separate table so it can be compared with the previous result.
+
+### Acceptance Criteria
+
+```gherkin
+Given ENABLE_OPENSEARCH_SENTENCE_FLOW is true
+And titan_matches contains the completed occurrence matches for a tsp_id
+When Case Similarity processes the tsp_id
+Then it uses the existing case-similarity calculation
+And it writes the Titan result to titan_case_similarity
+And it does not replace or update the existing Case Similarity result
+```
+
+```gherkin
+Given both previous and Titan Case Similarity results exist
+When the results are reviewed
+Then they can be compared using application_id, a_number, and analysis_group
+And the Titan comparison write does not change the existing Kafka or downstream behavior
 ```
