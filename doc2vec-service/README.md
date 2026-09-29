@@ -8,10 +8,25 @@ It is not an API or FastAPI application. It processes one SQS message at a
 time, and all historical processing logic stays inside
 `handlers/historical_handler.py`.
 
-`main.run(customLogger=...)` accepts the team's logger instance. The same
-instance is passed to the SQS listener, historical handler, retry helper, and
-OpenSearch helper. `custom_logger.py` is only the standalone default and can be
-replaced by the production `CustomLogger` without changing the flow.
+`dependencies.py` creates the configuration, database connection, OpenSearch
+helper, SQS helper, and historical handler. The SQS processor receives only
+this one dependency object. `main.run(customLogger=...)` can still receive the
+team's logger, while `custom_logger.py` remains the standalone default.
+
+`AwsSQS.py` mirrors the shared SQS library used by the application. It creates
+the AWS client from the pod credentials, receives and formats messages, keeps
+the receipt handle and receive count, deletes completed messages, and sends the
+next FIFO or standard message. The historical code uses only
+`listen_sqs_message`, `send_sqs_message`, and `delete_messages`; unused batch
+operations are intentionally not included.
+
+`DatabaseConnection.py` mirrors the shared database library's connection-pool
+interface. It owns the SQLAlchemy engine, pool size, overflow, recycle time,
+pre-ping check, and PostgreSQL `application_name`. The standalone project
+creates it from `DATABASE_URL`. Production can pass the real shared object with
+`main.run(databaseConnection=sharedConnection)`; `main` only requires its
+`engine`. This lets the shared library keep responsibility for Vault or other
+dynamic credentials.
 
 ## Message
 
@@ -21,12 +36,14 @@ Input:
 {"reason": "HISTORICAL", "tsp_id": 1040}
 ```
 
-The listener needs the `tsp_id`. The `reason` can remain in the message for
-Doc Orchestration, but this historical-only worker does not route other flows.
+The SQS processor requires `reason=HISTORICAL` and a `tsp_id`. A message without
+that reason is logged and is not sent into the historical handler. The worker
+keeps `tsp_id` exactly as received, so both a number and a string are valid. It
+does not accept the alternate name `tspId` in an SQS message.
 
 ## Historical flow
 
-1. Count current `sentences_vector` rows for the `tsp_id`.
+1. Count all `sentences_vector` rows for the `tsp_id`.
 2. Read up to 3,000 rows at a time in `global_id` order.
 3. Generate and save the SHA-256 `sentence_key` for every row.
 4. Split the page into 30-sentence jobs and run up to 100 workers.
@@ -37,7 +54,7 @@ Doc Orchestration, but this historical-only worker does not route other flows.
 7. Write every sentence occurrence using `global_id` as its OpenSearch ID.
 8. After every page succeeds, send the `tsp_id` and `HISTORICAL` reason to the
    Sentence Similarity queue.
-9. The listener deletes the source message only after the handler succeeds.
+9. The SQS processor deletes the source message only after the handler succeeds.
 
 Documents use stable OpenSearch IDs, so retrying a page updates the same
 documents instead of creating duplicates. Temporary operations retry three

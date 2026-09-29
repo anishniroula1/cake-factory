@@ -34,3 +34,7 @@ addopts = "--cov=doc2vec_service --cov-report=term-missing --cov-fail-under=95"
 [tool.ruff]
 line-length = 88
 target-version = "py312"
+
+[tool.ruff.lint.per-file-ignores]
+"doc2vec_service/AwsSQS.py" = ["N999"]
+"doc2vec_service/DatabaseConnection.py" = ["N999"]

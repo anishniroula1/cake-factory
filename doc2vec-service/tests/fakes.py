@@ -71,19 +71,25 @@ class OpenSearchFake:
 
 
 class SqsFake:
-    def __init__(self):
+    def __init__(self, messages=None):
+        self.messages = messages or []
         self.sent = []
         self.deleted = []
-        self.visibility = []
+        self.sendResult = True
+        self.deleteResult = True
 
-    def send_message(self, **values):
+    def listen_sqs_message(self):
+        messages = self.messages
+        self.messages = []
+        return messages
+
+    def send_sqs_message(self, **values):
         self.sent.append(values)
+        return self.sendResult
 
-    def delete_message(self, **values):
-        self.deleted.append(values)
-
-    def change_message_visibility(self, **values):
-        self.visibility.append(values)
+    def delete_messages(self, message):
+        self.deleted.append(message)
+        return self.deleteResult
 
 
 class LoggerFake:

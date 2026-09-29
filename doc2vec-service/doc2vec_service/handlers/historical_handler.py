@@ -1,5 +1,3 @@
-import json
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
@@ -18,7 +16,7 @@ class HistoricalHandler:
         config,
         sessionFactory,
         opensearch,
-        sqsClient,
+        awsSqs,
         customLogger,
     ):
         """Keep everything required for one HISTORICAL message."""
@@ -26,26 +24,26 @@ class HistoricalHandler:
         self.config = config
         self.sessionFactory = sessionFactory
         self.opensearch = opensearch
-        self.sqsClient = sqsClient
+        self.awsSqs = awsSqs
         self.logger = customLogger
 
-    def process(self, tspId: int) -> dict:
+    def process(self, tsp_id) -> dict:
         """Index already-split historical sentences and send the next message."""
 
         total = retryOperation(
-            f"count HISTORICAL tsp_id {tspId}",
+            f"count HISTORICAL tsp_id {tsp_id}",
             self._count,
-            tspId,
+            tsp_id,
             waitSeconds=self.config.retrySeconds,
             customLogger=self.logger,
         )
         if total == 0:
             raise PermanentDataError(
-                f"sentences_vector has no current rows for tsp_id {tspId}"
+                f"sentences_vector has no current rows for tsp_id {tsp_id}"
             )
 
         self.logger.info(
-            f"HISTORICAL tsp_id={tspId} contains {total} sentence(s)"
+            f"HISTORICAL tsp_id={tsp_id} contains {total} sentence(s)"
         )
         indexed = 0
         afterGlobalId = 0
@@ -56,9 +54,9 @@ class HistoricalHandler:
         ) as executor:
             while True:
                 rows = retryOperation(
-                    f"load HISTORICAL tsp_id {tspId}",
+                    f"load HISTORICAL tsp_id {tsp_id}",
                     self._loadPage,
-                    tspId,
+                    tsp_id,
                     afterGlobalId,
                     waitSeconds=self.config.retrySeconds,
                     customLogger=self.logger,
@@ -69,7 +67,7 @@ class HistoricalHandler:
                 # Historical rows already contain split sentences. Only create
                 # the stable sentence keys that the two OpenSearch indexes use.
                 retryOperation(
-                    f"save HISTORICAL tsp_id {tspId} sentence keys",
+                    f"save HISTORICAL tsp_id {tsp_id} sentence keys",
                     self._saveKeys,
                     rows,
                     waitSeconds=self.config.retrySeconds,
@@ -80,38 +78,37 @@ class HistoricalHandler:
                 indexed += sum(executor.map(self._runWorker, workerBatches))
                 afterGlobalId = rows[-1].global_id
                 self.logger.info(
-                    f"HISTORICAL tsp_id={tspId} processed through "
+                    f"HISTORICAL tsp_id={tsp_id} processed through "
                     f"global_id={afterGlobalId}"
                 )
 
         # Publish only after every historical sentence is safely indexed. The
-        # listener deletes the source message after this method returns.
+        # SQS processor deletes the source message after this method returns.
         retryOperation(
-            f"publish HISTORICAL tsp_id {tspId}",
+            f"publish HISTORICAL tsp_id {tsp_id}",
             self._publish,
-            tspId,
+            tsp_id,
             waitSeconds=self.config.retrySeconds,
             customLogger=self.logger,
         )
 
         return {
             "reason": "HISTORICAL",
-            "tspId": tspId,
+            "tsp_id": tsp_id,
             "sourceCount": total,
             "indexedCount": indexed,
         }
 
-    def _count(self, tspId: int) -> int:
-        """Count current historical sentence rows for one document."""
+    def _count(self, tsp_id) -> int:
+        """Count every historical sentence row for one document."""
 
         with self.sessionFactory() as session:
             statement = select(func.count()).select_from(SentenceVector).where(
-                SentenceVector.tsp_id == tspId,
-                SentenceVector.is_current.is_(True),
+                SentenceVector.tsp_id == tsp_id
             )
             return int(session.scalar(statement) or 0)
 
-    def _loadPage(self, tspId: int, afterGlobalId: int) -> list:
+    def _loadPage(self, tsp_id, afterGlobalId: int) -> list:
         """Read the next historical page in stable global-ID order."""
 
         pageSize = (
@@ -121,8 +118,7 @@ class HistoricalHandler:
             statement = (
                 select(SentenceVector)
                 .where(
-                    SentenceVector.tsp_id == tspId,
-                    SentenceVector.is_current.is_(True),
+                    SentenceVector.tsp_id == tsp_id,
                     SentenceVector.global_id > afterGlobalId,
                 )
                 .order_by(SentenceVector.global_id)
@@ -257,21 +253,18 @@ class HistoricalHandler:
                 if row.embedding
             }
 
-    def _publish(self, tspId: int):
+    def _publish(self, tsp_id):
         """Send the completed historical document to Sentence Similarity."""
 
         if not self.config.nextQueueUrl:
             return
 
-        body = json.dumps({"tsp_id": tspId, "reason": "HISTORICAL"})
-        parameters = {
-            "QueueUrl": self.config.nextQueueUrl,
-            "MessageBody": body,
-        }
-        if self.config.nextQueueUrl.endswith(".fifo"):
-            parameters["MessageGroupId"] = str(tspId)
-            parameters["MessageDeduplicationId"] = (
-                f"doc2vec-historical-{tspId}-"
-                f"{uuid.uuid5(uuid.NAMESPACE_URL, body)}"
-            )[:128]
-        self.sqsClient.send_message(**parameters)
+        sent = self.awsSqs.send_sqs_message(
+            send_queue_url=self.config.nextQueueUrl,
+            message_body={"tsp_id": tsp_id, "reason": "HISTORICAL"},
+            is_fifo=self.config.nextQueueUrl.endswith(".fifo"),
+        )
+        if not sent:
+            raise RuntimeError(
+                f"failed to send tsp_id {tsp_id} to Sentence Similarity"
+            )

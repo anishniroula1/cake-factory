@@ -1,4 +1,3 @@
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -38,7 +37,7 @@ def test_historical_handler_indexes_saved_sentences_and_publishes(
 
     assert result == {
         "reason": "HISTORICAL",
-        "tspId": 10,
+        "tsp_id": 10,
         "sourceCount": 1,
         "indexedCount": 1,
     }
@@ -50,7 +49,7 @@ def test_historical_handler_indexes_saved_sentences_and_publishes(
         "occurrence",
     ]
     assert opensearch.bulkCalls[0][1][0]["sentenceContentVector"] == [0.1, 0.2]
-    assert json.loads(sqs.sent[0]["MessageBody"]) == {
+    assert sqs.sent[0]["message_body"] == {
         "tsp_id": 10,
         "reason": "HISTORICAL",
     }
@@ -128,3 +127,21 @@ def test_historical_handler_can_finish_without_a_next_queue(
 
     handler._publish(10)
     assert sqs.sent == []
+
+
+def test_historical_handler_raises_when_the_next_message_cannot_be_sent(
+    serviceConfig,
+    customLogger,
+):
+    sqs = SqsFake()
+    sqs.sendResult = False
+    handler = HistoricalHandler(
+        serviceConfig,
+        SessionSequence([]),
+        OpenSearchFake(),
+        sqs,
+        customLogger,
+    )
+
+    with pytest.raises(RuntimeError):
+        handler._publish(10)

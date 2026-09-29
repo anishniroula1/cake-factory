@@ -2,8 +2,18 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import make_url
 
 load_dotenv()
+
+# These values belong to this historical flow and do not change by environment.
+OPENSEARCH_PORT = 443
+OPENSEARCH_SERVICE = "es"
+OPENSEARCH_BATCH_SIZE = 1_000
+WORKER_BATCH_SIZE = 30
+HISTORICAL_WORKER_COUNT = 100
+RETRY_SECONDS = 5
+TITAN_EMBEDDING_TYPE = 2
 
 
 def readInteger(name: str, default: int, minimum: int = 1) -> int:
@@ -21,6 +31,11 @@ def readInteger(name: str, default: int, minimum: int = 1) -> int:
 @dataclass(frozen=True)
 class Config:
     databaseUrl: str
+    pgDbUser: str
+    pgDbPassword: str
+    pgDbHost: str
+    pgDbDatabase: str
+    pgDbPort: int
     awsRegion: str
     iamAccessRole: str
     opensearchHost: str
@@ -45,13 +60,24 @@ class Config:
     def fromEnvironment(cls):
         """Build configuration from environment values."""
 
+        databaseUrl = os.getenv("DATABASE_URL", "").strip()
+        parsedDatabaseUrl = make_url(databaseUrl) if databaseUrl else None
         config = cls(
-            databaseUrl=os.getenv("DATABASE_URL", "").strip(),
+            databaseUrl=databaseUrl,
+            pgDbUser=(parsedDatabaseUrl.username or "") if parsedDatabaseUrl else "",
+            pgDbPassword=(
+                parsedDatabaseUrl.password or ""
+            ) if parsedDatabaseUrl else "",
+            pgDbHost=(parsedDatabaseUrl.host or "") if parsedDatabaseUrl else "",
+            pgDbDatabase=(
+                parsedDatabaseUrl.database or ""
+            ) if parsedDatabaseUrl else "",
+            pgDbPort=(parsedDatabaseUrl.port or 5432) if parsedDatabaseUrl else 5432,
             awsRegion=os.getenv("AWS_REGION", "us-east-1").strip(),
             iamAccessRole=os.getenv("IAM_ACCESS_ROLE", "").strip(),
             opensearchHost=os.getenv("OPENSEARCH_HOST", "").strip(),
-            opensearchPort=readInteger("OPENSEARCH_PORT", 443),
-            opensearchService=os.getenv("OPENSEARCH_SERVICE", "es").strip(),
+            opensearchPort=OPENSEARCH_PORT,
+            opensearchService=OPENSEARCH_SERVICE,
             sourceQueueUrl=os.getenv("DOC2VEC_QUEUE_URL", "").strip(),
             nextQueueUrl=os.getenv("SENTENCE_SIMILARITY_QUEUE_URL", "").strip(),
             occurrenceAlias=os.getenv(
@@ -60,14 +86,12 @@ class Config:
             catalogAlias=os.getenv(
                 "OPENSEARCH_CATALOG_ALIAS", "sentence_semantic_catalog"
             ).strip(),
-            opensearchBatchSize=readInteger("OPENSEARCH_BATCH_SIZE", 1_000),
-            workerBatchSize=readInteger("WORKER_BATCH_SIZE", 30),
-            historicalWorkerCount=readInteger(
-                "HISTORICAL_WORKER_COUNT", 100
-            ),
-            retrySeconds=readInteger("RETRY_SECONDS", 5),
+            opensearchBatchSize=OPENSEARCH_BATCH_SIZE,
+            workerBatchSize=WORKER_BATCH_SIZE,
+            historicalWorkerCount=HISTORICAL_WORKER_COUNT,
+            retrySeconds=RETRY_SECONDS,
             vectorDimension=readInteger("VECTOR_DIMENSION", 512),
-            titanEmbeddingType=readInteger("TITAN_EMBEDDING_TYPE", 2),
+            titanEmbeddingType=TITAN_EMBEDDING_TYPE,
             databasePoolSize=readInteger("DATABASE_POOL_SIZE", 20),
             databaseMaxOverflow=readInteger(
                 "DATABASE_MAX_OVERFLOW", 10, minimum=0

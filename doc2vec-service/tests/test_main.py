@@ -1,57 +1,45 @@
-from types import SimpleNamespace
-
 from doc2vec_service import main
 from tests.fakes import LoggerFake
 
 
-class ReturnValue:
-    def __init__(self, value):
-        self.value = value
-
-    def __call__(self, *args, **kwargs):
-        return self.value
-
-
-class Creator:
-    def __init__(self, value):
-        self.value = value
-
-    def create_client(self):
-        return self.value
-
-
-def test_main_builds_handlers_runs_listener_and_closes(monkeypatch):
-    config = SimpleNamespace(awsRegion="us-east-1")
-
-    class AwsSession:
-        def client(self, name, region_name):
-            return "sqs-client"
-
-    class Database:
-        sessionFactory = object()
+def test_main_runs_processor_with_one_dependency_container(monkeypatch):
+    class DependencyContainer:
+        def __init__(self):
+            self.closed = False
 
         def close(self):
             self.closed = True
 
-    class Listener:
+    class Processor:
+        def __init__(self, dependencies):
+            self.dependencies = dependencies
+            self.ran = False
+
         def run(self):
             self.ran = True
 
-    database = Database()
-    listener = Listener()
+    dependencies = DependencyContainer()
+    captured = {}
 
-    def settings():
-        return config
+    def buildDependencies(customLogger, databaseConnection):
+        captured["logger"] = customLogger
+        captured["database"] = databaseConnection
+        return dependencies
 
-    monkeypatch.setattr(main.Config, "fromEnvironment", settings)
-    monkeypatch.setattr(main.boto3, "Session", ReturnValue(AwsSession()))
-    monkeypatch.setattr(main, "Database", ReturnValue(database))
-    monkeypatch.setattr(main, "OpenSearchClient", ReturnValue(Creator(object())))
-    monkeypatch.setattr(main, "OpenSearchHelper", ReturnValue(object()))
-    monkeypatch.setattr(main, "HistoricalHandler", ReturnValue(object()))
-    monkeypatch.setattr(main, "SqsListener", ReturnValue(listener))
+    def buildProcessor(values):
+        processor = Processor(values)
+        captured["processor"] = processor
+        return processor
 
-    customLogger = LoggerFake()
-    main.run(customLogger)
+    monkeypatch.setattr(main, "Dependencies", buildDependencies)
+    monkeypatch.setattr(main, "SqsProcessor", buildProcessor)
 
-    assert listener.ran and database.closed
+    logger = LoggerFake()
+    database = object()
+    main.run(logger, database)
+
+    assert captured["logger"] is logger
+    assert captured["database"] is database
+    assert captured["processor"].dependencies is dependencies
+    assert captured["processor"].ran
+    assert dependencies.closed
