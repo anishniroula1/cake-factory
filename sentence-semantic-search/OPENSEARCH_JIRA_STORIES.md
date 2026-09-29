@@ -1099,3 +1099,35 @@ When the results are reviewed
 Then they can be compared using application_id, a_number, and analysis_group
 And the Titan comparison write does not change the existing Kafka or downstream behavior
 ```
+
+## 24. Doc2Vec | Ingest historical and live sentences into OpenSearch
+
+### Value
+
+Use one shared ingestion function to write prepared historical and live
+sentences to the occurrence and catalog indexes.
+
+### Acceptance Criteria
+
+```gherkin
+Given historical or live rows contain globalId, sentenceKey, and sentence content
+When the shared ingestion runs
+Then workers process batches of 30 with no more than 100 workers
+And unique sentence keys are checked in sentence_semantic_catalog
+And missing keys reuse embeddings with embedding_type 2 when available
+And OpenSearch creates only the remaining missing vectors
+And only missing unique keys are bulk-written to sentence_semantic_catalog
+And every occurrence is bulk-written to sentence_occurrences
+And stable sentenceKey and globalId document IDs prevent duplicates
+And another worker wave starts when more than 3000 sentences exist
+```
+
+```gherkin
+Given a database, OpenSearch, Lasso, or Bedrock operation fails temporarily
+When the failed batch is retried
+Then the complete batch runs again up to 10 times
+And each retry waits 5 seconds
+And when all batches succeed the historical flow sends tsp_id to SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL
+And the live flow sends its existing State Machine message
+And each flow deletes its received SQS message only after its outgoing message is sent successfully
+```

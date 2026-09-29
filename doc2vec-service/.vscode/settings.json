@@ -33,6 +33,7 @@
     "titleBar.activeForeground": "#e7e7e7",
     "titleBar.border": "#ff0000",
     "titleBar.inactiveBackground": "#ff000099",
-    "titleBar.inactiveForeground": "#e7e7e799"
+    "titleBar.inactiveForeground": "#e7e7e799",
+    "statusBar.inactiveBackground": "#ff0000"
   }
 }
