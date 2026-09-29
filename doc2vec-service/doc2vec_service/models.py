@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import ClassVar
 
 from sqlalchemy import (
     ARRAY,
@@ -8,7 +7,6 @@ from sqlalchemy import (
     DateTime,
     Float,
     Integer,
-    LargeBinary,
     Text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -16,19 +14,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
     pass
-
-
-class TextSimilarityInput(Base):
-    __tablename__ = "text_similarity_input"
-    __table_args__: ClassVar = {"schema": "tsp"}
-
-    tsp_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    a_number: Mapped[str] = mapped_column(Text)
-    application_id: Mapped[str] = mapped_column(Text)
-    content: Mapped[str] = mapped_column(Text)
-    source_type: Mapped[str] = mapped_column(Text)
-    analysis_group: Mapped[str] = mapped_column(Text)
-    document_state: Mapped[str] = mapped_column(Text)
 
 
 class SentenceVector(Base):
@@ -60,15 +45,3 @@ class Embedding(Base):
     global_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     embedding_type: Mapped[int] = mapped_column(Integer, primary_key=True)
     embedding: Mapped[list] = mapped_column(ARRAY(Float))
-
-
-class TracerSentence(Base):
-    __tablename__ = "tracer_sentence"
-
-    tracer_sentence_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    sentence_content: Mapped[str] = mapped_column(Text)
-    is_non_matcher: Mapped[bool] = mapped_column(Boolean)
-    is_tracer: Mapped[bool] = mapped_column(Boolean)
-    is_form_language: Mapped[bool] = mapped_column(Boolean)
-    analysis_group: Mapped[str] = mapped_column(Text)
-    embedding: Mapped[bytes] = mapped_column(LargeBinary)

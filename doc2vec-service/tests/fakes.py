@@ -85,3 +85,26 @@ class SqsFake:
     def change_message_visibility(self, **values):
         self.visibility.append(values)
 
+
+class LoggerFake:
+    def __init__(self):
+        self.debugMessages = []
+        self.infoMessages = []
+        self.warningMessages = []
+        self.errorMessages = []
+        self.exceptionMessages = []
+
+    def debug(self, message):
+        self.debugMessages.append(message)
+
+    def info(self, message):
+        self.infoMessages.append(message)
+
+    def warning(self, message):
+        self.warningMessages.append(message)
+
+    def error(self, message):
+        self.errorMessages.append(message)
+
+    def exception(self, message):
+        self.exceptionMessages.append(message)

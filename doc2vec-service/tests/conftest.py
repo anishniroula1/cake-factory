@@ -3,28 +3,30 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fakes import LoggerFake
+
 
 @pytest.fixture
 def serviceConfig():
     return SimpleNamespace(
-        databaseBatchSize=1_000,
         opensearchBatchSize=1_000,
         workerBatchSize=30,
-        workerCount=2,
         historicalWorkerCount=2,
         retrySeconds=1,
         vectorDimension=2,
         titanEmbeddingType=2,
-        trainingAlias="training",
         catalogAlias="catalog",
         occurrenceAlias="occurrence",
-        tracerAlias="tracer",
-        nextDocumentState="SIMILARITY",
         nextQueueUrl="https://sqs.us-east-1.amazonaws.com/1/next.fifo",
         sourceQueueUrl="https://sqs.us-east-1.amazonaws.com/1/source.fifo",
         sqsWaitSeconds=1,
         sqsVisibilitySeconds=7_200,
     )
+
+
+@pytest.fixture
+def customLogger():
+    return LoggerFake()
 
 
 @pytest.fixture

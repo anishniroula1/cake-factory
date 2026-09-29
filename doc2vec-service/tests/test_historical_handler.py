@@ -11,6 +11,7 @@ from tests.fakes import OpenSearchFake, SessionFake, SessionSequence, SqsFake
 def test_historical_handler_indexes_saved_sentences_and_publishes(
     serviceConfig,
     sentenceRecord,
+    customLogger,
 ):
     embedding = SimpleNamespace(global_id=1, embedding=[0.1, 0.2])
     saveSession = SessionFake()
@@ -25,7 +26,13 @@ def test_historical_handler_indexes_saved_sentences_and_publishes(
     )
     opensearch = OpenSearchFake()
     sqs = SqsFake()
-    handler = HistoricalHandler(serviceConfig, sessions, opensearch, sqs)
+    handler = HistoricalHandler(
+        serviceConfig,
+        sessions,
+        opensearch,
+        sqs,
+        customLogger,
+    )
 
     result = handler.process(10)
 
@@ -52,12 +59,14 @@ def test_historical_handler_indexes_saved_sentences_and_publishes(
 def test_historical_handler_uses_bedrock_for_a_missing_vector(
     serviceConfig,
     sentenceRecord,
+    customLogger,
 ):
     handler = HistoricalHandler(
         serviceConfig,
         SessionSequence([SessionFake(scalarValue=0)]),
         OpenSearchFake(),
         SqsFake(),
+        customLogger,
     )
 
     assert handler._processWorker([sentenceRecord]) == 1
@@ -70,6 +79,7 @@ def test_historical_handler_uses_bedrock_for_a_missing_vector(
 def test_historical_handler_skips_an_existing_catalog_key_but_saves_occurrence(
     serviceConfig,
     sentenceRecord,
+    customLogger,
 ):
     opensearch = OpenSearchFake(existing={sentenceRecord.sentence_key})
     handler = HistoricalHandler(
@@ -77,6 +87,7 @@ def test_historical_handler_skips_an_existing_catalog_key_but_saves_occurrence(
         SessionSequence([SessionFake(rows=[])]),
         opensearch,
         SqsFake(),
+        customLogger,
     )
 
     assert handler._processWorker([sentenceRecord]) == 1
@@ -85,19 +96,26 @@ def test_historical_handler_skips_an_existing_catalog_key_but_saves_occurrence(
     assert opensearch.bulkCalls[2][0] == "occurrence"
 
 
-def test_historical_handler_rejects_a_document_without_sentences(serviceConfig):
+def test_historical_handler_rejects_a_document_without_sentences(
+    serviceConfig,
+    customLogger,
+):
     handler = HistoricalHandler(
         serviceConfig,
         SessionSequence([SessionFake(rows=[])]),
         OpenSearchFake(),
         SqsFake(),
+        customLogger,
     )
 
     with pytest.raises(PermanentDataError):
         handler.process(404)
 
 
-def test_historical_handler_can_finish_without_a_next_queue(serviceConfig):
+def test_historical_handler_can_finish_without_a_next_queue(
+    serviceConfig,
+    customLogger,
+):
     serviceConfig.nextQueueUrl = ""
     sqs = SqsFake()
     handler = HistoricalHandler(
@@ -105,6 +123,7 @@ def test_historical_handler_can_finish_without_a_next_queue(serviceConfig):
         SessionSequence([]),
         OpenSearchFake(),
         sqs,
+        customLogger,
     )
 
     handler._publish(10)

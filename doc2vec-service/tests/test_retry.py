@@ -8,7 +8,7 @@ def noWait(value):
     pass
 
 
-def test_retry_operation_retries_then_returns(monkeypatch):
+def test_retry_operation_retries_then_returns(monkeypatch, customLogger):
     attempts = []
 
     def operation():
@@ -18,8 +18,14 @@ def test_retry_operation_retries_then_returns(monkeypatch):
         return "done"
 
     monkeypatch.setattr("doc2vec_service.retry.time.sleep", noWait)
-    assert retryOperation("test", operation, waitSeconds=5) == "done"
+    assert retryOperation(
+        "test",
+        operation,
+        waitSeconds=5,
+        customLogger=customLogger,
+    ) == "done"
     assert len(attempts) == 2
+    assert len(customLogger.warningMessages) == 1
 
 
 def test_retry_operation_does_not_hide_permanent_data_error():
@@ -30,7 +36,10 @@ def test_retry_operation_does_not_hide_permanent_data_error():
         retryOperation("test", permanentFailure, waitSeconds=5)
 
 
-def test_retry_operation_stops_at_passed_attempt_limit(monkeypatch):
+def test_retry_operation_stops_at_passed_attempt_limit(
+    monkeypatch,
+    customLogger,
+):
     attempts = []
 
     def operation():
@@ -39,8 +48,15 @@ def test_retry_operation_stops_at_passed_attempt_limit(monkeypatch):
 
     monkeypatch.setattr("doc2vec_service.retry.time.sleep", noWait)
     with pytest.raises(RuntimeError):
-        retryOperation("test", operation, waitSeconds=5, maxAttempts=2)
+        retryOperation(
+            "test",
+            operation,
+            waitSeconds=5,
+            maxAttempts=2,
+            customLogger=customLogger,
+        )
     assert len(attempts) == 2
+    assert len(customLogger.errorMessages) == 1
 
 
 def test_retry_operation_rejects_invalid_attempt_limit():

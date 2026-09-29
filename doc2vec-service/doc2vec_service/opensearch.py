@@ -1,4 +1,3 @@
-import logging
 import threading
 import time
 
@@ -6,19 +5,18 @@ from opensearchpy import TransportError, helpers
 
 from doc2vec_service.errors import PermanentDataError
 
-logger = logging.getLogger(__name__)
-
 # These failures are normally temporary problems from OpenSearch, Lasso,
 # Bedrock, or a gateway in front of them.
 RETRYABLE_STATUS_CODES = {408, 424, 425, 429, 500, 502, 503, 504}
 
 
 class OpenSearchHelper:
-    def __init__(self, config, client):
+    def __init__(self, config, client, customLogger):
         """Keep the small amount of OpenSearch code shared by all handlers."""
 
         self.config = config
         self.client = client
+        self.logger = customLogger
         self.cooldownLock = threading.Lock()
         self.embeddingCooldownUntil = 0.0
 
@@ -44,11 +42,9 @@ class OpenSearchHelper:
                         raise PermanentDataError(
                             f"OpenSearch could not read {alias}: {error}"
                         ) from error
-                    logger.warning(
-                        "OpenSearch %s read attempt %s failed; retrying in %s seconds",
-                        alias,
-                        attempt,
-                        self.config.retrySeconds,
+                    self.logger.warning(
+                        f"OpenSearch {alias} read attempt {attempt} failed; "
+                        f"retrying in {self.config.retrySeconds} seconds"
                     )
                     time.sleep(self.config.retrySeconds)
 
@@ -159,13 +155,10 @@ class OpenSearchHelper:
     ):
         """Log one short error and apply the correct retry pause."""
 
-        logger.warning(
-            "OpenSearch %s attempt %s failed for %s document(s); "
-            "retrying in %s seconds",
-            alias,
-            attempt,
-            failedCount,
-            self.config.retrySeconds,
+        self.logger.warning(
+            f"OpenSearch {alias} attempt {attempt} failed for "
+            f"{failedCount} document(s); retrying in "
+            f"{self.config.retrySeconds} seconds"
         )
         if needsEmbedding:
             with self.cooldownLock:
@@ -197,4 +190,3 @@ class OpenSearchHelper:
             return int(status) in RETRYABLE_STATUS_CODES
         except (TypeError, ValueError):
             return False
-

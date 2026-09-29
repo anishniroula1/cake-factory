@@ -1,5 +1,4 @@
 import json
-import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -12,17 +11,23 @@ from doc2vec_service.models import Embedding, SentenceVector
 from doc2vec_service.retry import retryOperation
 from doc2vec_service.text import sentenceKey
 
-logger = logging.getLogger(__name__)
-
 
 class HistoricalHandler:
-    def __init__(self, config, sessionFactory, opensearch, sqsClient):
+    def __init__(
+        self,
+        config,
+        sessionFactory,
+        opensearch,
+        sqsClient,
+        customLogger,
+    ):
         """Keep everything required for one HISTORICAL message."""
 
         self.config = config
         self.sessionFactory = sessionFactory
         self.opensearch = opensearch
         self.sqsClient = sqsClient
+        self.logger = customLogger
 
     def process(self, tspId: int) -> dict:
         """Index already-split historical sentences and send the next message."""
@@ -32,13 +37,16 @@ class HistoricalHandler:
             self._count,
             tspId,
             waitSeconds=self.config.retrySeconds,
+            customLogger=self.logger,
         )
         if total == 0:
             raise PermanentDataError(
                 f"sentences_vector has no current rows for tsp_id {tspId}"
             )
 
-        logger.info("HISTORICAL tsp_id=%s contains %s sentence(s)", tspId, total)
+        self.logger.info(
+            f"HISTORICAL tsp_id={tspId} contains {total} sentence(s)"
+        )
         indexed = 0
         afterGlobalId = 0
 
@@ -53,6 +61,7 @@ class HistoricalHandler:
                     tspId,
                     afterGlobalId,
                     waitSeconds=self.config.retrySeconds,
+                    customLogger=self.logger,
                 )
                 if not rows:
                     break
@@ -64,15 +73,15 @@ class HistoricalHandler:
                     self._saveKeys,
                     rows,
                     waitSeconds=self.config.retrySeconds,
+                    customLogger=self.logger,
                 )
 
                 workerBatches = list(batches(rows, self.config.workerBatchSize))
                 indexed += sum(executor.map(self._runWorker, workerBatches))
                 afterGlobalId = rows[-1].global_id
-                logger.info(
-                    "HISTORICAL tsp_id=%s processed through global_id=%s",
-                    tspId,
-                    afterGlobalId,
+                self.logger.info(
+                    f"HISTORICAL tsp_id={tspId} processed through "
+                    f"global_id={afterGlobalId}"
                 )
 
         # Publish only after every historical sentence is safely indexed. The
@@ -82,6 +91,7 @@ class HistoricalHandler:
             self._publish,
             tspId,
             waitSeconds=self.config.retrySeconds,
+            customLogger=self.logger,
         )
 
         return {
@@ -158,6 +168,7 @@ class HistoricalHandler:
             self._processWorker,
             rows,
             waitSeconds=self.config.retrySeconds,
+            customLogger=self.logger,
         )
 
     def _processWorker(self, rows: list) -> int:

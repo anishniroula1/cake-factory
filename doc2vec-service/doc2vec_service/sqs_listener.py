@@ -1,12 +1,9 @@
 import json
-import logging
 import time
 
 from botocore.exceptions import BotoCoreError, ClientError
 
 from doc2vec_service.errors import PermanentMessageError
-
-logger = logging.getLogger(__name__)
 
 
 class SqsListener:
@@ -14,19 +11,15 @@ class SqsListener:
         self,
         config,
         sqsClient,
-        trainHandler,
-        tracerHandler,
         historicalHandler,
-        liveHandler,
+        customLogger,
     ):
-        """Keep the queue and the four easy-to-follow reason handlers."""
+        """Keep the queue and the historical handler."""
 
         self.config = config
         self.sqsClient = sqsClient
-        self.trainHandler = trainHandler
-        self.tracerHandler = tracerHandler
         self.historicalHandler = historicalHandler
-        self.liveHandler = liveHandler
+        self.logger = customLogger
 
     def run(self):
         """Listen to SQS and process one message at a time."""
@@ -40,7 +33,9 @@ class SqsListener:
                     VisibilityTimeout=self.config.sqsVisibilitySeconds,
                 )
             except (BotoCoreError, ClientError) as error:
-                logger.warning("SQS receive failed: %s", str(error)[:500])
+                self.logger.warning(
+                    f"SQS receive failed: {str(error)[:500]}"
+                )
                 time.sleep(self.config.retrySeconds)
                 continue
 
@@ -52,12 +47,14 @@ class SqsListener:
 
         try:
             message = self._parseMessage(rawMessage["Body"])
-            self._dispatch(message)
+            self.historicalHandler.process(message["tspId"])
         except PermanentMessageError as error:
-            logger.error("Invalid SQS message: %s", str(error)[:500])
+            self.logger.error(f"Invalid SQS message: {str(error)[:500]}")
             return
         except Exception:
-            logger.exception("Doc2Vec message failed and was not deleted")
+            self.logger.exception(
+                "Doc2Vec message failed and was not deleted"
+            )
             return
 
         try:
@@ -66,10 +63,10 @@ class SqsListener:
                 ReceiptHandle=rawMessage["ReceiptHandle"],
             )
         except (BotoCoreError, ClientError) as error:
-            logger.warning("SQS delete failed: %s", str(error)[:500])
+            self.logger.warning(f"SQS delete failed: {str(error)[:500]}")
 
     def _parseMessage(self, body: str) -> dict:
-        """Read the optional reason and tsp_id from a JSON body."""
+        """Read the required tsp_id from one historical JSON message."""
 
         try:
             message = json.loads(body)
@@ -78,32 +75,12 @@ class SqsListener:
         if not isinstance(message, dict):
             raise PermanentMessageError("SQS body must be a JSON object")
 
-        reason = str(message.get("reason", "LIVE")).strip().upper()
-        if reason == "TRAIN_MODEL":
-            reason = "TRAIN"
-
         rawTspId = message.get("tsp_id", message.get("tspId"))
-        tspId = None
-        if rawTspId is not None:
-            try:
-                tspId = int(rawTspId)
-            except (TypeError, ValueError) as error:
-                raise PermanentMessageError("tsp_id must be a number") from error
-        if reason != "TRACER" and tspId is None:
+        if rawTspId is None:
             raise PermanentMessageError("tsp_id is required")
+        try:
+            tspId = int(rawTspId)
+        except (TypeError, ValueError) as error:
+            raise PermanentMessageError("tsp_id must be a number") from error
 
-        return {
-            "reason": reason,
-            "tspId": tspId,
-        }
-
-    def _dispatch(self, message: dict):
-        """Send the message to the handler matching its reason."""
-
-        if message["reason"] == "TRACER":
-            return self.tracerHandler.process()
-        if message["reason"] == "TRAIN":
-            return self.trainHandler.process(message["tspId"])
-        if message["reason"] == "HISTORICAL":
-            return self.historicalHandler.process(message["tspId"])
-        return self.liveHandler.process(message["tspId"])
+        return {"tspId": tspId}

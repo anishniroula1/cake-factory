@@ -28,15 +28,10 @@ class Config:
     opensearchService: str
     sourceQueueUrl: str
     nextQueueUrl: str
-    nextDocumentState: str
     occurrenceAlias: str
     catalogAlias: str
-    trainingAlias: str
-    tracerAlias: str
-    databaseBatchSize: int
     opensearchBatchSize: int
     workerBatchSize: int
-    workerCount: int
     historicalWorkerCount: int
     retrySeconds: int
     vectorDimension: int
@@ -59,25 +54,14 @@ class Config:
             opensearchService=os.getenv("OPENSEARCH_SERVICE", "es").strip(),
             sourceQueueUrl=os.getenv("DOC2VEC_QUEUE_URL", "").strip(),
             nextQueueUrl=os.getenv("SENTENCE_SIMILARITY_QUEUE_URL", "").strip(),
-            nextDocumentState=os.getenv(
-                "DOC2VEC_COMPLETE_STATE", "SIMILARITY"
-            ).strip(),
             occurrenceAlias=os.getenv(
                 "OPENSEARCH_OCCURRENCE_ALIAS", "sentence_occurrences"
             ).strip(),
             catalogAlias=os.getenv(
                 "OPENSEARCH_CATALOG_ALIAS", "sentence_semantic_catalog"
             ).strip(),
-            trainingAlias=os.getenv(
-                "OPENSEARCH_TRAINING_ALIAS", "sentence_semantic_training"
-            ).strip(),
-            tracerAlias=os.getenv(
-                "OPENSEARCH_TRACER_ALIAS", "tracer_form_language_catalog"
-            ).strip(),
-            databaseBatchSize=readInteger("DATABASE_BATCH_SIZE", 1_000),
             opensearchBatchSize=readInteger("OPENSEARCH_BATCH_SIZE", 1_000),
             workerBatchSize=readInteger("WORKER_BATCH_SIZE", 30),
-            workerCount=readInteger("WORKER_COUNT", 16),
             historicalWorkerCount=readInteger(
                 "HISTORICAL_WORKER_COUNT", 100
             ),
@@ -103,8 +87,6 @@ class Config:
             raise ValueError("OPENSEARCH_HOST is required")
         if not self.sourceQueueUrl:
             raise ValueError("DOC2VEC_QUEUE_URL is required")
-        if self.workerCount > 16:
-            raise ValueError("WORKER_COUNT cannot be greater than 16")
         if self.historicalWorkerCount > 100:
             raise ValueError(
                 "HISTORICAL_WORKER_COUNT cannot be greater than 100"

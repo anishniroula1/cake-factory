@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from doc2vec_service import main
+from tests.fakes import LoggerFake
 
 
 class ReturnValue:
@@ -47,12 +48,10 @@ def test_main_builds_handlers_runs_listener_and_closes(monkeypatch):
     monkeypatch.setattr(main, "Database", ReturnValue(database))
     monkeypatch.setattr(main, "OpenSearchClient", ReturnValue(Creator(object())))
     monkeypatch.setattr(main, "OpenSearchHelper", ReturnValue(object()))
-    monkeypatch.setattr(main, "TrainHandler", ReturnValue(object()))
-    monkeypatch.setattr(main, "TracerHandler", ReturnValue(object()))
     monkeypatch.setattr(main, "HistoricalHandler", ReturnValue(object()))
-    monkeypatch.setattr(main, "LiveHandler", ReturnValue(object()))
     monkeypatch.setattr(main, "SqsListener", ReturnValue(listener))
 
-    main.run()
+    customLogger = LoggerFake()
+    main.run(customLogger)
 
     assert listener.ran and database.closed

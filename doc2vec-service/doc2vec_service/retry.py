@@ -1,11 +1,8 @@
-import logging
 import time
 from collections.abc import Callable
 from typing import Any
 
 from doc2vec_service.errors import PermanentDataError, PermanentMessageError
-
-logger = logging.getLogger(__name__)
 
 
 def retryOperation(
@@ -14,6 +11,7 @@ def retryOperation(
     *arguments: Any,
     waitSeconds: int,
     maxAttempts: int = 3,
+    customLogger=None,
 ) -> Any:
     """Try an operation up to three times unless another limit is passed.
 
@@ -31,18 +29,15 @@ def retryOperation(
             if isinstance(error, (PermanentDataError, PermanentMessageError)):
                 raise
             if attempt == maxAttempts:
-                logger.error(
-                    "%s failed after %s attempt(s): %s",
-                    label,
-                    maxAttempts,
-                    str(error)[:500],
-                )
+                if customLogger:
+                    customLogger.error(
+                        f"{label} failed after {maxAttempts} attempt(s): "
+                        f"{str(error)[:500]}"
+                    )
                 raise
-            logger.warning(
-                "%s attempt %s failed: %s; retrying in %s seconds",
-                label,
-                attempt,
-                str(error)[:500],
-                waitSeconds,
-            )
+            if customLogger:
+                customLogger.warning(
+                    f"{label} attempt {attempt} failed: {str(error)[:500]}; "
+                    f"retrying in {waitSeconds} seconds"
+                )
             time.sleep(waitSeconds)

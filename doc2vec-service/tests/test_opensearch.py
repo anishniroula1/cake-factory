@@ -22,7 +22,11 @@ def noWait(value):
     pass
 
 
-def test_existing_ids_and_bulk_pipeline_selection(monkeypatch, serviceConfig):
+def test_existing_ids_and_bulk_pipeline_selection(
+    monkeypatch,
+    serviceConfig,
+    customLogger,
+):
     calls = []
 
     def bulk(client, actions, **arguments):
@@ -30,7 +34,7 @@ def test_existing_ids_and_bulk_pipeline_selection(monkeypatch, serviceConfig):
         return len(actions), []
 
     monkeypatch.setattr("doc2vec_service.opensearch.helpers.bulk", bulk)
-    helper = OpenSearchHelper(serviceConfig, ClientFake({"A"}))
+    helper = OpenSearchHelper(serviceConfig, ClientFake({"A"}), customLogger)
     assert helper.existingIds("catalog", ["A", "B", "A"]) == {"A"}
 
     documents = [{"_id": "A", "value": 1}]
@@ -42,7 +46,11 @@ def test_existing_ids_and_bulk_pipeline_selection(monkeypatch, serviceConfig):
     assert "pipeline" not in calls[1][1]
 
 
-def test_bulk_retries_only_temporary_failed_documents(monkeypatch, serviceConfig):
+def test_bulk_retries_only_temporary_failed_documents(
+    monkeypatch,
+    serviceConfig,
+    customLogger,
+):
     calls = []
 
     def bulk(client, actions, **arguments):
@@ -53,13 +61,17 @@ def test_bulk_retries_only_temporary_failed_documents(monkeypatch, serviceConfig
 
     monkeypatch.setattr("doc2vec_service.opensearch.helpers.bulk", bulk)
     monkeypatch.setattr("doc2vec_service.opensearch.time.sleep", noWait)
-    helper = OpenSearchHelper(serviceConfig, ClientFake())
+    helper = OpenSearchHelper(serviceConfig, ClientFake(), customLogger)
     documents = [{"_id": "A"}, {"_id": "B"}]
     assert helper.bulkIndex("catalog", documents, needsEmbedding=False) == 2
     assert [action["_id"] for action in calls[1]] == ["B"]
 
 
-def test_bulk_retries_transport_failure(monkeypatch, serviceConfig):
+def test_bulk_retries_transport_failure(
+    monkeypatch,
+    serviceConfig,
+    customLogger,
+):
     calls = []
 
     def bulk(client, actions, **arguments):
@@ -70,18 +82,22 @@ def test_bulk_retries_transport_failure(monkeypatch, serviceConfig):
 
     monkeypatch.setattr("doc2vec_service.opensearch.helpers.bulk", bulk)
     monkeypatch.setattr("doc2vec_service.opensearch.time.sleep", noWait)
-    helper = OpenSearchHelper(serviceConfig, ClientFake())
+    helper = OpenSearchHelper(serviceConfig, ClientFake(), customLogger)
     assert helper.bulkIndex("catalog", [{"_id": "A"}], False) == 1
 
 
-def test_permanent_opensearch_errors_are_not_retried(monkeypatch, serviceConfig):
+def test_permanent_opensearch_errors_are_not_retried(
+    monkeypatch,
+    serviceConfig,
+    customLogger,
+):
     def badMapping(client, actions, **arguments):
         return 0, [
             {"index": {"_id": "A", "status": 400, "error": "bad mapping"}}
         ]
 
     monkeypatch.setattr("doc2vec_service.opensearch.helpers.bulk", badMapping)
-    helper = OpenSearchHelper(serviceConfig, ClientFake())
+    helper = OpenSearchHelper(serviceConfig, ClientFake(), customLogger)
     with pytest.raises(PermanentDataError):
         helper.bulkIndex("catalog", [{"_id": "A"}], False)
 
@@ -93,8 +109,8 @@ def test_permanent_opensearch_errors_are_not_retried(monkeypatch, serviceConfig)
         helper.bulkIndex("catalog", [{"_id": "A"}], False)
 
 
-def test_vector_validation_and_retryable_status(serviceConfig):
-    helper = OpenSearchHelper(serviceConfig, ClientFake())
+def test_vector_validation_and_retryable_status(serviceConfig, customLogger):
+    helper = OpenSearchHelper(serviceConfig, ClientFake(), customLogger)
     helper.validateVector([0.1, 0.2])
     with pytest.raises(PermanentDataError):
         helper.validateVector([0.1])
