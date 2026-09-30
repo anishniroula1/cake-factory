@@ -5,6 +5,12 @@ import uuid
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
+from doc2vec_service.contracts import (
+    NextQueueMessage,
+    RawSqsMessage,
+    SqsMessage,
+)
+
 
 class AwsSQS:
     def __init__(
@@ -18,7 +24,7 @@ class AwsSQS:
         visibility_timeout: int = 7_200,
         retry_wait_seconds: int = 5,
         sqs_client=None,
-    ):
+    ) -> None:
         """Create the small SQS wrapper used by the historical worker."""
 
         self._logger = logger
@@ -33,7 +39,7 @@ class AwsSQS:
         self._visibility_timeout = visibility_timeout
         self._retry_wait_seconds = retry_wait_seconds
 
-    def receive_messages(self) -> list:
+    def receive_messages(self) -> list[RawSqsMessage]:
         """Receive messages and return an empty list after a temporary failure."""
 
         try:
@@ -61,7 +67,7 @@ class AwsSQS:
             )
         return messages
 
-    def sqs_message_to_json(self, message: dict) -> dict:
+    def sqs_message_to_json(self, message: RawSqsMessage) -> SqsMessage:
         """Convert one raw SQS body and keep the fields needed for deletion."""
 
         if not message:
@@ -97,17 +103,17 @@ class AwsSQS:
             )
             return {}
 
-    def listen_sqs_message(self) -> list:
+    def listen_sqs_message(self) -> list[SqsMessage]:
         """Receive raw SQS messages and return only valid JSON messages."""
 
-        formattedMessages = []
+        formattedMessages: list[SqsMessage] = []
         for message in self.receive_messages():
             formatted = self.sqs_message_to_json(message)
             if formatted:
                 formattedMessages.append(formatted)
         return formattedMessages
 
-    def delete_messages(self, message: dict) -> bool:
+    def delete_messages(self, message: SqsMessage) -> bool:
         """Delete one successfully processed source message."""
 
         try:
@@ -130,7 +136,7 @@ class AwsSQS:
     def send_sqs_message(
         self,
         send_queue_url: str,
-        message_body,
+        message_body: str | NextQueueMessage,
         wait_time: int = 5,
         retries: int = 0,
         is_fifo: bool = True,

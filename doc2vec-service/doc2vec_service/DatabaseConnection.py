@@ -17,7 +17,7 @@ class DatabaseConnection:
         dynamic_credentials_file: str | None = None,
         application_name: str = "doc2vec_historical",
         logger=None,
-    ):
+    ) -> None:
         """Create the local database connection used by the standalone worker."""
 
         self.logger = prefect_logger or logger

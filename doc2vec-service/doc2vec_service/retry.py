@@ -1,18 +1,18 @@
 import time
 from collections.abc import Callable
-from typing import Any
 
+from doc2vec_service.contracts import Logger
 from doc2vec_service.errors import PermanentDataError, PermanentMessageError
 
 
-def retryOperation(
+def retryOperation[**Parameters, Result](
     label: str,
-    operation: Callable[..., Any],
-    *arguments: Any,
+    operation: Callable[Parameters, Result],
+    *arguments: Parameters.args,
     waitSeconds: int,
     maxAttempts: int = 3,
-    customLogger=None,
-) -> Any:
+    customLogger: Logger | None = None,
+) -> Result:
     """Try an operation up to three times unless another limit is passed.
 
     Input: maxAttempts=5 allows up to five total attempts. Extra values are

@@ -9,12 +9,12 @@ from doc2vec_service.config import Config
 
 
 class OpenSearchClient:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         """Save the OpenSearch and AWS settings."""
 
         self.config = config
 
-    def create_client(self):
+    def create_client(self) -> OpenSearch:
         """Create an AWS-signed OpenSearch client."""
 
         session = self._session()

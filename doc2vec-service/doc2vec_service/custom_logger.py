@@ -2,7 +2,7 @@ import logging
 
 
 class CustomLogger:
-    def __init__(self, name: str = "doc2vec_service", logger=None):
+    def __init__(self, name: str = "doc2vec_service", logger=None) -> None:
         """Create the default logger used until the team logger is supplied."""
 
         logging.basicConfig(
@@ -11,27 +11,27 @@ class CustomLogger:
         )
         self.logger = logger or logging.getLogger(name)
 
-    def debug(self, message: str):
+    def debug(self, message: str) -> None:
         """Write a debug message."""
 
         self.logger.debug(message)
 
-    def info(self, message: str):
+    def info(self, message: str) -> None:
         """Write an informational message."""
 
         self.logger.info(message)
 
-    def warning(self, message: str):
+    def warning(self, message: str) -> None:
         """Write a warning message."""
 
         self.logger.warning(message)
 
-    def error(self, message: str):
+    def error(self, message: str) -> None:
         """Write an error message."""
 
         self.logger.error(message)
 
-    def exception(self, message: str):
+    def exception(self, message: str) -> None:
         """Write an error message with the current exception details."""
 
         self.logger.exception(message)

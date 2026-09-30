@@ -1,20 +1,22 @@
+from doc2vec_service.contracts import SqsMessage, TspId
+from doc2vec_service.dependencies import Dependencies
 from doc2vec_service.errors import PermanentMessageError
 
 
 class SqsProcessor:
-    def __init__(self, dependencies):
+    def __init__(self, dependencies: Dependencies) -> None:
         """Keep the dependencies used to process one SQS message."""
 
         self.dependencies = dependencies
 
-    def run(self):
+    def run(self) -> None:
         """Read SQS and process one message at a time."""
 
         while True:
             for message in self.dependencies.awsSqs.listen_sqs_message():
                 self._processMessage(message)
 
-    def _processMessage(self, rawMessage: dict):
+    def _processMessage(self, rawMessage: SqsMessage) -> None:
         """Validate, process, and delete one successful SQS message."""
 
         if rawMessage.get("reason") != "HISTORICAL":
@@ -43,7 +45,7 @@ class SqsProcessor:
                 f"SQS message_id={rawMessage.get('MessageId')} was not deleted"
             )
 
-    def _read_tsp_id(self, message: dict):
+    def _read_tsp_id(self, message: SqsMessage) -> TspId:
         """Return tsp_id exactly as supplied, including a string value."""
 
         tsp_id = message.get("tsp_id")

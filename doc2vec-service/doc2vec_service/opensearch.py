@@ -1,8 +1,10 @@
 import threading
 import time
 
-from opensearchpy import TransportError, helpers
+from opensearchpy import OpenSearch, TransportError, helpers
 
+from doc2vec_service.config import Config
+from doc2vec_service.contracts import Logger, OpenSearchDocument
 from doc2vec_service.errors import PermanentDataError
 
 # These failures are normally temporary problems from OpenSearch, Lasso,
@@ -11,7 +13,12 @@ RETRYABLE_STATUS_CODES = {408, 424, 425, 429, 500, 502, 503, 504}
 
 
 class OpenSearchHelper:
-    def __init__(self, config, client, customLogger):
+    def __init__(
+        self,
+        config: Config,
+        client: OpenSearch,
+        customLogger: Logger,
+    ) -> None:
         """Keep the small amount of OpenSearch code shared by all handlers."""
 
         self.config = config
@@ -20,10 +27,10 @@ class OpenSearchHelper:
         self.cooldownLock = threading.Lock()
         self.embeddingCooldownUntil = 0.0
 
-    def existingIds(self, alias: str, documentIds: list) -> set:
+    def existingIds(self, alias: str, documentIds: list[str]) -> set[str]:
         """Return document IDs that already exist in an OpenSearch alias."""
 
-        existing = set()
+        existing: set[str] = set()
         uniqueIds = list(dict.fromkeys(documentIds))
         for offset in range(0, len(uniqueIds), self.config.opensearchBatchSize):
             batch = uniqueIds[offset : offset + self.config.opensearchBatchSize]
@@ -53,7 +60,12 @@ class OpenSearchHelper:
                     existing.add(str(document["_id"]))
         return existing
 
-    def bulkIndex(self, alias: str, documents: list, needsEmbedding: bool) -> int:
+    def bulkIndex(
+        self,
+        alias: str,
+        documents: list[OpenSearchDocument],
+        needsEmbedding: bool,
+    ) -> int:
         """Index documents and keep retrying temporary failed items.
 
         Every document must contain an internal `_id`. The helper removes that
@@ -117,7 +129,7 @@ class OpenSearchHelper:
 
         return len(documents)
 
-    def validateVector(self, vector: list):
+    def validateVector(self, vector: list[float]) -> None:
         """Reject a vector that does not match the 512-dimension mapping."""
 
         if len(vector) != self.config.vectorDimension:
@@ -126,7 +138,11 @@ class OpenSearchHelper:
                 f"expected {self.config.vectorDimension}"
             )
 
-    def _retryableDocuments(self, failures: list, documents: list) -> list:
+    def _retryableDocuments(
+        self,
+        failures: list,
+        documents: list[OpenSearchDocument],
+    ) -> list[OpenSearchDocument]:
         """Return only temporary failed documents from a bulk response."""
 
         failedIds = set()
@@ -152,7 +168,7 @@ class OpenSearchHelper:
         attempt: int,
         failedCount: int,
         needsEmbedding: bool,
-    ):
+    ) -> None:
         """Log one short error and apply the correct retry pause."""
 
         self.logger.warning(
@@ -169,7 +185,7 @@ class OpenSearchHelper:
             return
         time.sleep(self.config.retrySeconds)
 
-    def _waitForEmbeddingCooldown(self):
+    def _waitForEmbeddingCooldown(self) -> None:
         """Wait when another worker reports Lasso or Bedrock throttling."""
 
         while True:

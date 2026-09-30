@@ -2,6 +2,7 @@ from sqlalchemy.orm import sessionmaker
 
 from doc2vec_service.AwsSQS import AwsSQS
 from doc2vec_service.config import Config
+from doc2vec_service.contracts import DatabaseProvider, Logger
 from doc2vec_service.custom_logger import CustomLogger
 from doc2vec_service.DatabaseConnection import DatabaseConnection
 from doc2vec_service.handlers.historical_handler import HistoricalHandler
@@ -10,7 +11,11 @@ from doc2vec_service.opensearch import OpenSearchHelper
 
 
 class Dependencies:
-    def __init__(self, customLogger=None, databaseConnection=None):
+    def __init__(
+        self,
+        customLogger: Logger | None = None,
+        databaseConnection: DatabaseProvider | None = None,
+    ) -> None:
         """Create everything used while processing an SQS message."""
 
         self.logger = customLogger or CustomLogger("doc2vec_service")
@@ -45,12 +50,12 @@ class Dependencies:
             self.logger,
         )
 
-    def close(self):
+    def close(self) -> None:
         """Close the database connection pool when the process stops."""
 
         self.database.engine.dispose()
 
-    def _createDatabaseConnection(self):
+    def _createDatabaseConnection(self) -> DatabaseConnection:
         """Create the local connection from the configured database URL."""
 
         return DatabaseConnection(

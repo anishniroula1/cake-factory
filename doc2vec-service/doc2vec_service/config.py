@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Self
 
 from dotenv import load_dotenv
 from sqlalchemy.engine import make_url
@@ -57,7 +58,7 @@ class Config:
     sqsVisibilitySeconds: int
 
     @classmethod
-    def fromEnvironment(cls):
+    def fromEnvironment(cls) -> Self:
         """Build configuration from environment values."""
 
         databaseUrl = os.getenv("DATABASE_URL", "").strip()
@@ -102,7 +103,7 @@ class Config:
         config.validate()
         return config
 
-    def validate(self):
+    def validate(self) -> None:
         """Stop startup when a required value or safe limit is missing."""
 
         if not self.databaseUrl:

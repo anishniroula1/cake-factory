@@ -1,11 +1,24 @@
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from sqlalchemy import bindparam, func, select, update
+from sqlalchemy.orm import Session
 
+from doc2vec_service.AwsSQS import AwsSQS
 from doc2vec_service.batching import batches
+from doc2vec_service.config import Config
+from doc2vec_service.contracts import (
+    CatalogDocument,
+    HistoricalResult,
+    Logger,
+    NextQueueMessage,
+    OccurrenceDocument,
+    TspId,
+)
 from doc2vec_service.errors import PermanentDataError
 from doc2vec_service.models import Embedding, SentenceVector
+from doc2vec_service.opensearch import OpenSearchHelper
 from doc2vec_service.retry import retryOperation
 from doc2vec_service.text import sentenceKey
 
@@ -13,12 +26,12 @@ from doc2vec_service.text import sentenceKey
 class HistoricalHandler:
     def __init__(
         self,
-        config,
-        sessionFactory,
-        opensearch,
-        awsSqs,
-        customLogger,
-    ):
+        config: Config,
+        sessionFactory: Callable[[], Session],
+        opensearch: OpenSearchHelper,
+        awsSqs: AwsSQS,
+        customLogger: Logger,
+    ) -> None:
         """Keep everything required for one HISTORICAL message."""
 
         self.config = config
@@ -27,7 +40,7 @@ class HistoricalHandler:
         self.awsSqs = awsSqs
         self.logger = customLogger
 
-    def process(self, tsp_id) -> dict:
+    def process(self, tsp_id: TspId) -> HistoricalResult:
         """Index already-split historical sentences and send the next message."""
 
         total = retryOperation(
@@ -39,7 +52,7 @@ class HistoricalHandler:
         )
         if total == 0:
             raise PermanentDataError(
-                f"sentences_vector has no current rows for tsp_id {tsp_id}"
+                f"sentences_vector has no rows for tsp_id {tsp_id}"
             )
 
         self.logger.info(
@@ -74,6 +87,8 @@ class HistoricalHandler:
                     customLogger=self.logger,
                 )
 
+                # Split this database page into small jobs for the worker pool.
+                # Run every job in parallel and add its row count to the total.
                 workerBatches = list(batches(rows, self.config.workerBatchSize))
                 indexed += sum(executor.map(self._runWorker, workerBatches))
                 afterGlobalId = rows[-1].global_id
@@ -99,7 +114,7 @@ class HistoricalHandler:
             "indexedCount": indexed,
         }
 
-    def _count(self, tsp_id) -> int:
+    def _count(self, tsp_id: TspId) -> int:
         """Count every historical sentence row for one document."""
 
         with self.sessionFactory() as session:
@@ -108,9 +123,15 @@ class HistoricalHandler:
             )
             return int(session.scalar(statement) or 0)
 
-    def _loadPage(self, tsp_id, afterGlobalId: int) -> list:
+    def _loadPage(
+        self,
+        tsp_id: TspId,
+        afterGlobalId: int,
+    ) -> list[SentenceVector]:
         """Read the next historical page in stable global-ID order."""
 
+        # Load enough rows to give every worker one full batch. This keeps all
+        # workers busy without loading every sentence for the tsp_id at once.
         pageSize = (
             self.config.workerBatchSize * self.config.historicalWorkerCount
         )
@@ -126,7 +147,7 @@ class HistoricalHandler:
             )
             return list(session.scalars(statement))
 
-    def _saveKeys(self, rows: list):
+    def _saveKeys(self, rows: list[SentenceVector]) -> None:
         """Create sentence keys and update one historical database page."""
 
         currentTime = datetime.now(UTC)
@@ -155,7 +176,7 @@ class HistoricalHandler:
             session.execute(statement, updates)
             session.commit()
 
-    def _runWorker(self, rows: list) -> int:
+    def _runWorker(self, rows: list[SentenceVector]) -> int:
         """Retry one historical worker batch up to the configured limit."""
 
         label = f"HISTORICAL global_id {rows[0].global_id}-{rows[-1].global_id}"
@@ -167,7 +188,7 @@ class HistoricalHandler:
             customLogger=self.logger,
         )
 
-    def _processWorker(self, rows: list) -> int:
+    def _processWorker(self, rows: list[SentenceVector]) -> int:
         """Write missing catalog entries and every historical occurrence."""
 
         embeddings = self._loadEmbeddings([row.global_id for row in rows])
@@ -176,14 +197,14 @@ class HistoricalHandler:
             [row.sentence_key for row in rows],
         )
 
-        withVectors = []
-        needVectors = []
-        seenKeys = set()
+        withVectors: list[CatalogDocument] = []
+        needVectors: list[CatalogDocument] = []
+        seenKeys: set[str] = set()
         for row in rows:
             if row.sentence_key in existingKeys or row.sentence_key in seenKeys:
                 continue
             seenKeys.add(row.sentence_key)
-            document = {
+            document: CatalogDocument = {
                 "_id": row.sentence_key,
                 "sentenceKey": row.sentence_key,
                 "sentenceContent": row.sentence_content,
@@ -211,7 +232,7 @@ class HistoricalHandler:
             needsEmbedding=True,
         )
 
-        occurrences = []
+        occurrences: list[OccurrenceDocument] = []
         for row in rows:
             occurrences.append(
                 {
@@ -239,7 +260,7 @@ class HistoricalHandler:
         )
         return len(rows)
 
-    def _loadEmbeddings(self, globalIds: list) -> dict:
+    def _loadEmbeddings(self, globalIds: list[int]) -> dict[int, list[float]]:
         """Read saved Titan type-2 vectors for one worker batch."""
 
         with self.sessionFactory() as session:
@@ -253,15 +274,19 @@ class HistoricalHandler:
                 if row.embedding
             }
 
-    def _publish(self, tsp_id):
+    def _publish(self, tsp_id: TspId) -> None:
         """Send the completed historical document to Sentence Similarity."""
 
         if not self.config.nextQueueUrl:
             return
 
+        message: NextQueueMessage = {
+            "tsp_id": tsp_id,
+            "reason": "HISTORICAL",
+        }
         sent = self.awsSqs.send_sqs_message(
             send_queue_url=self.config.nextQueueUrl,
-            message_body={"tsp_id": tsp_id, "reason": "HISTORICAL"},
+            message_body=message,
             is_fifo=self.config.nextQueueUrl.endswith(".fifo"),
         )
         if not sent:

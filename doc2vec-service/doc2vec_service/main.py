@@ -1,8 +1,12 @@
+from doc2vec_service.contracts import DatabaseProvider, Logger
 from doc2vec_service.dependencies import Dependencies
 from doc2vec_service.sqs_processor import SqsProcessor
 
 
-def run(customLogger=None, databaseConnection=None):
+def run(
+    customLogger: Logger | None = None,
+    databaseConnection: DatabaseProvider | None = None,
+) -> None:
     """Build one dependency container and start the SQS processor."""
 
     dependencies = Dependencies(customLogger, databaseConnection)

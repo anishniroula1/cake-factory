@@ -44,4 +44,4 @@ class Embedding(Base):
 
     global_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     embedding_type: Mapped[int] = mapped_column(Integer, primary_key=True)
-    embedding: Mapped[list] = mapped_column(ARRAY(Float))
+    embedding: Mapped[list[float]] = mapped_column(ARRAY(Float))

@@ -41,6 +41,15 @@ that reason is logged and is not sent into the historical handler. The worker
 keeps `tsp_id` exactly as received, so both a number and a string are valid. It
 does not accept the alternate name `tspId` in an SQS message.
 
+The main code types are defined in `contracts.py`. The processing flow is:
+
+```text
+SqsMessage -> TspId -> list[SentenceVector] -> HistoricalResult
+```
+
+OpenSearch catalog and occurrence documents also have separate named types, so
+the expected fields are visible before a document is sent for bulk indexing.
+
 ## Historical flow
 
 1. Count all `sentences_vector` rows for the `tsp_id`.
