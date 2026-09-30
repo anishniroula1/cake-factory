@@ -104,6 +104,12 @@ make dev
 `make dev` runs the historical worker in Docker. `make local` runs it without
 Docker. There is no HTTP port, health endpoint, or Swagger page.
 
+The main tests start at `main.run()` and execute the real SQS processor and
+historical handler. Only database sessions, OpenSearch, and SQS transport are
+replaced at the external boundary. OpenSearch retry behavior and sentence-key
+generation keep small focused tests because those rules are easier to verify
+separately.
+
 ## Portable copy
 
 Copy `generate_project.py` to another machine and run:

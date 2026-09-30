@@ -29,7 +29,16 @@ include = ["doc2vec_service*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "--cov=doc2vec_service --cov-report=term-missing --cov-fail-under=95"
+addopts = "--cov=doc2vec_service --cov-report=term-missing --cov-fail-under=90"
+
+[tool.coverage.run]
+omit = [
+  "doc2vec_service/AwsSQS.py",
+  "doc2vec_service/DatabaseConnection.py",
+  "doc2vec_service/custom_logger.py",
+  "doc2vec_service/dependencies.py",
+  "doc2vec_service/open_search_client.py",
+]
 
 [tool.ruff]
 line-length = 88

@@ -1,7 +1,5 @@
 from typing import Literal, NotRequired, Protocol, TypedDict
 
-from sqlalchemy.engine import Engine
-
 type TspId = int | str
 
 
@@ -76,7 +74,3 @@ class Logger(Protocol):
     def error(self, message: str) -> None: ...
 
     def exception(self, message: str) -> None: ...
-
-
-class DatabaseProvider(Protocol):
-    engine: Engine

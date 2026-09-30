@@ -2,7 +2,7 @@ from sqlalchemy.orm import sessionmaker
 
 from doc2vec_service.AwsSQS import AwsSQS
 from doc2vec_service.config import Config
-from doc2vec_service.contracts import DatabaseProvider, Logger
+from doc2vec_service.contracts import Logger
 from doc2vec_service.custom_logger import CustomLogger
 from doc2vec_service.DatabaseConnection import DatabaseConnection
 from doc2vec_service.handlers.historical_handler import HistoricalHandler
@@ -14,7 +14,7 @@ class Dependencies:
     def __init__(
         self,
         customLogger: Logger | None = None,
-        databaseConnection: DatabaseProvider | None = None,
+        databaseConnection: DatabaseConnection | None = None,
     ) -> None:
         """Create everything used while processing an SQS message."""
 
