@@ -964,17 +964,12 @@ compared safely.
 Given the Flyway migration runs
 When the migration completes
 Then titan_matches is created with the same occurrence-level columns, JSONB match-list shape, constraints, and lookup indexes as the existing matches table
-And the primary lookup for one sentence uses global_id
-And document lookup is supported by tsp_id and analysis_group
-And application lookup is supported by application_id and analysis_group
 ```
 
 ```gherkin
-Given the Flyway migration runs
+Given the Flyway migration runs (Might not need to create new table, we might be able to use the existing one)
 When the migration completes
-Then titan_case_similarity is created with the same columns, constraints, and lookup indexes as the existing Case Similarity result table
-And no existing match or Case Similarity table is changed
-And the migration can be rolled back without removing existing-flow data
+Then titan_case_similarity is created with the same columns, constraints, and lookup indexes as the existing Case Similarity Embedding table
 ```
 
 ## 20. Sentence Similarity | Classify tsp_id sentences with tracer workers
@@ -1004,7 +999,6 @@ Then the worker determines isNonMatcher, isTracer, and isFormLanguage
 And the sentence row in sentences_vector is updated using global_id
 And the sentence_occurrences document with the same globalId is updated with isNonMatcher, isTracer, and isFormLanguage
 And a sentence marked as a non-matcher is not sent to normal sentence similarity matching
-And an eligible sentence is made available for Story 21
 ```
 
 ```gherkin
@@ -1012,10 +1006,9 @@ Given a tracer lookup, sentences_vector update, or sentence_occurrences update f
 When the worker retries the sentence
 Then the same sentence is processed again without creating a duplicate
 And both saved copies contain the same classification after the retry succeeds
-And the received SQS message is not deleted while any sentence remains unclassified
 ```
 
-## 21. Sentence Similarity | Search eligible sentences and save Titan matches
+## 21. Sentence Similarity | Search eligible sentences and save Titan matches (Assign this to Anish, I already have the code for this.)
 
 ### Value
 
@@ -1100,7 +1093,7 @@ Then they can be compared using application_id, a_number, and analysis_group
 And the Titan comparison write does not change the existing Kafka or downstream behavior
 ```
 
-## 24. Doc2Vec | Ingest historical and live sentences into OpenSearch
+## 24. Doc2Vec | Ingest historical and live sentences into OpenSearch (This is already assign to Anish, do not add to the Jira again.)
 
 ### Value
 
