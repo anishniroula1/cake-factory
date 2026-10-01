@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
-COPY doc2vec_service ./doc2vec_service
+COPY doc2vec_completed ./doc2vec_completed
 RUN pip install --no-cache-dir .
 
-CMD ["python", "-m", "doc2vec_service.main"]
+CMD ["python", "-m", "doc2vec_completed.opensearch.main"]

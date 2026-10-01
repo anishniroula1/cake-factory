@@ -13,9 +13,9 @@ class ScalarRows:
 
 
 class SessionFake:
-    def __init__(self, rows=None, scalarValue=0, document=None):
+    def __init__(self, rows=None, scalar_value=0, document=None):
         self.rows = rows or []
-        self.scalarValue = scalarValue
+        self.scalar_value = scalar_value
         self.document = document
         self.executed = []
         self.commits = 0
@@ -27,7 +27,7 @@ class SessionFake:
         pass
 
     def scalar(self, statement):
-        return self.scalarValue
+        return self.scalar_value
 
     def scalars(self, statement):
         return ScalarRows(self.rows)
@@ -53,20 +53,20 @@ class SessionSequence:
 
 
 class OpenSearchFake:
-    def __init__(self, existing=None, vectorDimension=2):
+    def __init__(self, existing=None, vector_dimension=2):
         self.existing = existing or set()
-        self.vectorDimension = vectorDimension
-        self.bulkCalls = []
+        self.vector_dimension = vector_dimension
+        self.bulk_calls = []
 
-    def existingIds(self, alias, documentIds):
-        return set(documentIds) & self.existing
+    def existing_ids(self, alias, document_ids):
+        return set(document_ids) & self.existing
 
-    def bulkIndex(self, alias, documents, needsEmbedding):
-        self.bulkCalls.append((alias, documents, needsEmbedding))
+    def bulk_index(self, alias, documents, needs_embedding):
+        self.bulk_calls.append((alias, documents, needs_embedding))
         return len(documents)
 
-    def validateVector(self, vector):
-        if len(vector) != self.vectorDimension:
+    def validate_vector(self, vector):
+        if len(vector) != self.vector_dimension:
             raise ValueError("wrong vector size")
 
 
@@ -75,8 +75,8 @@ class SqsFake:
         self.messages = messages or []
         self.sent = []
         self.deleted = []
-        self.sendResult = True
-        self.deleteResult = True
+        self.send_result = True
+        self.delete_result = True
 
     def listen_sqs_message(self):
         messages = self.messages
@@ -85,32 +85,32 @@ class SqsFake:
 
     def send_sqs_message(self, **values):
         self.sent.append(values)
-        return self.sendResult
+        return self.send_result
 
     def delete_messages(self, message):
         self.deleted.append(message)
-        return self.deleteResult
+        return self.delete_result
 
 
 class LoggerFake:
     def __init__(self):
-        self.debugMessages = []
-        self.infoMessages = []
-        self.warningMessages = []
-        self.errorMessages = []
-        self.exceptionMessages = []
+        self.debug_messages = []
+        self.info_messages = []
+        self.warning_messages = []
+        self.error_messages = []
+        self.exception_messages = []
 
     def debug(self, message):
-        self.debugMessages.append(message)
+        self.debug_messages.append(message)
 
     def info(self, message):
-        self.infoMessages.append(message)
+        self.info_messages.append(message)
 
     def warning(self, message):
-        self.warningMessages.append(message)
+        self.warning_messages.append(message)
 
     def error(self, message):
-        self.errorMessages.append(message)
+        self.error_messages.append(message)
 
     def exception(self, message):
-        self.exceptionMessages.append(message)
+        self.exception_messages.append(message)

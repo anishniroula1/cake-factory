@@ -30,8 +30,8 @@ class NextQueueMessage(TypedDict):
 class HistoricalResult(TypedDict):
     reason: Literal["HISTORICAL"]
     tsp_id: TspId
-    sourceCount: int
-    indexedCount: int
+    source_count: int
+    indexed_count: int
 
 
 class CatalogDocument(TypedDict):

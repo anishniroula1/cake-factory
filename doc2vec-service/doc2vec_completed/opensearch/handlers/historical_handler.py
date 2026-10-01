@@ -5,10 +5,10 @@ from datetime import UTC, datetime
 from sqlalchemy import bindparam, func, select, update
 from sqlalchemy.orm import Session
 
-from doc2vec_service.AwsSQS import AwsSQS
-from doc2vec_service.batching import batches
-from doc2vec_service.config import Config
-from doc2vec_service.contracts import (
+from doc2vec_completed.opensearch.AwsSQS import AwsSQS
+from doc2vec_completed.opensearch.batching import batches
+from doc2vec_completed.opensearch.config import Config
+from doc2vec_completed.opensearch.contracts import (
     CatalogDocument,
     HistoricalResult,
     Logger,
@@ -16,194 +16,192 @@ from doc2vec_service.contracts import (
     OccurrenceDocument,
     TspId,
 )
-from doc2vec_service.errors import PermanentDataError
-from doc2vec_service.models import Embedding, SentenceVector
-from doc2vec_service.opensearch import OpenSearchHelper
-from doc2vec_service.retry import retryOperation
-from doc2vec_service.text import sentenceKey
+from doc2vec_completed.opensearch.errors import PermanentDataError
+from doc2vec_completed.opensearch.models import Embeddings, SentencesVector
+from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
+from doc2vec_completed.opensearch.retry import retry_operation
+from doc2vec_completed.opensearch.text import sentence_key
 
 
 class HistoricalHandler:
     def __init__(
         self,
         config: Config,
-        sessionFactory: Callable[[], Session],
+        session_factory: Callable[[], Session],
         opensearch: OpenSearchHelper,
-        awsSqs: AwsSQS,
-        customLogger: Logger,
+        aws_sqs: AwsSQS,
+        custom_logger: Logger,
     ) -> None:
         """Keep everything required for one HISTORICAL message."""
 
         self.config = config
-        self.sessionFactory = sessionFactory
+        self.session_factory = session_factory
         self.opensearch = opensearch
-        self.awsSqs = awsSqs
-        self.logger = customLogger
+        self.aws_sqs = aws_sqs
+        self.logger = custom_logger
 
     def process(self, tsp_id: TspId) -> HistoricalResult:
         """Index already-split historical sentences and send the next message."""
 
-        total = retryOperation(
+        total = retry_operation(
             f"count HISTORICAL tsp_id {tsp_id}",
             self._count,
             tsp_id,
-            waitSeconds=self.config.retrySeconds,
-            customLogger=self.logger,
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
         )
         if total == 0:
             raise PermanentDataError(
                 f"sentences_vector has no rows for tsp_id {tsp_id}"
             )
 
-        self.logger.info(
-            f"HISTORICAL tsp_id={tsp_id} contains {total} sentence(s)"
-        )
+        self.logger.info(f"HISTORICAL tsp_id={tsp_id} contains {total} sentence(s)")
         indexed = 0
-        afterGlobalId = 0
+        after_global_id = 0
 
         with ThreadPoolExecutor(
-            max_workers=self.config.historicalWorkerCount,
+            max_workers=self.config.thread_worker_count,
             thread_name_prefix="historical-sentence",
         ) as executor:
             while True:
-                rows = retryOperation(
+                rows = retry_operation(
                     f"load HISTORICAL tsp_id {tsp_id}",
-                    self._loadPage,
+                    self._load_page,
                     tsp_id,
-                    afterGlobalId,
-                    waitSeconds=self.config.retrySeconds,
-                    customLogger=self.logger,
+                    after_global_id,
+                    wait_seconds=self.config.retry_seconds,
+                    custom_logger=self.logger,
                 )
                 if not rows:
                     break
 
                 # Historical rows already contain split sentences. Only create
                 # the stable sentence keys that the two OpenSearch indexes use.
-                retryOperation(
+                retry_operation(
                     f"save HISTORICAL tsp_id {tsp_id} sentence keys",
-                    self._saveKeys,
+                    self._save_keys,
                     rows,
-                    waitSeconds=self.config.retrySeconds,
-                    customLogger=self.logger,
+                    wait_seconds=self.config.retry_seconds,
+                    custom_logger=self.logger,
                 )
 
                 # Split this database page into small jobs for the worker pool.
                 # Run every job in parallel and add its row count to the total.
-                workerBatches = list(batches(rows, self.config.workerBatchSize))
-                indexed += sum(executor.map(self._runWorker, workerBatches))
-                afterGlobalId = rows[-1].global_id
+                worker_batches = list(batches(rows, self.config.worker_batch_size))
+                indexed += sum(executor.map(self._run_worker, worker_batches))
+                after_global_id = rows[-1].global_id
                 self.logger.info(
                     f"HISTORICAL tsp_id={tsp_id} processed through "
-                    f"global_id={afterGlobalId}"
+                    f"global_id={after_global_id}"
                 )
 
         # Publish only after every historical sentence is safely indexed. The
         # SQS processor deletes the source message after this method returns.
-        retryOperation(
+        retry_operation(
             f"publish HISTORICAL tsp_id {tsp_id}",
             self._publish,
             tsp_id,
-            waitSeconds=self.config.retrySeconds,
-            customLogger=self.logger,
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
         )
 
         return {
             "reason": "HISTORICAL",
             "tsp_id": tsp_id,
-            "sourceCount": total,
-            "indexedCount": indexed,
+            "source_count": total,
+            "indexed_count": indexed,
         }
 
     def _count(self, tsp_id: TspId) -> int:
         """Count every historical sentence row for one document."""
 
-        with self.sessionFactory() as session:
-            statement = select(func.count()).select_from(SentenceVector).where(
-                SentenceVector.tsp_id == tsp_id
+        with self.session_factory() as session:
+            statement = (
+                select(func.count())
+                .select_from(SentencesVector)
+                .where(SentencesVector.tsp_id == tsp_id)
             )
             return int(session.scalar(statement) or 0)
 
-    def _loadPage(
+    def _load_page(
         self,
         tsp_id: TspId,
-        afterGlobalId: int,
-    ) -> list[SentenceVector]:
+        after_global_id: int,
+    ) -> list[SentencesVector]:
         """Read the next historical page in stable global-ID order."""
 
         # Load enough rows to give every worker one full batch. This keeps all
         # workers busy without loading every sentence for the tsp_id at once.
-        pageSize = (
-            self.config.workerBatchSize * self.config.historicalWorkerCount
-        )
-        with self.sessionFactory() as session:
+        page_size = self.config.worker_batch_size * self.config.thread_worker_count
+        with self.session_factory() as session:
             statement = (
-                select(SentenceVector)
+                select(SentencesVector)
                 .where(
-                    SentenceVector.tsp_id == tsp_id,
-                    SentenceVector.global_id > afterGlobalId,
+                    SentencesVector.tsp_id == tsp_id,
+                    SentencesVector.global_id > after_global_id,
                 )
-                .order_by(SentenceVector.global_id)
-                .limit(pageSize)
+                .order_by(SentencesVector.global_id)
+                .limit(page_size)
             )
             return list(session.scalars(statement))
 
-    def _saveKeys(self, rows: list[SentenceVector]) -> None:
+    def _save_keys(self, rows: list[SentencesVector]) -> None:
         """Create sentence keys and update one historical database page."""
 
-        currentTime = datetime.now(UTC)
+        current_time = datetime.now(UTC)
         updates = []
         for row in rows:
-            row.sentence_key = sentenceKey(row.sentence_content)
-            row.updated_at = currentTime
+            row.sentence_key = sentence_key(row.sentence_content)
+            row.updated_at = current_time
             updates.append(
                 {
-                    "recordGlobalId": row.global_id,
-                    "recordSentenceKey": row.sentence_key,
-                    "recordUpdatedAt": currentTime,
+                    "record_global_id": row.global_id,
+                    "record_sentence_key": row.sentence_key,
+                    "record_updated_at": current_time,
                 }
             )
 
-        table = SentenceVector.__table__
+        table = SentencesVector.__table__
         statement = (
             update(table)
-            .where(table.c.global_id == bindparam("recordGlobalId"))
+            .where(table.c.global_id == bindparam("record_global_id"))
             .values(
-                sentence_key=bindparam("recordSentenceKey"),
-                updated_at=bindparam("recordUpdatedAt"),
+                sentence_key=bindparam("record_sentence_key"),
+                updated_at=bindparam("record_updated_at"),
             )
         )
-        with self.sessionFactory() as session:
+        with self.session_factory() as session:
             session.execute(statement, updates)
             session.commit()
 
-    def _runWorker(self, rows: list[SentenceVector]) -> int:
+    def _run_worker(self, rows: list[SentencesVector]) -> int:
         """Retry one historical worker batch up to the configured limit."""
 
         label = f"HISTORICAL global_id {rows[0].global_id}-{rows[-1].global_id}"
-        return retryOperation(
+        return retry_operation(
             label,
-            self._processWorker,
+            self._process_worker,
             rows,
-            waitSeconds=self.config.retrySeconds,
-            customLogger=self.logger,
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
         )
 
-    def _processWorker(self, rows: list[SentenceVector]) -> int:
+    def _process_worker(self, rows: list[SentencesVector]) -> int:
         """Write missing catalog entries and every historical occurrence."""
 
-        embeddings = self._loadEmbeddings([row.global_id for row in rows])
-        existingKeys = self.opensearch.existingIds(
-            self.config.catalogAlias,
+        embeddings = self._load_embeddings([row.global_id for row in rows])
+        existing_keys = self.opensearch.existing_ids(
+            self.config.catalog_alias,
             [row.sentence_key for row in rows],
         )
 
-        withVectors: list[CatalogDocument] = []
-        needVectors: list[CatalogDocument] = []
-        seenKeys: set[str] = set()
+        with_vectors: list[CatalogDocument] = []
+        need_vectors: list[CatalogDocument] = []
+        seen_keys: set[str] = set()
         for row in rows:
-            if row.sentence_key in existingKeys or row.sentence_key in seenKeys:
+            if row.sentence_key in existing_keys or row.sentence_key in seen_keys:
                 continue
-            seenKeys.add(row.sentence_key)
+            seen_keys.add(row.sentence_key)
             document: CatalogDocument = {
                 "_id": row.sentence_key,
                 "sentenceKey": row.sentence_key,
@@ -213,23 +211,23 @@ class HistoricalHandler:
             }
             vector = embeddings.get(row.global_id)
             if vector is None:
-                needVectors.append(document)
+                need_vectors.append(document)
                 continue
-            self.opensearch.validateVector(vector)
+            self.opensearch.validate_vector(vector)
             document["sentenceContentVector"] = vector
-            withVectors.append(document)
+            with_vectors.append(document)
 
         # Documents with a saved Titan vector bypass the embedding pipeline.
         # Only documents without a saved vector call the Bedrock pipeline.
-        self.opensearch.bulkIndex(
-            self.config.catalogAlias,
-            withVectors,
-            needsEmbedding=False,
+        self.opensearch.bulk_index(
+            self.config.catalog_alias,
+            with_vectors,
+            needs_embedding=False,
         )
-        self.opensearch.bulkIndex(
-            self.config.catalogAlias,
-            needVectors,
-            needsEmbedding=True,
+        self.opensearch.bulk_index(
+            self.config.catalog_alias,
+            need_vectors,
+            needs_embedding=True,
         )
 
         occurrences: list[OccurrenceDocument] = []
@@ -253,43 +251,42 @@ class HistoricalHandler:
                     "updatedAt": row.updated_at.isoformat(),
                 }
             )
-        self.opensearch.bulkIndex(
-            self.config.occurrenceAlias,
+        self.opensearch.bulk_index(
+            self.config.occurrence_alias,
             occurrences,
-            needsEmbedding=False,
+            needs_embedding=False,
         )
         return len(rows)
 
-    def _loadEmbeddings(self, globalIds: list[int]) -> dict[int, list[float]]:
+    def _load_embeddings(self, global_ids: list[int]) -> dict[int, list[float]]:
         """Read saved Titan type-2 vectors for one worker batch."""
 
-        with self.sessionFactory() as session:
-            statement = select(Embedding).where(
-                Embedding.global_id.in_(globalIds),
-                Embedding.embedding_type == self.config.titanEmbeddingType,
+        with self.session_factory() as session:
+            statement = select(Embeddings).where(
+                Embeddings.global_id.in_(global_ids),
+                Embeddings.embedding_type == self.config.titan_embedding_type,
             )
             return {
-                row.global_id: list(row.embedding)
+                row.global_id: list(row.embeddings)
                 for row in session.scalars(statement)
-                if row.embedding
+                if row.embeddings
             }
 
     def _publish(self, tsp_id: TspId) -> None:
         """Send the completed historical document to Sentence Similarity."""
 
-        if not self.config.nextQueueUrl:
+        queue_url = self.config.sentence_similarity_backfill_queue_url
+        if not queue_url:
             return
 
         message: NextQueueMessage = {
             "tsp_id": tsp_id,
             "reason": "HISTORICAL",
         }
-        sent = self.awsSqs.send_sqs_message(
-            send_queue_url=self.config.nextQueueUrl,
+        sent = self.aws_sqs.send_sqs_message(
+            send_queue_url=queue_url,
             message_body=message,
-            is_fifo=self.config.nextQueueUrl.endswith(".fifo"),
+            is_fifo=queue_url.endswith(".fifo"),
         )
         if not sent:
-            raise RuntimeError(
-                f"failed to send tsp_id {tsp_id} to Sentence Similarity"
-            )
+            raise RuntimeError(f"failed to send tsp_id {tsp_id} to Sentence Similarity")

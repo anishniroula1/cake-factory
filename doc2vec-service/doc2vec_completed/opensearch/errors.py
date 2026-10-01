@@ -4,4 +4,3 @@ class PermanentMessageError(ValueError):
 
 class PermanentDataError(ValueError):
     """A stored record is invalid and should not retry forever."""
-

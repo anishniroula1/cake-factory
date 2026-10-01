@@ -6,12 +6,17 @@ catalog and occurrence aliases in AWS OpenSearch.
 
 It is not an API or FastAPI application. It processes one SQS message at a
 time, and all historical processing logic stays inside
-`handlers/historical_handler.py`.
+`doc2vec_completed/opensearch/handlers/historical_handler.py`.
+
+All OpenSearch flow code lives under `doc2vec_completed/opensearch`. All tests
+for this flow live under `tests/opensearch`.
 
 `dependencies.py` creates the configuration, database connection, OpenSearch
 helper, SQS helper, and historical handler. The SQS processor receives only
-this one dependency object. `main.run(customLogger=...)` can still receive the
-team's logger, while `custom_logger.py` remains the standalone default.
+this one dependency object.
+`doc2vec_completed.opensearch.main.run_opensearch_flow(custom_logger=...)` can
+still receive the team's logger, while `custom_logger.py` remains the
+standalone default.
 
 `AwsSQS.py` mirrors the shared SQS library used by the application. It creates
 the AWS client from the pod credentials, receives and formats messages, keeps
@@ -22,11 +27,22 @@ operations are intentionally not included.
 
 `DatabaseConnection.py` mirrors the shared database library's connection-pool
 interface. It owns the SQLAlchemy engine, pool size, overflow, recycle time,
-pre-ping check, and PostgreSQL `application_name`. The standalone project
-creates it from `DATABASE_URL`. Production can pass the real shared object with
-`main.run(databaseConnection=sharedConnection)`; `main` only requires its
-`engine`. This lets the shared library keep responsibility for Vault or other
-dynamic credentials.
+pre-ping check, and PostgreSQL `application_name`. `VaultSecrets.py` reads the
+mounted YAML file identified by `VAULT_YAML_PATH`. Production can still pass
+the real shared database object by calling `run_opensearch_flow` with
+`database_connection=shared_connection`.
+
+The Vault YAML file provides these values:
+
+```yaml
+pgUser: database-user
+pgPassword: database-password
+pgHost: database-host
+pgDatabase: database-name
+pgPort: 5432
+awsReceiveSqsQueueEndpoint: doc2vec-queue-url
+awsSqsSendEventQueueEndpoint: state-machine-queue-url
+```
 
 ## Message
 
@@ -44,7 +60,7 @@ does not accept the alternate name `tspId` in an SQS message.
 The main code types are defined in `contracts.py`. The processing flow is:
 
 ```text
-SqsMessage -> TspId -> list[SentenceVector] -> HistoricalResult
+SqsMessage -> TspId -> list[SentencesVector] -> HistoricalResult
 ```
 
 OpenSearch catalog and occurrence documents also have separate named types, so
@@ -93,8 +109,8 @@ with `pipeline=_none`, which avoids another Bedrock call.
 
 ## Run
 
-Copy `.env.example` to `.env` and fill in the database, AWS, OpenSearch, and
-SQS values.
+Copy `.env.example` to `.env`, set `VAULT_YAML_PATH`, and fill in the AWS,
+OpenSearch, and Sentence Similarity queue values.
 
 ```bash
 make test
@@ -104,11 +120,11 @@ make dev
 `make dev` runs the historical worker in Docker. `make local` runs it without
 Docker. There is no HTTP port, health endpoint, or Swagger page.
 
-The main tests start at `main.run()` and execute the real SQS processor and
-historical handler. Only database sessions, OpenSearch, and SQS transport are
-replaced at the external boundary. OpenSearch retry behavior and sentence-key
-generation keep small focused tests because those rules are easier to verify
-separately.
+The main tests start at `main.run_opensearch_flow()` and execute the real SQS
+processor and historical handler. Only database sessions, OpenSearch, and SQS
+transport are replaced at the external boundary. OpenSearch retry behavior and
+sentence-key generation keep small focused tests because those rules are
+easier to verify separately.
 
 ## Portable copy
 
@@ -118,5 +134,5 @@ Copy `generate_project.py` to another machine and run:
 python3 generate_project.py /path/to/parent-folder
 ```
 
-It creates `/path/to/parent-folder/doc2vec-service` with the complete
+It creates `/path/to/parent-folder/doc2vec-completed` with the complete
 historical-only project and a safe `.env` copied from `.env.example`.

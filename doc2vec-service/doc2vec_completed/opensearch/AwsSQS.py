@@ -5,7 +5,7 @@ import uuid
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-from doc2vec_service.contracts import (
+from doc2vec_completed.opensearch.contracts import (
     NextQueueMessage,
     RawSqsMessage,
     SqsMessage,
@@ -62,8 +62,7 @@ class AwsSQS:
         messages = response.get("Messages", [])
         if messages:
             self._logger.info(
-                f"Received {len(messages)} message(s) from "
-                f"SQS queue {self._queue_url}"
+                f"Received {len(messages)} message(s) from SQS queue {self._queue_url}"
             )
         return messages
 
@@ -74,27 +73,27 @@ class AwsSQS:
             return {}
 
         try:
-            messageObject = json.loads(message.get("Body", ""))
+            message_object = json.loads(message.get("Body", ""))
             # Some publishers encode the JSON body twice. Decode that second
             # layer without stripping valid slashes or quotation marks.
-            if isinstance(messageObject, str):
-                messageObject = json.loads(messageObject)
-            if not isinstance(messageObject, dict):
+            if isinstance(message_object, str):
+                message_object = json.loads(message_object)
+            if not isinstance(message_object, dict):
                 raise TypeError("SQS body must be a JSON object")
 
-            receiveCount = message.get("Attributes", {}).get(
+            receive_count = message.get("Attributes", {}).get(
                 "ApproximateReceiveCount",
                 "0",
             )
-            messageId = message.get("MessageId")
+            message_id = message.get("MessageId")
             self._logger.info(
-                f"SQS message_id={messageId} receive_count={receiveCount}"
+                f"SQS message_id={message_id} receive_count={receive_count}"
             )
             return {
-                **messageObject,
-                "MessageId": messageId,
+                **message_object,
+                "MessageId": message_id,
                 "ReceiptHandle": message.get("ReceiptHandle"),
-                "message_receive_count": int(receiveCount),
+                "message_receive_count": int(receive_count),
             }
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             self._logger.error(
@@ -106,12 +105,12 @@ class AwsSQS:
     def listen_sqs_message(self) -> list[SqsMessage]:
         """Receive raw SQS messages and return only valid JSON messages."""
 
-        formattedMessages: list[SqsMessage] = []
+        formatted_messages: list[SqsMessage] = []
         for message in self.receive_messages():
             formatted = self.sqs_message_to_json(message)
             if formatted:
-                formattedMessages.append(formatted)
-        return formattedMessages
+                formatted_messages.append(formatted)
+        return formatted_messages
 
     def delete_messages(self, message: SqsMessage) -> bool:
         """Delete one successfully processed source message."""
@@ -144,9 +143,7 @@ class AwsSQS:
         """Send one message and retry the failed send when requested."""
 
         body = (
-            message_body
-            if isinstance(message_body, str)
-            else json.dumps(message_body)
+            message_body if isinstance(message_body, str) else json.dumps(message_body)
         )
         for attempt in range(retries + 1):
             try:
@@ -162,26 +159,19 @@ class AwsSQS:
                     ).hex
 
                 response = self._sqs.send_message(**parameters)
-                status = response.get("ResponseMetadata", {}).get(
-                    "HTTPStatusCode"
-                )
+                status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
                 if status == 200:
-                    self._logger.info(
-                        f"Sent SQS message to queue {send_queue_url}"
-                    )
+                    self._logger.info(f"Sent SQS message to queue {send_queue_url}")
                     return True
-                errorMessage = f"SQS returned HTTP status {status}"
+                error_message = f"SQS returned HTTP status {status}"
             except (BotoCoreError, ClientError) as error:
-                errorMessage = str(error)[:500]
+                error_message = str(error)[:500]
 
             self._logger.error(
-                f"Failed to send SQS message to queue {send_queue_url}: "
-                f"{errorMessage}"
+                f"Failed to send SQS message to queue {send_queue_url}: {error_message}"
             )
             if attempt < retries:
-                self._logger.info(
-                    f"Retrying SQS send to queue {send_queue_url}"
-                )
+                self._logger.info(f"Retrying SQS send to queue {send_queue_url}")
                 time.sleep(wait_time)
 
         return False

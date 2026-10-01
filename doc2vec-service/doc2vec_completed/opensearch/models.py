@@ -16,7 +16,7 @@ class Base(DeclarativeBase):
     pass
 
 
-class SentenceVector(Base):
+class SentencesVector(Base):
     __tablename__ = "sentences_vector"
 
     global_id: Mapped[int] = mapped_column(
@@ -39,9 +39,9 @@ class SentenceVector(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-class Embedding(Base):
+class Embeddings(Base):
     __tablename__ = "embeddings"
 
     global_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     embedding_type: Mapped[int] = mapped_column(Integer, primary_key=True)
-    embedding: Mapped[list[float]] = mapped_column(ARRAY(Float))
+    embeddings: Mapped[list[float]] = mapped_column(ARRAY(Float))

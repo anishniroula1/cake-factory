@@ -11,14 +11,14 @@ setup:
 	uv sync --extra dev
 
 test: setup
-	uv run ruff check doc2vec_service tests generate_project.py decode_project.py
+	uv run ruff check doc2vec_completed tests generate_project.py decode_project.py
 	uv run pytest -q
 
 dev:
 	docker compose up --build
 
 local: setup
-	uv run python -m doc2vec_service.main
+	uv run python -m doc2vec_completed.opensearch.main
 
 down:
 	docker compose down

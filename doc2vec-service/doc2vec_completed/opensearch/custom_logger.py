@@ -2,7 +2,7 @@ import logging
 
 
 class CustomLogger:
-    def __init__(self, name: str = "doc2vec_service", logger=None) -> None:
+    def __init__(self, name: str = "doc2vec_completed.opensearch", logger=None) -> None:
         """Create the default logger used until the team logger is supplied."""
 
         logging.basicConfig(
