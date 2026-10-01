@@ -38,8 +38,6 @@ omit = [
   "doc2vec_completed/opensearch/DatabaseConnection.py",
   "doc2vec_completed/opensearch/VaultSecrets.py",
   "doc2vec_completed/opensearch/custom_logger.py",
-  "doc2vec_completed/opensearch/dependencies.py",
-  "doc2vec_completed/opensearch/open_search_client.py",
 ]
 
 [tool.ruff]
