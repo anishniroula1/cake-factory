@@ -54,7 +54,7 @@ def sentence_from(source, global_id, content):
     values["global_id"] = global_id
     values["sent_id_local"] = global_id
     values["sentence_content"] = content
-    return SentencesVector(**values)
+    return SentencesVector(**values, tsp=source.tsp)
 
 
 def run_application(config, sessions, opensearch, message, logger):
@@ -138,6 +138,8 @@ def test_historical_message_runs_the_complete_ingestion_flow(
     assert opensearch.bulk_calls[0][1][0]["sentenceContentVector"] == [0.1, 0.2]
     assert opensearch.bulk_calls[1][1][0]["_id"] == bedrock_sentence.sentence_key
     assert len(opensearch.bulk_calls[2][1]) == 4
+    assert opensearch.bulk_calls[2][1][0]["applicationId"] == "APP-1"
+    assert "aNumber" not in opensearch.bulk_calls[2][1][0]
     assert opensearch.bulk_calls[2][1][0]["isCurrent"] is True
     assert sqs.sent[0]["message_body"] == {
         "reason": "HISTORICAL",

@@ -92,7 +92,11 @@ cooldown.
 The worker uses:
 
 - `sentences_vector`
+- `text_similarity_input`, joined by `tsp_id` to read `application_id`
 - `embeddings`, joined by `global_id`
+
+`a_number` remains in PostgreSQL. The occurrence index stores `applicationId`
+from the related `text_similarity_input` row and does not store `a_number`.
 
 If production column names differ, update `models.py`.
 

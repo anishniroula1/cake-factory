@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from doc2vec_completed.opensearch.models import SentencesVector
+from doc2vec_completed.opensearch.models import SentencesVector, TextSimilarityInput
 from tests.opensearch.fakes import LoggerFake
 
 
@@ -35,21 +35,29 @@ def custom_logger():
 @pytest.fixture
 def sentence_record():
     now = datetime.now(UTC)
+    document = TextSimilarityInput(
+        tsp_id=10,
+        application_id="APP-1",
+    )
     return SentencesVector(
         global_id=1,
-        application_id="APP-1",
-        a_number="A-1",
+        a_number=123456789,
         tsp_id=10,
+        tsp=document,
         section_name="affidavit",
         sent_id_local=1,
         sentence_content="The applicant moved to Boston.",
+        word_count=5,
         sentence_key="a" * 64,
         source_type="affidavit",
         analysis_group="Asylee",
+        embedding_list=[],
         is_non_matcher=False,
+        closest_non_matcher=None,
+        closest_nn_score=None,
         is_tracer=False,
         is_form_language=False,
         is_current=True,
-        created_at=now,
-        updated_at=now,
+        last_modified=now,
+        in_scope=True,
     )

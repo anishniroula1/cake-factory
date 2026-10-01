@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from sqlalchemy import bindparam, func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from doc2vec_completed.opensearch.AwsSQS import AwsSQS
 from doc2vec_completed.opensearch.batching import batches
@@ -136,6 +136,7 @@ class HistoricalHandler:
         with self.session_factory() as session:
             statement = (
                 select(SentencesVector)
+                .options(joinedload(SentencesVector.tsp))
                 .where(
                     SentencesVector.tsp_id == tsp_id,
                     SentencesVector.global_id > after_global_id,
@@ -152,12 +153,12 @@ class HistoricalHandler:
         updates = []
         for row in rows:
             row.sentence_key = sentence_key(row.sentence_content)
-            row.updated_at = current_time
+            row.last_modified = current_time
             updates.append(
                 {
                     "record_global_id": row.global_id,
                     "record_sentence_key": row.sentence_key,
-                    "record_updated_at": current_time,
+                    "record_last_modified": current_time,
                 }
             )
 
@@ -167,7 +168,7 @@ class HistoricalHandler:
             .where(table.c.global_id == bindparam("record_global_id"))
             .values(
                 sentence_key=bindparam("record_sentence_key"),
-                updated_at=bindparam("record_updated_at"),
+                last_modified=bindparam("record_last_modified"),
             )
         )
         with self.session_factory() as session:
@@ -206,8 +207,8 @@ class HistoricalHandler:
                 "_id": row.sentence_key,
                 "sentenceKey": row.sentence_key,
                 "sentenceContent": row.sentence_content,
-                "createdAt": row.created_at.isoformat(),
-                "updatedAt": row.updated_at.isoformat(),
+                "createdAt": row.last_modified.isoformat(),
+                "updatedAt": row.last_modified.isoformat(),
             }
             vector = embeddings.get(row.global_id)
             if vector is None:
@@ -236,7 +237,7 @@ class HistoricalHandler:
                 {
                     "_id": row.global_id,
                     "globalId": row.global_id,
-                    "applicationId": row.application_id,
+                    "applicationId": row.tsp.application_id,
                     "tspId": str(row.tsp_id),
                     "sectionName": row.section_name,
                     "sentIdLocal": row.sent_id_local,
@@ -248,8 +249,8 @@ class HistoricalHandler:
                     "isTracer": row.is_tracer,
                     "isFormLanguage": row.is_form_language,
                     "isCurrent": row.is_current,
-                    "createdAt": row.created_at.isoformat(),
-                    "updatedAt": row.updated_at.isoformat(),
+                    "createdAt": row.last_modified.isoformat(),
+                    "updatedAt": row.last_modified.isoformat(),
                 }
             )
         self.opensearch.bulk_index(
