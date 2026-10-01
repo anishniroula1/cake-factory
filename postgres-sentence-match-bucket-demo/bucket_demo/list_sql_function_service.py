@@ -1,19 +1,14 @@
-import re
-
 from sqlalchemy import bindparam
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
 
 
-APPLICATION_ID_PATTERN = re.compile(r"^\S.*$")
-
 LIST_SQL_FUNCTION_INSERT = text(
     """
-    SELECT upsert_bidirectional_sentence_match_lists(
-        :analysisGroup,
+    SELECT upsert_bidirectional_titan_matches(
         :sourceGlobalId,
         :sourceTspId,
-        :sourceApplicationId,
+        :sourceANumber,
         :matches
     )
     """
@@ -23,10 +18,7 @@ LIST_SQL_FUNCTION_INSERT = text(
 
 
 def validateListSqlFunctionRequest(request):
-    """Validate the complete request for the JSONB-list SQL function."""
-
-    if not request.analysisGroup.strip():
-        raise ValueError("analysisGroup is required")
+    """Validate owner IDs and the four fields saved for every match."""
 
     if isinstance(request.sourceGlobalId, bool) or request.sourceGlobalId < 1:
         raise ValueError("sourceGlobalId must be a positive number")
@@ -34,11 +26,8 @@ def validateListSqlFunctionRequest(request):
     if isinstance(request.sourceTspId, bool) or request.sourceTspId < 1:
         raise ValueError("sourceTspId must be a positive number")
 
-    if not APPLICATION_ID_PATTERN.fullmatch(request.sourceApplicationId):
-        raise ValueError("sourceApplicationId is required")
-
-    if not request.matches:
-        raise ValueError("matches must contain at least one match object")
+    if isinstance(request.sourceANumber, bool) or request.sourceANumber < 1:
+        raise ValueError("sourceANumber must be a positive number")
 
     receivedGlobalIds = set()
 
@@ -50,19 +39,19 @@ def validateListSqlFunctionRequest(request):
             "global_id",
             "distance",
             "tsp_id",
-            "application_id",
+            "a_number",
         }
 
-        if not requiredKeys.issubset(match):
+        if set(match) != requiredKeys:
             raise ValueError(
-                "every match needs global_id, distance, tsp_id, "
-                "and application_id"
+                "every match must contain only global_id, distance, "
+                "tsp_id, and a_number"
             )
 
         globalId = match["global_id"]
         tspId = match["tsp_id"]
         distance = match["distance"]
-        applicationId = match["application_id"]
+        aNumber = match["a_number"]
 
         if isinstance(globalId, bool) or not isinstance(globalId, int):
             raise ValueError("every global_id must be a number")
@@ -78,32 +67,36 @@ def validateListSqlFunctionRequest(request):
         if isinstance(tspId, bool) or not isinstance(tspId, int) or tspId < 1:
             raise ValueError("every tsp_id must be a positive number")
 
+        if isinstance(aNumber, bool) or not isinstance(aNumber, int):
+            raise ValueError("every a_number must be a number")
+
+        if aNumber < 1:
+            raise ValueError("every a_number must be a positive number")
+
         if isinstance(distance, bool) or not isinstance(distance, (int, float)):
             raise ValueError("every distance must be a number")
 
         if distance < 0 or distance > 2:
             raise ValueError("every distance must be between 0 and 2")
 
-        if not isinstance(applicationId, str) or not applicationId.strip():
-            raise ValueError("every application_id is required")
-
 
 def readListSqlFunctionSource(session, request):
-    """Read the source row after the SQL function commits."""
+    """Read the source row and its PostgreSQL-generated values."""
 
     row = session.execute(
         text(
             """
-            SELECT tsp_id, match_count, matches
-            FROM matches
-            WHERE analysis_group = :analysisGroup
-              AND global_id = :sourceGlobalId
+            SELECT
+                tsp_id,
+                match_count,
+                matches,
+                verbatim,
+                last_modified
+            FROM titan_matches
+            WHERE global_id = :sourceGlobalId
             """
         ),
-        {
-            "analysisGroup": request.analysisGroup,
-            "sourceGlobalId": request.sourceGlobalId,
-        },
+        {"sourceGlobalId": request.sourceGlobalId},
     ).mappings().one()
 
     return {
@@ -111,24 +104,31 @@ def readListSqlFunctionSource(session, request):
         "tspId": int(row["tsp_id"]),
         "matchCount": int(row["match_count"]),
         "matches": row["matches"],
+        "verbatim": row["verbatim"],
+        "lastModified": row["last_modified"],
     }
 
 
 def readListSqlFunctionReverse(session, request):
-    """Read every target row's saved source object in one query."""
+    """Read the source relationship saved in every target row."""
+
+    if not request.matches:
+        return []
 
     statement = text(
         """
         SELECT
             saved.global_id,
             saved.tsp_id,
+            saved.match_count,
+            saved.verbatim,
+            saved.last_modified,
             match_item
-        FROM matches AS saved
+        FROM titan_matches AS saved
         CROSS JOIN LATERAL jsonb_array_elements(saved.matches)
             AS item(match_item)
-        WHERE saved.analysis_group = :analysisGroup
-          AND saved.global_id IN :targetGlobalIds
-          AND (match_item ->> 'global_id')::BIGINT = :sourceGlobalId
+        WHERE saved.global_id IN :targetGlobalIds
+          AND (match_item ->> 'global_id')::INTEGER = :sourceGlobalId
         ORDER BY saved.global_id
         """
     ).bindparams(
@@ -138,7 +138,6 @@ def readListSqlFunctionReverse(session, request):
     rows = session.execute(
         statement,
         {
-            "analysisGroup": request.analysisGroup,
             "sourceGlobalId": request.sourceGlobalId,
             "targetGlobalIds": [
                 match["global_id"]
@@ -147,33 +146,30 @@ def readListSqlFunctionReverse(session, request):
         },
     ).mappings().all()
 
-    reverseMatches = []
-
-    for row in rows:
-        reverseMatches.append(
-            {
-                "analysisGroup": request.analysisGroup,
-                "globalId": int(row["global_id"]),
-                "tspId": int(row["tsp_id"]),
-                "savedMatch": row["match_item"],
-            }
-        )
-
-    return reverseMatches
+    return [
+        {
+            "globalId": int(row["global_id"]),
+            "tspId": int(row["tsp_id"]),
+            "matchCount": int(row["match_count"]),
+            "verbatim": row["verbatim"],
+            "lastModified": row["last_modified"],
+            "savedMatch": row["match_item"],
+        }
+        for row in rows
+    ]
 
 
 def insertListMatchesWithSqlFunction(session, request):
-    """Run the complete production-style JSONB-list SQL flow."""
+    """Save source and reverse rows through the PostgreSQL function."""
 
     validateListSqlFunctionRequest(request)
 
     processedCount = session.execute(
         LIST_SQL_FUNCTION_INSERT,
         {
-            "analysisGroup": request.analysisGroup,
             "sourceGlobalId": request.sourceGlobalId,
             "sourceTspId": request.sourceTspId,
-            "sourceApplicationId": request.sourceApplicationId,
+            "sourceANumber": request.sourceANumber,
             "matches": request.matches,
         },
     ).scalar_one()

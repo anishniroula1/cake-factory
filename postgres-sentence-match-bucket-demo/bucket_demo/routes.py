@@ -128,7 +128,7 @@ def listSqlFunctionInsert(
     request: ListMatchRequest,
     session: Session = Depends(getSession),
 ):
-    """Save production-style JSONB lists with a PostgreSQL function."""
+    """Save bidirectional lists and generate verbatim IDs in PostgreSQL."""
 
     try:
         return insertListMatchesWithSqlFunction(session, request)
@@ -148,7 +148,7 @@ def listPythonInsert(
     request: ListMatchRequest,
     session: Session = Depends(getSession),
 ):
-    """Save production-style JSONB lists with Python bind parameters."""
+    """Save bidirectional lists and let PostgreSQL generate verbatim IDs."""
 
     try:
         return insertListMatchesWithPython(session, request)

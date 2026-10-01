@@ -91,8 +91,10 @@ def testFakeListRequestUsesProductionJsonShape():
         "global_id",
         "distance",
         "tsp_id",
-        "application_id",
+        "a_number",
     }
+    assert fakeRequest["sourceANumber"] == 90_001
+    assert fakeRequest["matches"][0]["distance"] == 0.0
 
 
 def testListPythonRowsContainBothDirections():
@@ -112,7 +114,15 @@ def testListPythonRowsContainBothDirections():
             reverseRows.append(row)
 
     assert len(sourceRows) == 1
-    assert sourceRows[0]["incomingMatches"] == request.matches
+    assert sourceRows[0]["incomingMatches"] == [
+        {
+            "global_id": match["global_id"],
+            "distance": match["distance"],
+            "tsp_id": match["tsp_id"],
+            "a_number": match["a_number"],
+        }
+        for match in request.matches
+    ]
     assert len(reverseRows) == 3
 
     for row in reverseRows:
@@ -121,3 +131,24 @@ def testListPythonRowsContainBothDirections():
             row["incomingMatches"][0]["global_id"]
             == request.sourceGlobalId
         )
+        assert (
+            row["incomingMatches"][0]["a_number"]
+            == request.sourceANumber
+        )
+
+
+def testListPythonRowsCreateSourceWhenMatchesAreEmpty():
+    request = SimpleNamespace(
+        sourceGlobalId=1,
+        sourceTspId=1001,
+        sourceANumber=90001,
+        matches=[],
+    )
+
+    assert buildListPythonOwnerRows(request) == [
+        {
+            "globalId": 1,
+            "tspId": 1001,
+            "incomingMatches": [],
+        }
+    ]

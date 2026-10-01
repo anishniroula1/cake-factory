@@ -58,19 +58,21 @@ def generateFakeListRequest(request):
         matches.append(
             {
                 "global_id": globalId,
-                "distance": round(
-                    randomGenerator.uniform(0.01, 0.30),
-                    4,
+                # Keep one exact result so the generated verbatim array is
+                # visible immediately when this fake request is inserted.
+                "distance": (
+                    0.0
+                    if number == 0
+                    else round(randomGenerator.uniform(0.01, 0.30), 4)
                 ),
                 "tsp_id": 1_000 + globalId,
-                "application_id": f"APP-{globalId}",
+                "a_number": 90_000 + globalId,
             }
         )
 
     return {
-        "analysisGroup": request.analysisGroup,
         "sourceGlobalId": 1,
         "sourceTspId": 1_001,
-        "sourceApplicationId": "APP-1",
+        "sourceANumber": 90_001,
         "matches": matches,
     }

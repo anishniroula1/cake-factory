@@ -646,8 +646,8 @@ work with global IDs and occurrence-level JSONB lists.
 The immediate benefits are:
 
 - API Transform can continue reading matches by `tsp_id`.
-- Case Similarity can group target occurrences by `application_id` and
-  `a_number`.
+- Case Similarity can group target occurrences by `a_number`. It can use
+  `tsp_id` to read `application_id` from `text_similarity_input` when needed.
 - A saved object identifies the exact source and target sentence locations.
 - OpenSearch can be introduced without redesigning every downstream service at
   the same time.
@@ -660,8 +660,7 @@ Each item in the JSONB array describes one target occurrence:
 ```json
 {
   "global_id": 9002,
-  "application_id": "APP-20",
-  "a_number": "A900",
+  "a_number": 900,
   "tsp_id": 8000,
   "distance": 0.10
 }
@@ -683,20 +682,16 @@ Suppose the source row is:
 
 ```text
 global_id: 100
-application_id: APP-1
-a_number: A100
+a_number: 100
 tsp_id: 5000
-analysis_group: Asylee
 ```
 
 It matches this target:
 
 ```text
 global_id: 900
-application_id: APP-10
-a_number: A900
+a_number: 900
 tsp_id: 8000
-analysis_group: Asylee
 distance: 0.05
 ```
 
@@ -706,8 +701,7 @@ The source row stores:
 [
   {
     "global_id": 900,
-    "application_id": "APP-10",
-    "a_number": "A900",
+    "a_number": 900,
     "tsp_id": 8000,
     "distance": 0.05
   }
@@ -720,14 +714,26 @@ The target row stores the reverse object:
 [
   {
     "global_id": 100,
-    "application_id": "APP-1",
-    "a_number": "A100",
+    "a_number": 100,
     "tsp_id": 5000,
     "distance": 0.05
   }
 ]
 ```
 
+The `titan_matches` row has only these columns:
+
+```text
+global_id, tsp_id, matches, match_count, verbatim, last_modified
+```
+
+`global_id` is the primary key. PostgreSQL calculates `match_count` from the
+JSONB list and calculates `verbatim` from matches whose distance is `0.0`.
+PostgreSQL also maintains `last_modified`. `a_number` remains in each nested
+match object, but it is not a table column. The caller supplies the source
+identity needed for reverse match objects and the `matches` list.
+
+Sentence Similarity checks eligibility before calling the database function.
 The relationship is valid only when both sentences:
 
 - belong to the same `analysis_group`;
@@ -743,12 +749,12 @@ changes.
 
 Use a PostgreSQL function or atomic SQLAlchemy upsert that:
 
-1. Receives the source occurrence and its complete current match list.
+1. Receives the source occurrence and its accepted match list.
 2. Locks the source and affected target global IDs in sorted order.
 3. Adds new relationships in both directions.
-4. Updates an existing relationship's metadata and distance.
-5. Removes relationships that no longer pass the threshold from both sides.
-6. Prevents duplicate target global IDs inside one JSONB array.
+4. Creates missing source and target rows.
+5. Updates an existing relationship's IDs and distance without duplicating it.
+6. Updates only `matches` and `last_modified` when an owner row already exists.
 7. Commits all changes for the source sentence in one transaction.
 
 A database failure rolls back every forward and reverse change. Retry a
@@ -782,8 +788,8 @@ Verify the production data with these rules:
 - No relationship contains a non-matcher sentence.
 - No relationship connects occurrences from the same application.
 - No relationship crosses `analysis_group`.
-- Reprocessing removes stale forward and reverse relationships.
 - `match_count` equals the JSONB array length.
+- `verbatim` contains only target global IDs whose distance is `0.0`.
 
 ## 6. Downstream service use
 
@@ -800,10 +806,10 @@ Case Similarity will also keep using its existing functionality as it is. It
 will process the occurrence matches produced by the Titan flow using the same
 case-level calculation currently used by the service.
 
-The Titan result will be written to a new `titan_case_similarity` table. The
-existing case-similarity result will remain unchanged. Keeping both results
-separate allows the team to compare the previous flow with the new Titan flow
-before deciding whether to replace the existing result.
+The existing `similar_cases_emb` table is renamed to `titan_similar_cases` and
+stores the Titan result. The previous case-similarity result remains unchanged.
+Keeping both results separate allows the team to compare the previous flow
+with the new Titan flow before deciding whether to replace the existing result.
 
 ## 7. Future sentence-key relationship design
 
@@ -895,12 +901,12 @@ processed again.
 12. Every accepted relationship is stored in both directions in
     `titan_matches`.
 13. Both directions contain the same cosine distance.
-14. Reprocessing updates distances, prevents duplicates, and removes stale
-    relationships from both directions.
+14. Reprocessing updates distances and prevents duplicate relationships in
+    both directions.
 15. Concurrent workers cannot overwrite one another's JSONB changes.
 16. API Transform keeps its existing summary and response-building behavior.
 17. Case Similarity keeps its existing calculation behavior and writes the
-    Titan result to `titan_case_similarity` without replacing the existing
+    Titan result to `titan_similar_cases` without replacing the existing
     case-similarity result.
 18. Live and historical messages use the same matching rules.
 19. The SQS message is deleted only after the full `tsp_id` succeeds.

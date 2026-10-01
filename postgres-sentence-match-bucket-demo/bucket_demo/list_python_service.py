@@ -1,46 +1,38 @@
 import json
-import re
 
-from sqlalchemy import BigInteger
 from sqlalchemy import Column
 from sqlalchemy import DateTime
 from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy import Table
-from sqlalchemy import Text
 from sqlalchemy import bindparam
 from sqlalchemy import cast
 from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy import union_all
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.dialects.postgresql import insert
 
 
-APPLICATION_ID_PATTERN = re.compile(r"^\S.*$")
-
 listPythonMetadata = MetaData()
 
 listPythonMatches = Table(
-    "matches",
+    "titan_matches",
     listPythonMetadata,
-    Column("analysis_group", Text, primary_key=True),
-    Column("global_id", BigInteger, primary_key=True),
-    Column("tsp_id", BigInteger, nullable=False),
+    Column("global_id", Integer, primary_key=True),
+    Column("tsp_id", Integer, nullable=False),
     Column("matches", JSONB, nullable=False),
     Column("match_count", Integer),
-    Column("created_at", DateTime(timezone=True)),
-    Column("updated_at", DateTime(timezone=True)),
+    Column("verbatim", ARRAY(Integer)),
+    Column("last_modified", DateTime(timezone=True)),
 )
 
 
 def validateListPythonRequest(request):
-    """Validate the complete request for the JSONB-list Python flow."""
-
-    if not request.analysisGroup.strip():
-        raise ValueError("analysisGroup is required")
+    """Validate owner IDs and the four fields saved for every match."""
 
     if isinstance(request.sourceGlobalId, bool) or request.sourceGlobalId < 1:
         raise ValueError("sourceGlobalId must be a positive number")
@@ -48,11 +40,8 @@ def validateListPythonRequest(request):
     if isinstance(request.sourceTspId, bool) or request.sourceTspId < 1:
         raise ValueError("sourceTspId must be a positive number")
 
-    if not APPLICATION_ID_PATTERN.fullmatch(request.sourceApplicationId):
-        raise ValueError("sourceApplicationId is required")
-
-    if not request.matches:
-        raise ValueError("matches must contain at least one match object")
+    if isinstance(request.sourceANumber, bool) or request.sourceANumber < 1:
+        raise ValueError("sourceANumber must be a positive number")
 
     receivedGlobalIds = set()
 
@@ -64,19 +53,19 @@ def validateListPythonRequest(request):
             "global_id",
             "distance",
             "tsp_id",
-            "application_id",
+            "a_number",
         }
 
-        if not requiredKeys.issubset(match):
+        if set(match) != requiredKeys:
             raise ValueError(
-                "every match needs global_id, distance, tsp_id, "
-                "and application_id"
+                "every match must contain only global_id, distance, "
+                "tsp_id, and a_number"
             )
 
         globalId = match["global_id"]
         tspId = match["tsp_id"]
         distance = match["distance"]
-        applicationId = match["application_id"]
+        aNumber = match["a_number"]
 
         if isinstance(globalId, bool) or not isinstance(globalId, int):
             raise ValueError("every global_id must be a number")
@@ -92,22 +81,24 @@ def validateListPythonRequest(request):
         if isinstance(tspId, bool) or not isinstance(tspId, int) or tspId < 1:
             raise ValueError("every tsp_id must be a positive number")
 
+        if isinstance(aNumber, bool) or not isinstance(aNumber, int):
+            raise ValueError("every a_number must be a number")
+
+        if aNumber < 1:
+            raise ValueError("every a_number must be a positive number")
+
         if isinstance(distance, bool) or not isinstance(distance, (int, float)):
             raise ValueError("every distance must be a number")
 
         if distance < 0 or distance > 2:
             raise ValueError("every distance must be between 0 and 2")
 
-        if not isinstance(applicationId, str) or not applicationId.strip():
-            raise ValueError("every application_id is required")
-
 
 def buildListPythonOwnerRows(request):
-    """Group all forward and reverse matches into one row per owner."""
+    """Build one insert row for the source and every reverse owner."""
 
     ownerRows = {
-        (request.analysisGroup, request.sourceGlobalId): {
-            "analysisGroup": request.analysisGroup,
+        request.sourceGlobalId: {
             "globalId": request.sourceGlobalId,
             "tspId": request.sourceTspId,
             "incomingMatches": [],
@@ -115,16 +106,8 @@ def buildListPythonOwnerRows(request):
     }
 
     for match in request.matches:
-        ownerRows[
-            (request.analysisGroup, request.sourceGlobalId)
-        ]["incomingMatches"].append(match)
-
-        identity = (
-            request.analysisGroup,
-            match["global_id"],
-        )
-        ownerRows[identity] = {
-            "analysisGroup": request.analysisGroup,
+        ownerRows[request.sourceGlobalId]["incomingMatches"].append(match)
+        ownerRows[match["global_id"]] = {
             "globalId": match["global_id"],
             "tspId": match["tsp_id"],
             "incomingMatches": [
@@ -132,19 +115,18 @@ def buildListPythonOwnerRows(request):
                     "global_id": request.sourceGlobalId,
                     "distance": match["distance"],
                     "tsp_id": request.sourceTspId,
-                    "application_id": request.sourceApplicationId,
+                    "a_number": request.sourceANumber,
                 }
             ],
         }
-    # print([ownerRows[identity] for identity in sorted(ownerRows)])
-    return [ownerRows[identity] for identity in sorted(ownerRows)]
+
+    return [ownerRows[globalId] for globalId in sorted(ownerRows)]
 
 
 def buildListPythonUpsertStatement():
-    """Build one upsert that creates owners and merges their match lists."""
+    """Create missing owners and merge only matches for existing owners."""
 
     baseInsert = insert(listPythonMatches).values(
-        analysis_group=bindparam("analysisGroup"),
         global_id=bindparam("globalId"),
         tsp_id=bindparam("tspId"),
         matches=bindparam("incomingMatches", type_=JSONB),
@@ -163,11 +145,11 @@ def buildListPythonUpsertStatement():
 
     savedGlobalId = cast(
         cast(savedItems.c.match_item, JSONB)["global_id"].astext,
-        BigInteger,
+        Integer,
     )
     incomingGlobalId = cast(
         cast(incomingItems.c.match_item, JSONB)["global_id"].astext,
-        BigInteger,
+        Integer,
     )
 
     incomingGlobalIdExists = (
@@ -177,8 +159,6 @@ def buildListPythonUpsertStatement():
         .exists()
     )
 
-    # Keep saved objects that are not included in this request. Then add all
-    # incoming objects. This makes the latest distance win for the same ID.
     existingItemsToKeep = (
         select(
             savedGlobalId.label("match_global_id"),
@@ -211,34 +191,31 @@ def buildListPythonUpsertStatement():
     )
 
     return baseInsert.on_conflict_do_update(
-        index_elements=[
-            listPythonMatches.c.analysis_group,
-            listPythonMatches.c.global_id,
-        ],
+        index_elements=[listPythonMatches.c.global_id],
         set_={
-            "tsp_id": baseInsert.excluded.tsp_id,
             "matches": mergedMatches,
-            "updated_at": func.now(),
+            "last_modified": func.now(),
         },
     )
 
 
 def readListPythonSource(session, request):
-    """Read the source row after the Python transaction commits."""
+    """Read the source row and its PostgreSQL-generated values."""
 
     row = session.execute(
         text(
             """
-            SELECT tsp_id, match_count, matches
-            FROM matches
-            WHERE analysis_group = :analysisGroup
-              AND global_id = :sourceGlobalId
+            SELECT
+                tsp_id,
+                match_count,
+                matches,
+                verbatim,
+                last_modified
+            FROM titan_matches
+            WHERE global_id = :sourceGlobalId
             """
         ),
-        {
-            "analysisGroup": request.analysisGroup,
-            "sourceGlobalId": request.sourceGlobalId,
-        },
+        {"sourceGlobalId": request.sourceGlobalId},
     ).mappings().one()
 
     return {
@@ -246,24 +223,31 @@ def readListPythonSource(session, request):
         "tspId": int(row["tsp_id"]),
         "matchCount": int(row["match_count"]),
         "matches": row["matches"],
+        "verbatim": row["verbatim"],
+        "lastModified": row["last_modified"],
     }
 
 
 def readListPythonReverse(session, request):
-    """Read every target row's saved source object in one query."""
+    """Read the source relationship saved in every target row."""
+
+    if not request.matches:
+        return []
 
     statement = text(
         """
         SELECT
             saved.global_id,
             saved.tsp_id,
+            saved.match_count,
+            saved.verbatim,
+            saved.last_modified,
             match_item
-        FROM matches AS saved
+        FROM titan_matches AS saved
         CROSS JOIN LATERAL jsonb_array_elements(saved.matches)
             AS item(match_item)
-        WHERE saved.analysis_group = :analysisGroup
-          AND saved.global_id IN :targetGlobalIds
-          AND (match_item ->> 'global_id')::BIGINT = :sourceGlobalId
+        WHERE saved.global_id IN :targetGlobalIds
+          AND (match_item ->> 'global_id')::INTEGER = :sourceGlobalId
         ORDER BY saved.global_id
         """
     ).bindparams(
@@ -273,7 +257,6 @@ def readListPythonReverse(session, request):
     rows = session.execute(
         statement,
         {
-            "analysisGroup": request.analysisGroup,
             "sourceGlobalId": request.sourceGlobalId,
             "targetGlobalIds": [
                 match["global_id"]
@@ -282,23 +265,21 @@ def readListPythonReverse(session, request):
         },
     ).mappings().all()
 
-    reverseMatches = []
-
-    for row in rows:
-        reverseMatches.append(
-            {
-                "analysisGroup": request.analysisGroup,
-                "globalId": int(row["global_id"]),
-                "tspId": int(row["tsp_id"]),
-                "savedMatch": row["match_item"],
-            }
-        )
-
-    return reverseMatches
+    return [
+        {
+            "globalId": int(row["global_id"]),
+            "tspId": int(row["tsp_id"]),
+            "matchCount": int(row["match_count"]),
+            "verbatim": row["verbatim"],
+            "lastModified": row["last_modified"],
+            "savedMatch": row["match_item"],
+        }
+        for row in rows
+    ]
 
 
 def insertListMatchesWithPython(session, request):
-    """Run the complete production-style JSONB-list Python flow."""
+    """Save source and reverse rows through one SQLAlchemy bulk upsert."""
 
     validateListPythonRequest(request)
     ownerRows = buildListPythonOwnerRows(request)

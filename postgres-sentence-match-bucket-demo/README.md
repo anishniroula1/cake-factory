@@ -112,14 +112,19 @@ bidirectional result is visible in the same Swagger response.
 
 ## Production-style JSONB list comparison
 
-The second table copies the existing shape:
+The second table uses the smaller `titan_matches` shape:
 
 ```text
-global_id + analysis_group + tsp_id + matches JSONB list
+global_id, tsp_id, matches, match_count, verbatim, last_modified
 ```
 
-Each list item contains `global_id`, `distance`, `tsp_id`, and `application_id`.
-Copy `listInsertRequest` from `/init` into one of these endpoints:
+The source and every target supply `global_id` and `tsp_id`. The source and
+each target also supply `a_number` for the nested reverse match objects, but it
+is not a `titan_matches` table column. Each target supplies `distance`. The
+caller never sends `match_count`,
+`verbatim`, or `last_modified`. PostgreSQL generates the first two from the
+final JSONB list and manages the timestamp. Copy `listInsertRequest` from
+`/init` into one of these endpoints:
 
 - `POST /list-matches/sql-function`
 - `POST /list-matches/python`
@@ -131,12 +136,36 @@ appended. An existing global ID is replaced, so its latest distance and other
 values are saved in both directions. Neither endpoint reads the full saved list
 into Python before saving.
 
+A missing source or target owner is inserted. If an owner already exists, only
+its `matches` and `last_modified` values change. Its `global_id` and `tsp_id`
+remain unchanged. An empty match list still creates the source row
+with `match_count` equal to `0` and an empty `verbatim` array.
+
+`verbatim` is an `INTEGER[]` stored generated column. PostgreSQL rebuilds it
+from `matches` whenever a row is inserted or updated. Only relationships whose
+distance is exactly `0.0` are included.
+
+Example:
+
+```text
+matches  = [{"global_id": 10, "tsp_id": 1010,
+             "a_number": 90010, "distance": 0.0},
+            {"global_id": 40, "tsp_id": 1040,
+             "a_number": 90040, "distance": 0.2}]
+verbatim = {10}
+```
+
+Send global ID 10 again with distance `0.25`. The merge replaces its old
+object, and PostgreSQL automatically changes `verbatim` to an empty array.
+The same behavior applies to the reverse row because the insert function saves
+both match directions.
+
 ## Files
 
 - `db/init/001_sentence_match_buckets.sql` contains the PostgreSQL functions and
   bucket table.
-- `db/init/002_sentence_match_lists.sql` contains the production-style JSONB
-  list table and function.
+- `db/init/002_sentence_match_lists.sql` creates the `titan_matches` table and
+  its bidirectional PostgreSQL function.
 - `bucket_demo/sql_function_service.py` contains the complete PostgreSQL-function
   endpoint logic.
 - `bucket_demo/python_service.py` contains the complete Python and SQLAlchemy

@@ -950,26 +950,259 @@ And the backfill deployment receives SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL as S
 And both deployments call the same sentence-processing function
 ```
 
-## 19. Java | Add Flyway migration for Titan comparison tables
+## 19. Java | Create the Titan match table and PostgreSQL functions
 
 ### Value
 
-Create separate Titan tables while keeping the existing match and case
-similarity tables unchanged. This allows the previous and Titan results to be
-compared safely.
+Create the smaller `tsp.titan_matches` table for Titan sentence relationships.
+PostgreSQL creates missing source and target rows, saves relationships in both
+directions, and maintains `match_count` and `verbatim` automatically. Rename the
+existing case-similarity table for the Titan flow.
 
 ### Acceptance Criteria
 
 ```gherkin
 Given the Flyway migration runs
 When the migration completes
-Then titan_matches is created with the same occurrence-level columns, JSONB match-list shape, constraints, and lookup indexes as the existing matches table
+Then tsp.titan_matches contains global_id, tsp_id, matches, match_count, verbatim, and last_modified
+And global_id is the primary key
+And match_count and verbatim are stored generated columns
+And an index exists for tsp_id
+And tsp.similar_cases_emb is renamed to tsp.titan_similar_cases
 ```
 
 ```gherkin
-Given the Flyway migration runs (Might not need to create new table, we might be able to use the existing one)
-When the migration completes
-Then titan_case_similarity is created with the same columns, constraints, and lookup indexes as the existing Case Similarity Embedding table
+Given a source sentence and zero or more matching sentences
+When the bidirectional PostgreSQL function runs
+Then a missing source row is created even when the match list is empty
+And every missing target row is created
+And source and target rows contain the reverse relationship
+And an existing row updates only matches and last_modified
+And PostgreSQL recalculates match_count and verbatim without receiving either value
+```
+
+### Flyway SQL
+
+```sql
+/* Return exact-match global IDs from the matches JSONB list. */
+CREATE OR REPLACE FUNCTION tsp.titan_verbatim_global_ids(
+    match_values JSONB
+)
+RETURNS INTEGER[]
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT COALESCE(
+        array_agg(exact_match.global_id ORDER BY exact_match.global_id),
+        ARRAY[]::INTEGER[]
+    )
+    FROM (
+        SELECT DISTINCT
+            (match_item ->> 'global_id')::INTEGER AS global_id
+        FROM jsonb_array_elements(match_values) AS item(match_item)
+        WHERE (match_item ->> 'distance')::DOUBLE PRECISION = 0.0
+    ) AS exact_match;
+$$;
+
+/* Merge lists by global_id. The incoming object replaces the saved object. */
+CREATE OR REPLACE FUNCTION tsp.titan_merge_match_lists(
+    existing_matches JSONB,
+    incoming_matches JSONB
+)
+RETURNS JSONB
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    WITH combined_matches AS (
+        SELECT saved_item AS match_item, 0 AS incoming_priority
+        FROM jsonb_array_elements(existing_matches) AS saved(saved_item)
+
+        UNION ALL
+
+        SELECT incoming_item AS match_item, 1 AS incoming_priority
+        FROM jsonb_array_elements(incoming_matches)
+            AS incoming(incoming_item)
+    ),
+    latest_matches AS (
+        SELECT DISTINCT ON (
+            (match_item ->> 'global_id')::INTEGER
+        )
+            (match_item ->> 'global_id')::INTEGER AS match_global_id,
+            match_item
+        FROM combined_matches
+        ORDER BY
+            (match_item ->> 'global_id')::INTEGER,
+            incoming_priority DESC
+    )
+    SELECT COALESCE(
+        jsonb_agg(match_item ORDER BY match_global_id),
+        '[]'::JSONB
+    )
+    FROM latest_matches;
+$$;
+
+CREATE TABLE tsp.titan_matches (
+    global_id INTEGER PRIMARY KEY,
+    tsp_id INTEGER NOT NULL,
+    matches JSONB NOT NULL DEFAULT '[]'::JSONB,
+
+    match_count INTEGER GENERATED ALWAYS AS (
+        jsonb_array_length(matches)
+    ) STORED NOT NULL,
+
+    verbatim INTEGER[] GENERATED ALWAYS AS (
+        tsp.titan_verbatim_global_ids(matches)
+    ) STORED NOT NULL,
+
+    last_modified TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_titan_matches_sentence_vector
+        FOREIGN KEY (global_id)
+        REFERENCES tsp.sentences_vector (global_id),
+
+    CONSTRAINT fk_titan_matches_text_similarity_input
+        FOREIGN KEY (tsp_id)
+        REFERENCES tsp.text_similarity_input (tsp_id),
+
+    CONSTRAINT ck_titan_matches_json_array
+        CHECK (jsonb_typeof(matches) = 'array')
+);
+
+CREATE INDEX ix_titan_matches_tsp_id
+    ON tsp.titan_matches (tsp_id);
+
+/*
+ * Create missing owners and save every relationship in both directions.
+ * Existing rows keep their identity columns and update only the match list.
+ */
+CREATE OR REPLACE FUNCTION tsp.upsert_bidirectional_titan_matches(
+    p_source_global_id INTEGER,
+    p_source_tsp_id INTEGER,
+    p_source_a_number INTEGER,
+    p_matches JSONB
+)
+RETURNS INTEGER
+LANGUAGE PLPGSQL
+AS $$
+DECLARE
+    normalized_matches JSONB;
+    processed_match_count INTEGER;
+    locked_owner_id BIGINT;
+    source_match JSONB;
+BEGIN
+    SELECT COALESCE(
+        jsonb_agg(
+            jsonb_build_object(
+                'global_id', unique_match.global_id,
+                'tsp_id', unique_match.tsp_id,
+                'a_number', unique_match.a_number,
+                'distance', unique_match.distance
+            )
+            ORDER BY unique_match.global_id
+        ),
+        '[]'::JSONB
+    )
+    INTO normalized_matches
+    FROM (
+        SELECT DISTINCT ON (
+            (match_item ->> 'global_id')::INTEGER
+        )
+            (match_item ->> 'global_id')::INTEGER AS global_id,
+            (match_item ->> 'tsp_id')::INTEGER AS tsp_id,
+            (match_item ->> 'a_number')::INTEGER AS a_number,
+            (match_item ->> 'distance')::DOUBLE PRECISION AS distance
+        FROM jsonb_array_elements(
+            COALESCE(p_matches, '[]'::JSONB)
+        ) AS item(match_item)
+        WHERE (match_item ->> 'global_id')::INTEGER
+            <> p_source_global_id
+        ORDER BY (match_item ->> 'global_id')::INTEGER
+    ) AS unique_match;
+
+    processed_match_count := jsonb_array_length(normalized_matches);
+
+    source_match := jsonb_build_object(
+        'global_id', p_source_global_id,
+        'tsp_id', p_source_tsp_id,
+        'a_number', p_source_a_number
+    );
+
+    /* Use stable transaction locks so concurrent workers cannot lose data. */
+    FOR locked_owner_id IN
+        SELECT DISTINCT owner_global_id::BIGINT
+        FROM (
+            SELECT p_source_global_id AS owner_global_id
+
+            UNION
+
+            SELECT (match_item ->> 'global_id')::INTEGER
+            FROM jsonb_array_elements(normalized_matches)
+                AS item(match_item)
+        ) AS owners
+        ORDER BY owner_global_id
+    LOOP
+        PERFORM pg_advisory_xact_lock(locked_owner_id);
+    END LOOP;
+
+    /* This insert also creates a source row whose match list is empty. */
+    INSERT INTO tsp.titan_matches (
+        global_id,
+        tsp_id,
+        matches
+    )
+    VALUES (
+        p_source_global_id,
+        p_source_tsp_id,
+        normalized_matches
+    )
+    ON CONFLICT (global_id)
+    DO UPDATE SET
+        matches = tsp.titan_merge_match_lists(
+            titan_matches.matches,
+            EXCLUDED.matches
+        ),
+        last_modified = NOW();
+
+    INSERT INTO tsp.titan_matches (
+        global_id,
+        tsp_id,
+        matches
+    )
+    SELECT
+        (match_item ->> 'global_id')::INTEGER,
+        (match_item ->> 'tsp_id')::INTEGER,
+        jsonb_build_array(
+            source_match || jsonb_build_object(
+                'distance',
+                (match_item ->> 'distance')::DOUBLE PRECISION
+            )
+        )
+    FROM jsonb_array_elements(normalized_matches) AS item(match_item)
+    ORDER BY (match_item ->> 'global_id')::INTEGER
+    ON CONFLICT (global_id)
+    DO UPDATE SET
+        matches = tsp.titan_merge_match_lists(
+            titan_matches.matches,
+            EXCLUDED.matches
+        ),
+        last_modified = NOW();
+
+    RETURN processed_match_count;
+END;
+$$;
+
+COMMENT ON COLUMN tsp.titan_matches.match_count
+IS 'Stored count of objects in the matches JSONB list.';
+
+COMMENT ON COLUMN tsp.titan_matches.verbatim
+IS 'Stored global IDs whose saved match distance is exactly 0.0.';
+
+ALTER TABLE tsp.similar_cases_emb
+    RENAME TO titan_similar_cases;
 ```
 
 ## 20. Sentence Similarity | Classify tsp_id sentences with tracer workers
@@ -1082,7 +1315,7 @@ Given ENABLE_OPENSEARCH_SENTENCE_FLOW is true
 And titan_matches contains the completed occurrence matches for a tsp_id
 When Case Similarity processes the tsp_id
 Then it uses the existing case-similarity calculation
-And it writes the Titan result to titan_case_similarity
+And it writes the Titan result to tsp.titan_similar_cases
 And it does not replace or update the existing Case Similarity result
 ```
 
