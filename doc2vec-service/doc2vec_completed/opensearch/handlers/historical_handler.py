@@ -11,11 +11,11 @@ from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import (
     CatalogDocument,
     HistoricalResult,
-    Logger,
     NextQueueMessage,
     OccurrenceDocument,
     TspId,
 )
+from doc2vec_completed.opensearch.custom_logger import CustomLogger
 from doc2vec_completed.opensearch.errors import PermanentDataError
 from doc2vec_completed.opensearch.models import Embeddings, SentencesVector
 from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
@@ -30,7 +30,7 @@ class HistoricalHandler:
         session_factory: Callable[[], Session],
         opensearch: OpenSearchHelper,
         aws_sqs: AwsSQS,
-        custom_logger: Logger,
+        custom_logger: CustomLogger,
     ) -> None:
         """Keep everything required for one HISTORICAL message."""
 
@@ -247,6 +247,7 @@ class HistoricalHandler:
                     "isNonMatcher": row.is_non_matcher,
                     "isTracer": row.is_tracer,
                     "isFormLanguage": row.is_form_language,
+                    "isCurrent": row.is_current,
                     "createdAt": row.created_at.isoformat(),
                     "updatedAt": row.updated_at.isoformat(),
                 }

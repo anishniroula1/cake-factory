@@ -1,11 +1,11 @@
-from doc2vec_completed.opensearch.contracts import Logger
+from doc2vec_completed.opensearch.custom_logger import CustomLogger
 from doc2vec_completed.opensearch.DatabaseConnection import DatabaseConnection
 from doc2vec_completed.opensearch.dependencies import Dependencies
 from doc2vec_completed.opensearch.sqs_processor import SqsProcessor
 
 
 def run_opensearch_flow(
-    custom_logger: Logger | None = None,
+    custom_logger: CustomLogger | None = None,
     database_connection: DatabaseConnection | None = None,
     dependencies: Dependencies | None = None,
 ) -> None:

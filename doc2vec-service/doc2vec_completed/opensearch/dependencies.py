@@ -2,7 +2,6 @@ from sqlalchemy.orm import sessionmaker
 
 from doc2vec_completed.opensearch.AwsSQS import AwsSQS
 from doc2vec_completed.opensearch.config import Config
-from doc2vec_completed.opensearch.contracts import Logger
 from doc2vec_completed.opensearch.custom_logger import CustomLogger
 from doc2vec_completed.opensearch.DatabaseConnection import DatabaseConnection
 from doc2vec_completed.opensearch.handlers.historical_handler import HistoricalHandler
@@ -13,7 +12,7 @@ from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
 class Dependencies:
     def __init__(
         self,
-        custom_logger: Logger | None = None,
+        custom_logger: CustomLogger | None = None,
         database_connection: DatabaseConnection | None = None,
     ) -> None:
         """Create everything used while processing an SQS message."""

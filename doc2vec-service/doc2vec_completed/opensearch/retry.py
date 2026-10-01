@@ -1,7 +1,7 @@
 import time
 from collections.abc import Callable
 
-from doc2vec_completed.opensearch.contracts import Logger
+from doc2vec_completed.opensearch.custom_logger import CustomLogger
 from doc2vec_completed.opensearch.errors import (
     PermanentDataError,
     PermanentMessageError,
@@ -14,7 +14,7 @@ def retry_operation[**Parameters, Result](
     *arguments: Parameters.args,
     wait_seconds: int,
     max_attempts: int = 3,
-    custom_logger: Logger | None = None,
+    custom_logger: CustomLogger | None = None,
 ) -> Result:
     """Try an operation up to three times unless another limit is passed.
 

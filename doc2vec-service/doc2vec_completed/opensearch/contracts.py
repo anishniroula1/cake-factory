@@ -1,4 +1,4 @@
-from typing import Literal, NotRequired, Protocol, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 type TspId = int | str
 
@@ -57,20 +57,9 @@ class OccurrenceDocument(TypedDict):
     isNonMatcher: bool
     isTracer: bool
     isFormLanguage: bool
+    isCurrent: bool
     createdAt: str
     updatedAt: str
 
 
 type OpenSearchDocument = CatalogDocument | OccurrenceDocument
-
-
-class Logger(Protocol):
-    def debug(self, message: str) -> None: ...
-
-    def info(self, message: str) -> None: ...
-
-    def warning(self, message: str) -> None: ...
-
-    def error(self, message: str) -> None: ...
-
-    def exception(self, message: str) -> None: ...

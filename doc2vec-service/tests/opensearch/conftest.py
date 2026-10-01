@@ -49,6 +49,7 @@ def sentence_record():
         is_non_matcher=False,
         is_tracer=False,
         is_form_language=False,
+        is_current=True,
         created_at=now,
         updated_at=now,
     )

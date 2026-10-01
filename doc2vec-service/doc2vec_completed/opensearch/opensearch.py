@@ -4,7 +4,8 @@ import time
 from opensearchpy import OpenSearch, TransportError, helpers
 
 from doc2vec_completed.opensearch.config import Config
-from doc2vec_completed.opensearch.contracts import Logger, OpenSearchDocument
+from doc2vec_completed.opensearch.contracts import OpenSearchDocument
+from doc2vec_completed.opensearch.custom_logger import CustomLogger
 from doc2vec_completed.opensearch.errors import PermanentDataError
 
 # These failures are normally temporary problems from OpenSearch, Lasso,
@@ -17,7 +18,7 @@ class OpenSearchHelper:
         self,
         config: Config,
         client: OpenSearch,
-        custom_logger: Logger,
+        custom_logger: CustomLogger,
     ) -> None:
         """Keep the small amount of OpenSearch code shared by all handlers."""
 
