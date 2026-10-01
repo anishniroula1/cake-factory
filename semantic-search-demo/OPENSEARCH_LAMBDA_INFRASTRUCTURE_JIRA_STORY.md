@@ -230,43 +230,20 @@ When the event is processed
 Then the Lambda reads the numeric sentenceEntityId, applicationId, tspId, globalId, and entityId
 And it creates semanticKey from the normalized entitySearchText
 And it uses semanticKey as the catalog document ID
-And it checks whether that catalog document already exists
-And an existing catalog document and vector are reused without calling Titan again
-```
-
-```gherkin
-Given the semanticKey does not exist in the catalog
-When the Lambda creates the catalog document
-Then entitySearchText is sent through the configured text_embedding pipeline
-And OpenSearch creates a 512-value Titan vector
-And the catalog document contains semanticKey, entitySearchText, and entitySearchTextVector
+And an existing catalog vector is reused without calling Titan again
+And a missing catalog document sends entitySearchText through the configured text_embedding pipeline
+And the new catalog document contains semanticKey, entitySearchText, and a 512-value entitySearchTextVector
 And the catalog document does not contain normalizedText
 And the catalog document is saved before the occurrence document
 And the occurrence document is written through the ner_entity_occurrences alias with semanticKey
-```
-
-```gherkin
-Given catalog vector generation or an OpenSearch write fails with a temporary error
-When the status is 408, 424, 429, 500, 502, 503, or 504, or a connection timeout occurs
-Then the failed operation is retried up to 10 total attempts
+And status 408, 424, 429, 500, 502, 503, 504, and connection timeouts are retried up to 10 total attempts
 And each failed attempt waits 5 seconds before the next attempt
 And a successful retry resets the retry count for the next entity event
 And the log shows the entity ID, semanticKey, attempt number, status code, and short error reason
 And the log does not print the embedding vector or the full event payload
-```
-
-```gherkin
-Given two Lambda executions try to create the same semanticKey
-When one catalog create succeeds and the other receives a 409 conflict
-Then the 409 is treated as an existing catalog document
+And a catalog create 409 conflict is treated as an existing catalog document
 And only one catalog vector is stored
-And both occurrence documents are still saved
-```
-
-```gherkin
-Given a permanent mapping, authorization, model, pipeline, or vector-dimension error occurs
-When the Lambda cannot complete both required writes
-Then the permanent error is not repeatedly sent to Titan
+And permanent mapping, authorization, model, pipeline, and vector-dimension errors are not repeatedly sent to Titan
 And the Lambda invocation fails so the configured database-trigger retry or DLQ behavior can handle the event
 And the event is reported as successful only after the catalog dependency and occurrence write are complete
 ```
