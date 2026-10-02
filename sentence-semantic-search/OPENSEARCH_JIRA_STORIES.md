@@ -132,6 +132,7 @@ Then Terraform creates the sentence occurrence index
 And creates the sentence training index
 And creates the tracer and form-language index
 And creates an alias for each index
+And the occurrence mapping does not contain isNonMatcher, isTracer, isFormLanguage, or nonMatcherChecked
 ```
 
 ```gherkin
@@ -195,15 +196,6 @@ PUT /sentence_occurrences-v1
       },
       "analysisGroup": {
         "type": "keyword"
-      },
-      "isNonMatcher": {
-        "type": "boolean"
-      },
-      "isTracer": {
-        "type": "boolean"
-      },
-      "isFormLanguage": {
-        "type": "boolean"
       },
       "createdAt": {
         "type": "date"
@@ -688,14 +680,15 @@ Check the model status with:
 GET /_plugins/_knn/models/sentence-ivf-sq16-512-nlist16384-v1?filter_path=model_id,state,error,dimension,space_type,method
 ```
 
-## 13. DevOps | Create Asylee and Refugee sentence catalogs after IVF training
+## 13. DevOps | Update the sentence catalog for Asylee and add the Refugee catalog
 
 ### Value
 
-Create separate production catalogs for Asylee and Refugee sentences after the
-shared IVF-SQ16 model reaches the `created` state. Both catalogs use the same
-trained model and Bedrock pipeline. Splitting the catalogs keeps matching and
-classification inside the correct analysis group.
+Replace the planned single sentence catalog with an Asylee catalog and add a
+separate Refugee catalog after the shared IVF-SQ16 model reaches the `created`
+state. Both catalogs use the same trained model and Bedrock pipeline. Splitting
+the catalogs keeps matching and classification inside the correct analysis
+group.
 
 ### Asylee catalog mapping
 
@@ -784,13 +777,22 @@ POST /_aliases
 ```gherkin
 Given OPENSEARCH_IVF_MODEL_ID has state created and no training error
 When the Terraform catalog deployment runs
-Then it creates sentence_semantic_catalog_asylee-ivf-sq16-v1 with that model ID
+Then the previous single sentence catalog resource is updated to sentence_semantic_catalog_asylee-ivf-sq16-v1
+And the Asylee catalog uses that model ID
 And it creates sentence_semantic_catalog_refugee-ivf-sq16-v1 with the same model ID
 And it creates the sentence_semantic_catalog_asylee alias
 And it creates the sentence_semantic_catalog_refugee alias
 And both mappings contain isNonMatcher, isTracer, and isFormLanguage
 And neither catalog stores analysisGroup because the selected catalog defines the group
 And Terraform exposes both physical index names and both aliases for Harness
+And application services no longer use the generic sentence_semantic_catalog alias
+```
+
+```gherkin
+Given the existing generic sentence catalog contains data
+When the two group catalogs are deployed
+Then the generic catalog is not deleted during this deployment
+And services switch to the group aliases only after both catalogs are populated and validated
 ```
 
 Harness outputs:
@@ -1264,8 +1266,8 @@ ALTER TABLE tsp.similar_cases_emb
 ### Value
 
 Load the sentences for one `tsp_id`, classify them against the tracer and
-form-language catalog, and save the classification in PostgreSQL and the
-OpenSearch occurrence index before normal similarity matching begins.
+form-language catalog, and save the classification in the selected group
+catalog and PostgreSQL before normal similarity matching begins.
 
 ### Acceptance Criteria
 
@@ -1286,15 +1288,14 @@ Then the worker first reads any saved isNonMatcher, isTracer, and isFormLanguage
 And when those values are missing it checks the sentence vector against tracer_form_language_catalog for the same analysisGroup
 And it saves the completed classification on the selected group catalog document
 And the sentence row in sentences_vector is updated using global_id
-And the sentence_occurrences document with the same globalId is updated with isNonMatcher, isTracer, and isFormLanguage
 And a sentence marked as a non-matcher is not sent to normal sentence similarity matching
 ```
 
 ```gherkin
-Given a tracer lookup, sentences_vector update, or sentence_occurrences update fails temporarily
+Given a group-catalog read or update, tracer lookup, or sentences_vector update fails temporarily
 When the worker retries the sentence
 Then the same sentence is processed again without creating a duplicate
-And both saved copies contain the same classification after the retry succeeds
+And the group catalog and sentences_vector row contain the same classification after the retry succeeds
 ```
 
 ## 21. Sentence Similarity | Search eligible sentences and save Titan matches (Assign this to Anish, I already have the code for this.)
