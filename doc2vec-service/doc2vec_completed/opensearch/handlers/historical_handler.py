@@ -43,8 +43,10 @@ class HistoricalHandler:
     def process(self, tsp_id: TspId) -> HistoricalResult:
         """Index already-split historical sentences and send the next message."""
 
+        self.logger.info("Historical sentence processing started.")
+        self.logger.info("Counting historical sentences.")
         total = retry_operation(
-            f"count HISTORICAL tsp_id {tsp_id}",
+            "Count historical sentences",
             self._count,
             tsp_id,
             wait_seconds=self.config.retry_seconds,
@@ -52,20 +54,28 @@ class HistoricalHandler:
         )
         if total == 0:
             raise PermanentDataError(
-                f"sentences_vector has no rows for tsp_id {tsp_id}"
+                "sentences_vector has no rows for the requested historical document"
             )
 
-        self.logger.info(f"HISTORICAL tsp_id={tsp_id} contains {total} sentence(s)")
+        self.logger.info(
+            f"Found {total} historical sentence(s) to process."
+        )
         indexed = 0
         after_global_id = 0
+        page_number = 0
 
         with ThreadPoolExecutor(
             max_workers=self.config.thread_worker_count,
             thread_name_prefix="historical-sentence",
         ) as executor:
             while True:
+                page_number += 1
+                self.logger.info(
+                    f"Loading historical page {page_number} after global ID "
+                    f"{after_global_id}."
+                )
                 rows = retry_operation(
-                    f"load HISTORICAL tsp_id {tsp_id}",
+                    f"Load historical page {page_number}",
                     self._load_page,
                     tsp_id,
                     after_global_id,
@@ -73,36 +83,66 @@ class HistoricalHandler:
                     custom_logger=self.logger,
                 )
                 if not rows:
+                    self.logger.info(
+                        f"Historical page {page_number} is empty. All pages "
+                        "have been loaded."
+                    )
                     break
+
+                self.logger.info(
+                    f"Historical page {page_number} loaded {len(rows)} "
+                    f"sentence(s), global IDs {rows[0].global_id} through "
+                    f"{rows[-1].global_id}."
+                )
 
                 # Historical rows already contain split sentences. Only create
                 # the stable sentence keys that the two OpenSearch indexes use.
+                self.logger.info(
+                    f"Creating and saving sentence keys for historical page "
+                    f"{page_number}."
+                )
                 retry_operation(
-                    f"save HISTORICAL tsp_id {tsp_id} sentence keys",
+                    f"Save sentence keys for historical page {page_number}",
                     self._save_keys,
                     rows,
                     wait_seconds=self.config.retry_seconds,
                     custom_logger=self.logger,
                 )
+                self.logger.info(
+                    f"Saved {len(rows)} sentence key(s) for historical page "
+                    f"{page_number}."
+                )
 
                 # Split this database page into small jobs for the worker pool.
                 # Run every job in parallel and add its row count to the total.
                 worker_batches = list(batches(rows, self.config.worker_batch_size))
-                indexed += sum(executor.map(self._run_worker, worker_batches))
+                self.logger.info(
+                    f"Starting {len(worker_batches)} worker batch(es) for "
+                    f"historical page {page_number}."
+                )
+                page_indexed = sum(executor.map(self._run_worker, worker_batches))
+                indexed += page_indexed
                 after_global_id = rows[-1].global_id
                 self.logger.info(
-                    f"HISTORICAL tsp_id={tsp_id} processed through "
-                    f"global_id={after_global_id}"
+                    f"Historical page {page_number} completed. Indexed "
+                    f"{page_indexed} sentence(s) from this page and {indexed} "
+                    f"sentence(s) in total through global ID {after_global_id}."
                 )
 
         # Publish only after every historical sentence is safely indexed. The
         # SQS processor deletes the source message after this method returns.
+        self.logger.info("Sending the completed historical message to the next queue.")
         retry_operation(
-            f"publish HISTORICAL tsp_id {tsp_id}",
+            "Send the completed historical message",
             self._publish,
             tsp_id,
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
+        )
+        self.logger.info("Sent the completed historical message to the next queue.")
+        self.logger.info(
+            f"Historical sentence processing completed. Source count: {total}. "
+            f"Indexed count: {indexed}."
         )
 
         return {
@@ -178,26 +218,82 @@ class HistoricalHandler:
     def _run_worker(self, rows: list[SentencesVector]) -> int:
         """Retry one historical worker batch up to the configured limit."""
 
-        label = f"HISTORICAL global_id {rows[0].global_id}-{rows[-1].global_id}"
-        return retry_operation(
+        label = self._batch_label(rows)
+        self.logger.info(
+            f"{label} started with {len(rows)} sentence(s)."
+        )
+        indexed_count = retry_operation(
             label,
             self._process_worker,
             rows,
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
         )
+        self.logger.info(
+            f"{label} completed with {indexed_count} indexed sentence(s)."
+        )
+        return indexed_count
 
     def _process_worker(self, rows: list[SentencesVector]) -> int:
         """Write one document's catalog entries and sentence occurrences."""
 
-        document = rows[0].tsp
-        catalog_alias = self._catalog_alias(
-            document.analysis_group,
-            document.tsp_id,
-        )
-        embeddings = self._load_embeddings([row.global_id for row in rows])
-        self._index_catalog_rows(catalog_alias, rows, embeddings)
+        label = self._batch_label(rows)
+        stage = "catalog selection"
+        try:
+            document = rows[0].tsp
+            catalog_alias = self._catalog_alias(
+                document.analysis_group,
+            )
+            self.logger.info(
+                f"{label} selected catalog {catalog_alias} for analysis group "
+                f"{document.analysis_group}."
+            )
 
+            stage = "saved embedding lookup"
+            embeddings = self._load_embeddings([row.global_id for row in rows])
+            self.logger.info(
+                f"{label} loaded {len(embeddings)} saved Titan embedding(s)."
+            )
+
+            stage = "catalog indexing"
+            self._index_catalog_rows(catalog_alias, rows, embeddings, label)
+
+            stage = "occurrence indexing"
+            occurrences = self._occurrence_documents(rows)
+            self.logger.info(
+                f"{label} is writing {len(occurrences)} occurrence document(s) "
+                f"to {self.config.occurrence_alias}."
+            )
+            self.opensearch.bulk_index(
+                self.config.occurrence_alias,
+                occurrences,
+                needs_embedding=False,
+            )
+            self.logger.info(
+                f"{label} wrote {len(occurrences)} occurrence document(s)."
+            )
+            return len(rows)
+        except Exception as error:
+            self.logger.error(
+                f"{label} failed during {stage}: {str(error)[:500]}"
+            )
+            raise
+
+    def _batch_label(self, rows: list[SentencesVector]) -> str:
+        """Return the stable log label for one worker batch."""
+
+        return (
+            f"Historical worker batch for global IDs {rows[0].global_id} "
+            f"through {rows[-1].global_id}"
+        )
+
+    def _occurrence_documents(
+        self,
+        rows: list[SentencesVector],
+    ) -> list[OccurrenceDocument]:
+        """Build occurrence documents from sentence and joined document rows."""
+
+        document = rows[0].tsp
         occurrences: list[OccurrenceDocument] = []
         for row in rows:
             occurrences.append(
@@ -217,14 +313,9 @@ class HistoricalHandler:
                     "updatedAt": row.last_modified.isoformat(),
                 }
             )
-        self.opensearch.bulk_index(
-            self.config.occurrence_alias,
-            occurrences,
-            needs_embedding=False,
-        )
-        return len(rows)
+        return occurrences
 
-    def _catalog_alias(self, analysis_group: str, tsp_id: int) -> str:
+    def _catalog_alias(self, analysis_group: str) -> str:
         """Return the one catalog selected for a document's analysis group."""
 
         normalized_group = analysis_group.strip().casefold()
@@ -233,8 +324,7 @@ class HistoricalHandler:
         if normalized_group == "refugee":
             return self.config.refugee_catalog_alias
         raise PermanentDataError(
-            f"tsp_id {tsp_id} has unsupported analysis_group "
-            f"{analysis_group!r}"
+            f"unsupported analysis_group {analysis_group!r}"
         )
 
     def _index_catalog_rows(
@@ -242,6 +332,7 @@ class HistoricalHandler:
         catalog_alias: str,
         rows: list[SentencesVector],
         embeddings: dict[int, list[float]],
+        batch_label: str,
     ) -> None:
         """Write missing unique keys from one analysis group to its catalog."""
 
@@ -274,6 +365,11 @@ class HistoricalHandler:
 
         # Saved Titan vectors bypass the pipeline. Only missing vectors call
         # the selected catalog's Bedrock embedding pipeline.
+        self.logger.info(
+            f"{batch_label} is writing catalog {catalog_alias}. Existing keys: "
+            f"{len(existing_keys)}. Saved vectors: {len(with_vectors)}. "
+            f"Vectors for Bedrock: {len(need_vectors)}."
+        )
         self.opensearch.bulk_index(
             catalog_alias,
             with_vectors,
@@ -283,6 +379,10 @@ class HistoricalHandler:
             catalog_alias,
             need_vectors,
             needs_embedding=True,
+        )
+        self.logger.info(
+            f"{batch_label} completed catalog {catalog_alias} with "
+            f"{len(with_vectors) + len(need_vectors)} indexed document(s)."
         )
 
     def _load_embeddings(self, global_ids: list[int]) -> dict[int, list[float]]:
@@ -316,4 +416,4 @@ class HistoricalHandler:
             is_fifo=queue_url.endswith(".fifo"),
         )
         if not sent:
-            raise RuntimeError(f"failed to send tsp_id {tsp_id} to Sentence Similarity")
+            raise RuntimeError("failed to send the historical message to Sentence Similarity")

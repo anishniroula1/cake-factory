@@ -30,6 +30,11 @@ def retry_operation[**Parameters, Result](
             return operation(*arguments)
         except Exception as error:
             if isinstance(error, (PermanentDataError, PermanentMessageError)):
+                if custom_logger:
+                    custom_logger.error(
+                        f"{label} failed and will not be retried: "
+                        f"{str(error)[:500]}"
+                    )
                 raise
             if attempt == max_attempts:
                 if custom_logger:

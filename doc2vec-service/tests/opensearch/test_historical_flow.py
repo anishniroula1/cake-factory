@@ -173,6 +173,43 @@ def test_historical_message_runs_the_complete_ingestion_flow(
     }
     assert sqs.deleted == [message]
 
+    expected_log_order = [
+        "Starting historical SQS message",
+        "Historical sentence processing started",
+        "Counting historical sentences",
+        "Found 4 historical sentence(s)",
+        "Historical page 1 loaded 4 sentence(s)",
+        "Creating and saving sentence keys",
+        "Saved 4 sentence key(s)",
+        "Starting 1 worker batch(es)",
+        "worker batch for global IDs 1 through 4 started",
+        "selected catalog catalog-asylee",
+        "loaded 1 saved Titan embedding(s)",
+        "is writing catalog catalog-asylee",
+        "completed catalog catalog-asylee",
+        "is writing 4 occurrence document(s)",
+        "wrote 4 occurrence document(s)",
+        "worker batch for global IDs 1 through 4 completed",
+        "Historical page 1 completed",
+        "Historical page 2 is empty",
+        "Sending the completed historical message",
+        "Sent the completed historical message",
+        "Historical sentence processing completed",
+        "finished processing. Deleting it",
+        "completed and was deleted",
+    ]
+    next_position = 0
+    for expected_message in expected_log_order:
+        next_position = next(
+            index + 1
+            for index in range(next_position, len(custom_logger.info_messages))
+            if expected_message in custom_logger.info_messages[index]
+        )
+    assert all(
+        "tsp_id=" not in message_text
+        for message_text in custom_logger.info_messages
+    )
+
 
 def test_temporary_worker_failure_retries_without_losing_the_message(
     service_config,
@@ -218,6 +255,11 @@ def test_temporary_worker_failure_retries_without_losing_the_message(
     assert opensearch.read_attempts == 2
     assert sqs.deleted == [message]
     assert len(custom_logger.warning_messages) == 1
+    assert "attempt 1 failed" in custom_logger.warning_messages[0]
+    assert any(
+        "failed during catalog indexing" in message_text
+        for message_text in custom_logger.error_messages
+    )
 
 
 def test_refugee_document_uses_only_the_refugee_catalog(
@@ -298,6 +340,14 @@ def test_unsupported_analysis_group_does_not_delete_the_message(
     assert sqs.deleted == []
     assert sqs.sent == []
     assert len(custom_logger.exception_messages) == 1
+    assert any(
+        "failed during catalog selection" in message_text
+        for message_text in custom_logger.error_messages
+    )
+    assert any(
+        "will not be retried" in message_text
+        for message_text in custom_logger.error_messages
+    )
 
 
 @pytest.mark.parametrize("reason", [None, "TRAIN", "TRACER"])

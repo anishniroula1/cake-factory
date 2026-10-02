@@ -93,6 +93,25 @@ times by default. The OpenSearch helper continues retrying temporary Lasso,
 Bedrock, gateway, and OpenSearch failures while applying the shared embedding
 cooldown.
 
+## Processing logs
+
+The worker writes simple progress logs in processing order. They show when a
+message starts, how many sentences were found, when each database page is
+loaded, when keys are saved, and when catalog and occurrence writes finish.
+Parallel worker messages include the first and last `global_id` in the batch,
+so a failed batch is easy to find without logging the `tsp_id`.
+
+Every failed stage writes an error before it is retried. Retry logs show the
+attempt number and wait time. A permanent failure says that it will not be
+retried, and the source SQS message is left on the queue. A successful flow
+logs the source count, indexed count, next-queue send, and source-message
+deletion.
+
+The OpenSearch helper also logs every ID lookup and bulk write. Its messages
+show the alias, document count, whether saved vectors or the Bedrock pipeline
+are used, retry failures, permanent failures, and shared embedding cooldown
+waits. Empty lookup and write requests are logged as skipped operations.
+
 ## Database tables
 
 The worker uses:

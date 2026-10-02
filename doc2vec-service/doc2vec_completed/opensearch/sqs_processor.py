@@ -28,25 +28,39 @@ class SqsProcessor:
 
         try:
             tsp_id = self._read_tsp_id(raw_message)
+            message_id = raw_message.get("MessageId")
+            self.dependencies.logger.info(
+                f"Starting historical SQS message {message_id}."
+            )
             self.dependencies.historical_handler.process(tsp_id)
         except PermanentMessageError as error:
-            self.dependencies.logger.error(f"Invalid SQS message: {str(error)[:500]}")
+            self.dependencies.logger.error(
+                f"Invalid historical SQS message: {str(error)[:500]}"
+            )
             return
         except Exception:
             self.dependencies.logger.exception(
-                "Doc2Vec message failed and was not deleted"
+                "Historical SQS message failed and was not deleted."
             )
             return
 
+        self.dependencies.logger.info(
+            f"Historical SQS message {message_id} finished processing. "
+            "Deleting it from the source queue."
+        )
         if not self.dependencies.aws_sqs.delete_messages(raw_message):
             self.dependencies.logger.warning(
                 f"SQS message_id={raw_message.get('MessageId')} was not deleted"
             )
+            return
+        self.dependencies.logger.info(
+            f"Historical SQS message {message_id} completed and was deleted."
+        )
 
     def _read_tsp_id(self, message: SqsMessage) -> TspId:
         """Return tsp_id exactly as supplied, including a string value."""
 
         tsp_id = message.get("tsp_id")
         if tsp_id is None:
-            raise PermanentMessageError("tsp_id is required")
+            raise PermanentMessageError("the required document identifier is missing")
         return tsp_id

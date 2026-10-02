@@ -33,6 +33,17 @@ class OpenSearchHelper:
 
         existing: set[str] = set()
         unique_ids = list(dict.fromkeys(document_ids))
+        if not unique_ids:
+            self.logger.info(
+                f"Skipped the OpenSearch lookup in {alias} because no document "
+                "IDs were provided."
+            )
+            return existing
+
+        self.logger.info(
+            f"Checking {len(unique_ids)} unique document ID(s) in OpenSearch "
+            f"alias {alias}."
+        )
         for offset in range(0, len(unique_ids), self.config.opensearch_batch_size):
             batch = unique_ids[offset : offset + self.config.opensearch_batch_size]
             attempt = 0
@@ -47,18 +58,26 @@ class OpenSearchHelper:
                     break
                 except TransportError as error:
                     if not self._is_retryable(error):
-                        raise PermanentDataError(
-                            f"OpenSearch could not read {alias}: {error}"
-                        ) from error
+                        message = (
+                            f"OpenSearch lookup in alias {alias} failed permanently: "
+                            f"{str(error)[:500]}"
+                        )
+                        self.logger.error(message)
+                        raise PermanentDataError(message) from error
                     self.logger.warning(
-                        f"OpenSearch {alias} read attempt {attempt} failed; "
-                        f"retrying in {self.config.retry_seconds} seconds"
+                        f"OpenSearch lookup in alias {alias} failed on attempt "
+                        f"{attempt} for {len(batch)} document ID(s). Retrying in "
+                        f"{self.config.retry_seconds} seconds."
                     )
                     time.sleep(self.config.retry_seconds)
 
             for document in response["docs"]:
                 if document.get("found"):
                     existing.add(str(document["_id"]))
+        self.logger.info(
+            f"OpenSearch lookup in alias {alias} completed. Found "
+            f"{len(existing)} existing document(s)."
+        )
         return existing
 
     def bulk_index(
@@ -74,8 +93,21 @@ class OpenSearchHelper:
         """
 
         if not documents:
+            self.logger.info(
+                f"Skipped the OpenSearch bulk write to {alias} because there "
+                "were no documents to index."
+            )
             return 0
 
+        vector_source = (
+            "the Bedrock embedding pipeline"
+            if needs_embedding
+            else "vectors already stored in the documents"
+        )
+        self.logger.info(
+            f"Starting an OpenSearch bulk write of {len(documents)} document(s) "
+            f"to {alias} using {vector_source}."
+        )
         pending = documents
         attempt = 0
         while pending:
@@ -116,16 +148,30 @@ class OpenSearchHelper:
                 )
             except TransportError as error:
                 if not self._is_retryable(error):
-                    raise PermanentDataError(
-                        f"OpenSearch could not write {alias}: {error}"
-                    ) from error
+                    message = (
+                        f"OpenSearch bulk write to {alias} failed permanently: "
+                        f"{str(error)[:500]}"
+                    )
+                    self.logger.error(message)
+                    raise PermanentDataError(message) from error
                 self._pause_before_retry(alias, attempt, len(pending), needs_embedding)
                 continue
 
             if not failures:
+                self.logger.info(
+                    f"OpenSearch bulk write to {alias} completed. Indexed "
+                    f"{len(documents)} document(s)."
+                )
                 return len(documents)
 
-            pending = self._retryable_documents(failures, pending)
+            try:
+                pending = self._retryable_documents(failures, pending)
+            except PermanentDataError as error:
+                self.logger.error(
+                    f"OpenSearch bulk write to {alias} failed permanently: "
+                    f"{str(error)[:500]}"
+                )
+                raise
             self._pause_before_retry(alias, attempt, len(pending), needs_embedding)
 
         return len(documents)
@@ -134,10 +180,12 @@ class OpenSearchHelper:
         """Reject a vector that does not match the 512-dimension mapping."""
 
         if len(vector) != self.config.vector_dimension:
-            raise PermanentDataError(
+            message = (
                 f"embedding has {len(vector)} values; "
                 f"expected {self.config.vector_dimension}"
             )
+            self.logger.error(f"OpenSearch vector validation failed: {message}")
+            raise PermanentDataError(message)
 
     def _retryable_documents(
         self,
@@ -154,7 +202,8 @@ class OpenSearchHelper:
             if status not in RETRYABLE_STATUS_CODES or document_id is None:
                 reason = operation.get("error", operation)
                 raise PermanentDataError(
-                    f"OpenSearch rejected document {document_id}: {reason}"
+                    f"OpenSearch rejected document {document_id}: "
+                    f"{str(reason)[:500]}"
                 )
             failed_ids.add(str(document_id))
         return [
@@ -170,10 +219,11 @@ class OpenSearchHelper:
     ) -> None:
         """Log one short error and apply the correct retry pause."""
 
+        request_type = "embedding" if needs_embedding else "bulk"
         self.logger.warning(
-            f"OpenSearch {alias} attempt {attempt} failed for "
-            f"{failed_count} document(s); retrying in "
-            f"{self.config.retry_seconds} seconds"
+            f"OpenSearch {request_type} write to {alias} failed on attempt "
+            f"{attempt} for {failed_count} document(s). Retrying in "
+            f"{self.config.retry_seconds} seconds."
         )
         if needs_embedding:
             with self.cooldown_lock:
@@ -192,6 +242,11 @@ class OpenSearchHelper:
                 remaining = self.embedding_cooldown_until - time.monotonic()
             if remaining <= 0:
                 return
+            self.logger.info(
+                "Waiting "
+                f"{remaining:.1f} second(s) before the next OpenSearch embedding "
+                "write because an earlier request was throttled."
+            )
             time.sleep(remaining)
 
     @staticmethod
