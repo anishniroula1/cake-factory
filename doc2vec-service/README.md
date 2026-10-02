@@ -2,7 +2,8 @@
 
 This is a standalone SQS worker for historical sentence backfill. It reads
 already-split sentences from PostgreSQL and writes them to the sentence
-catalog and occurrence aliases in AWS OpenSearch.
+catalog selected by `analysis_group` and the occurrence alias in AWS
+OpenSearch.
 
 It is not an API or FastAPI application. It processes one SQS message at a
 time, and all historical processing logic stays inside
@@ -57,6 +58,10 @@ that reason is logged and is not sent into the historical handler. The worker
 keeps `tsp_id` exactly as received, so both a number and a string are valid. It
 does not accept the alternate name `tspId` in an SQS message.
 
+The SQS value is used only for the database lookup and next message. The
+OpenSearch occurrence uses the numeric `tsp_id` loaded from
+`text_similarity_input`.
+
 The main code types are defined in `contracts.py`. The processing flow is:
 
 ```text
@@ -72,7 +77,8 @@ the expected fields are visible before a document is sent for bulk indexing.
 2. Read up to 3,000 rows at a time in `global_id` order.
 3. Generate and save the SHA-256 `sentence_key` for every row.
 4. Split the page into 30-sentence jobs and run up to 100 workers.
-5. Check which sentence keys already exist in the catalog.
+5. Read the document's one `analysis_group` from `text_similarity_input`,
+   select the Asylee or Refugee catalog, and check which sentence keys exist.
 6. For a missing key, reuse its saved Titan vector from `embeddings` when
    `embedding_type = 2`. If no vector exists, let the catalog's Bedrock ingest
    pipeline create it.
@@ -92,11 +98,14 @@ cooldown.
 The worker uses:
 
 - `sentences_vector`
-- `text_similarity_input`, joined by `tsp_id` to read `application_id`
+- `text_similarity_input`, joined by `tsp_id` to read `application_id`,
+  `analysis_group`, `section_name`, and `is_current`
 - `embeddings`, joined by `global_id`
 
-`a_number` remains in PostgreSQL. The occurrence index stores `applicationId`
-from the related `text_similarity_input` row and does not store `a_number`.
+`a_number` remains in PostgreSQL. The occurrence index stores the numeric
+`applicationId` and `tspId`. It reads `applicationId`, `analysisGroup`,
+`sectionName`, and `isCurrent` from the related `text_similarity_input` row and
+does not store `a_number`.
 
 If production column names differ, update `models.py`.
 
@@ -105,11 +114,19 @@ If production column names differ, update `models.py`.
 The worker writes to:
 
 - `sentence_occurrences`
-- `sentence_semantic_catalog`
+- `sentence_semantic_catalog_asylee`
+- `sentence_semantic_catalog_refugee`
 
-The catalog uses a 512-dimension `sentenceContentVector`. Its default Bedrock
-pipeline creates a vector when the field is missing. A saved vector is sent
-with `pipeline=_none`, which avoids another Bedrock call.
+Both catalogs use the same trained 512-dimension Faiss IVF-SQ16 model. Their
+default Bedrock pipeline creates a vector when the field is missing. A saved
+vector is sent with `pipeline=_none`, which avoids another Bedrock call. The
+same sentence key may correctly exist once in each catalog.
+
+The occurrence document stores identity, content, location, `analysisGroup`,
+and `isCurrent`. It does not store `isNonMatcher`, `isTracer`,
+`isFormLanguage`, or `nonMatcherChecked`. Sentence Similarity stores the
+reusable classification on the selected group catalog and the occurrence-level
+classification in PostgreSQL.
 
 ## Run
 

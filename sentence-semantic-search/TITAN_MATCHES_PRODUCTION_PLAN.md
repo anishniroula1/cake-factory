@@ -93,10 +93,10 @@ PUT /sentence_occurrences-v1
         "type": "long"
       },
       "applicationId": {
-        "type": "keyword"
+        "type": "long"
       },
       "tspId": {
-        "type": "keyword"
+        "type": "long"
       },
       "sectionName": {
         "type": "keyword"
@@ -115,6 +115,9 @@ PUT /sentence_occurrences-v1
       },
       "analysisGroup": {
         "type": "keyword"
+      },
+      "isCurrent": {
+        "type": "boolean"
       },
       "createdAt": {
         "type": "date"
@@ -435,11 +438,16 @@ that table.
 Important columns are:
 
 ```text
-global_id, application_id, tsp_id, section_name,
+global_id, tsp_id,
 is_non_matcher, is_tracer, is_form_language, non_matcher_checked,
-sent_id_local, sentence_content, source_type, analysis_group,
-is_current, sentence_key, created_at, updated_at
+sent_id_local, sentence_content, source_type,
+sentence_key, created_at, updated_at
 ```
+
+DOC2Vec joins `text_similarity_input` by `tsp_id` and reads the document-level
+`application_id`, `analysis_group`, `section_name`, and `is_current` values
+from that table. One `tsp_id` has one analysis group, so all of its sentence
+occurrences use the same catalog.
 
 DOC2Vec initially saves `is_non_matcher = false`, `is_tracer = false`, and
 `is_form_language = false`. It saves `non_matcher_checked = false` because
@@ -476,17 +484,18 @@ embedding is available for the selected global ID.
 After DOC2Vec inserts the live rows or loads the historical rows, it:
 
 1. Writes every sentence occurrence to the occurrence index.
-2. Groups the sentences by `analysis_group`.
-3. Checks Asylee keys in `sentence_semantic_catalog_asylee` and Refugee keys
-   in `sentence_semantic_catalog_refugee`.
-4. Skips vector work when the sentence key already exists in the selected
+2. Reads the document's one `analysis_group` from `text_similarity_input`.
+3. Selects `sentence_semantic_catalog_asylee` or
+   `sentence_semantic_catalog_refugee` once for that `tsp_id`.
+4. Checks all sentence keys for the `tsp_id` in that selected catalog.
+5. Skips vector work when the sentence key already exists in the selected
    group catalog.
-5. For a missing key, uses the existing `embedding_type = 2` vector when one
+6. For a missing key, uses the existing `embedding_type = 2` vector when one
    is available for the global ID.
-6. Sends the sentence through the Titan ingest pipeline only when the selected
+7. Sends the sentence through the Titan ingest pipeline only when the selected
    catalog key and reusable embedding are both missing.
-7. Writes the missing key only to its selected group catalog.
-8. Waits until every missing catalog vector exists.
+8. Writes the missing key only to its selected group catalog.
+9. Waits until every missing catalog vector exists.
 
 DOC2Vec does not write incoming sentences to the tracer/form-language catalog.
 

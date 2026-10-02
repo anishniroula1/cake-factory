@@ -12,41 +12,8 @@ class EngineFake:
         self.disposed = True
 
 
-def dependency_config():
-    return SimpleNamespace(
-        pg_db_user="database-user",
-        pg_db_password="database-password",
-        pg_db_host="database-host",
-        pg_db_database="database-name",
-        pg_db_port=5432,
-        database_pool_size=20,
-        database_max_overflow=10,
-        dynamic_credential_file="",
-        aws_region="us-east-1",
-        aws_endpoint_url="",
-        opensearch_host="search.example.com",
-        opensearch_port=443,
-        opensearch_service="es",
-        opensearch_iam_access_role="",
-        opensearch_batch_size=1_000,
-        occurrence_alias="sentence_occurrences",
-        catalog_alias="sentence_semantic_catalog",
-        vector_dimension=512,
-        doc2vec_queue_url="https://sqs.example.com/doc2vec.fifo",
-        sqs_wait_seconds=10,
-        sqs_visibility_seconds=7_200,
-        retry_seconds=5,
-        sentence_similarity_backfill_queue_url=(
-            "https://sqs.example.com/similarity.fifo"
-        ),
-        worker_batch_size=30,
-        thread_worker_count=100,
-        titan_embedding_type=2,
-    )
-
-
-def test_dependencies_build_and_close_all_resources(monkeypatch):
-    config = dependency_config()
+def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_config):
+    config = dependency_config
     logger = object()
     engine = EngineFake()
     database = SimpleNamespace(engine=engine)

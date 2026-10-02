@@ -174,10 +174,10 @@ PUT /sentence_occurrences-v1
         "type": "long"
       },
       "applicationId": {
-        "type": "keyword"
+        "type": "long"
       },
       "tspId": {
-        "type": "keyword"
+        "type": "long"
       },
       "sectionName": {
         "type": "keyword"
@@ -196,6 +196,9 @@ PUT /sentence_occurrences-v1
       },
       "analysisGroup": {
         "type": "keyword"
+      },
+      "isCurrent": {
+        "type": "boolean"
       },
       "createdAt": {
         "type": "date"
@@ -873,8 +876,10 @@ And sentences_vector is updated with sentenceKey using global_id
 
 ```gherkin
 Given a batch has generated its sentence keys
-When its Asylee keys are checked against sentence_semantic_catalog_asylee and its Refugee keys are checked against sentence_semantic_catalog_refugee
-Then keys that already exist in the selected group catalog are not inserted again
+When application_id, analysis_group, section_name, and is_current are read from text_similarity_input using tsp_id
+Then the one analysis_group for that tsp_id selects sentence_semantic_catalog_asylee or sentence_semantic_catalog_refugee
+And all sentence keys in the batch are checked against that selected catalog
+And keys that already exist in the selected group catalog are not inserted again
 And missing keys are checked against embeddings using global_id and embedding_type 2
 And a valid existing 512-dimension embedding is included in its catalog document
 And records without a saved embedding are sent without a vector so the OpenSearch Bedrock pipeline creates it
@@ -935,7 +940,8 @@ And different workers process the available batches
 ```gherkin
 Given a live sentence has a globalId, sentenceKey, and other data from sentences_vector
 When DOC2Vec prepares its OpenSearch documents
-Then analysis_group selects sentence_semantic_catalog_asylee or sentence_semantic_catalog_refugee
+Then application_id, analysis_group, section_name, and is_current are read from text_similarity_input using tsp_id
+And the one analysis_group for that tsp_id selects sentence_semantic_catalog_asylee or sentence_semantic_catalog_refugee
 And the selected sentence catalog is checked using sentenceKey
 And no vector work is done when that key already exists
 And embeddings is checked by global_id and embedding_type 2 for a missing catalog key
@@ -1399,7 +1405,8 @@ sentences to the occurrence index and the catalog selected by analysis group.
 Given historical or live rows contain globalId, sentenceKey, and sentence content
 When the shared ingestion runs
 Then workers process batches of 30 with no more than 100 workers
-And analysis_group routes each sentence to sentence_semantic_catalog_asylee or sentence_semantic_catalog_refugee
+And document values are read from text_similarity_input using tsp_id
+And the document's one analysis_group selects sentence_semantic_catalog_asylee or sentence_semantic_catalog_refugee for every sentence in that tsp_id
 And unique sentence keys are checked in the selected group catalog
 And missing keys reuse embeddings with embedding_type 2 when available
 And OpenSearch creates only the remaining missing vectors

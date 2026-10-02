@@ -46,17 +46,14 @@ class CatalogDocument(TypedDict):
 class OccurrenceDocument(TypedDict):
     _id: int
     globalId: int
-    applicationId: str
-    tspId: str
+    applicationId: int
+    tspId: int
     sectionName: str
     sentIdLocal: int
     sentenceContent: str
     sentenceKey: str
     sourceType: str
     analysisGroup: str
-    isNonMatcher: bool
-    isTracer: bool
-    isFormLanguage: bool
     isCurrent: bool
     createdAt: str
     updatedAt: str

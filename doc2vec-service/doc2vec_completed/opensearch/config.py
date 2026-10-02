@@ -49,7 +49,8 @@ class Config:
     opensearch_port: int
     opensearch_service: str
     occurrence_alias: str
-    catalog_alias: str
+    asylee_catalog_alias: str
+    refugee_catalog_alias: str
     opensearch_batch_size: int
 
     # SQS
@@ -98,8 +99,13 @@ class Config:
             occurrence_alias=os.getenv(
                 "OPENSEARCH_OCCURRENCE_ALIAS", "sentence_occurrences"
             ).strip(),
-            catalog_alias=os.getenv(
-                "OPENSEARCH_CATALOG_ALIAS", "sentence_semantic_catalog"
+            asylee_catalog_alias=os.getenv(
+                "OPENSEARCH_ASYLEE_CATALOG_ALIAS",
+                "sentence_semantic_catalog_asylee",
+            ).strip(),
+            refugee_catalog_alias=os.getenv(
+                "OPENSEARCH_REFUGEE_CATALOG_ALIAS",
+                "sentence_semantic_catalog_refugee",
             ).strip(),
             opensearch_batch_size=OPENSEARCH_BATCH_SIZE,
             # SQS resources
@@ -137,6 +143,10 @@ class Config:
             raise ValueError("OPENSEARCH_HOST is required")
         if not self.doc2vec_queue_url:
             raise ValueError("Doc2Vec SQS queue URL is required")
+        if not self.asylee_catalog_alias:
+            raise ValueError("OPENSEARCH_ASYLEE_CATALOG_ALIAS is required")
+        if not self.refugee_catalog_alias:
+            raise ValueError("OPENSEARCH_REFUGEE_CATALOG_ALIAS is required")
         if self.thread_worker_count > 100:
             raise ValueError("THREAD_WORKER_COUNT cannot be greater than 100")
         if self.vector_dimension != 512:

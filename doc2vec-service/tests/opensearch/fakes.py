@@ -56,9 +56,11 @@ class OpenSearchFake:
     def __init__(self, existing=None, vector_dimension=2):
         self.existing = existing or set()
         self.vector_dimension = vector_dimension
+        self.existing_id_calls = []
         self.bulk_calls = []
 
     def existing_ids(self, alias, document_ids):
+        self.existing_id_calls.append((alias, document_ids))
         return set(document_ids) & self.existing
 
     def bulk_index(self, alias, documents, needs_embedding):

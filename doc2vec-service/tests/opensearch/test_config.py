@@ -28,6 +28,14 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
     )
     monkeypatch.setenv("OPENSEARCH_HOST", "search.example.com")
     monkeypatch.setenv(
+        "OPENSEARCH_ASYLEE_CATALOG_ALIAS",
+        "sentence_semantic_catalog_asylee",
+    )
+    monkeypatch.setenv(
+        "OPENSEARCH_REFUGEE_CATALOG_ALIAS",
+        "sentence_semantic_catalog_refugee",
+    )
+    monkeypatch.setenv(
         "SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL",
         "https://sqs.example.com/similarity.fifo",
     )
@@ -45,6 +53,8 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
     assert config.thread_worker_count == 100
     assert config.worker_batch_size == 30
     assert config.vector_dimension == 512
+    assert config.asylee_catalog_alias == "sentence_semantic_catalog_asylee"
+    assert config.refugee_catalog_alias == "sentence_semantic_catalog_refugee"
 
     with pytest.raises(ValueError):
         replace(config, thread_worker_count=101).validate()
@@ -56,6 +66,10 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
         replace(config, opensearch_host="").validate()
     with pytest.raises(ValueError):
         replace(config, doc2vec_queue_url="").validate()
+    with pytest.raises(ValueError):
+        replace(config, asylee_catalog_alias="").validate()
+    with pytest.raises(ValueError):
+        replace(config, refugee_catalog_alias="").validate()
 
 
 def test_environment_integer_reader_rejects_bad_values(monkeypatch):

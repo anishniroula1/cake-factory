@@ -135,12 +135,38 @@ def test_historical_message_runs_the_complete_ingestion_flow(
 
     assert save_session.commits == 1
     assert all(len(row.sentence_key) == 64 for row in rows)
-    assert opensearch.bulk_calls[0][1][0]["sentenceContentVector"] == [0.1, 0.2]
-    assert opensearch.bulk_calls[1][1][0]["_id"] == bedrock_sentence.sentence_key
-    assert len(opensearch.bulk_calls[2][1]) == 4
-    assert opensearch.bulk_calls[2][1][0]["applicationId"] == "APP-1"
-    assert "aNumber" not in opensearch.bulk_calls[2][1][0]
-    assert opensearch.bulk_calls[2][1][0]["isCurrent"] is True
+    calls_with_documents = [call for call in opensearch.bulk_calls if call[1]]
+    saved_vector_call = calls_with_documents[0]
+    bedrock_call = calls_with_documents[1]
+    occurrence_call = calls_with_documents[2]
+
+    assert saved_vector_call[0] == "catalog-asylee"
+    assert saved_vector_call[1][0]["sentenceContentVector"] == [0.1, 0.2]
+    assert saved_vector_call[2] is False
+    assert bedrock_call[0] == "catalog-asylee"
+    assert bedrock_call[1][0]["_id"] == bedrock_sentence.sentence_key
+    assert bedrock_call[2] is True
+
+    assert occurrence_call[0] == "occurrence"
+    assert len(occurrence_call[1]) == 4
+    occurrence = occurrence_call[1][0]
+    assert occurrence["globalId"] == 1
+    assert occurrence["applicationId"] == 1001
+    assert occurrence["tspId"] == 10
+    assert isinstance(occurrence["globalId"], int)
+    assert isinstance(occurrence["applicationId"], int)
+    assert isinstance(occurrence["tspId"], int)
+    assert occurrence["sectionName"] == "affidavit"
+    assert occurrence["analysisGroup"] == "Asylee"
+    assert occurrence["isCurrent"] is True
+    assert "aNumber" not in occurrence
+    assert "isNonMatcher" not in occurrence
+    assert "isTracer" not in occurrence
+    assert "isFormLanguage" not in occurrence
+    assert "nonMatcherChecked" not in occurrence
+    assert {call[0] for call in opensearch.existing_id_calls} == {
+        "catalog-asylee"
+    }
     assert sqs.sent[0]["message_body"] == {
         "reason": "HISTORICAL",
         "tsp_id": 10,
@@ -194,6 +220,41 @@ def test_temporary_worker_failure_retries_without_losing_the_message(
     assert len(custom_logger.warning_messages) == 1
 
 
+def test_refugee_document_uses_only_the_refugee_catalog(
+    service_config,
+    sentence_record,
+    custom_logger,
+):
+    sentence_record.tsp.analysis_group = "Refugee"
+    sessions = SessionSequence(
+        [
+            SessionFake(scalar_value=1),
+            SessionFake(rows=[sentence_record]),
+            SessionFake(),
+            SessionFake(rows=[]),
+            SessionFake(rows=[]),
+        ]
+    )
+    opensearch = OpenSearchFake()
+    message = historical_message()
+    sqs = run_application(
+        service_config,
+        sessions,
+        opensearch,
+        message,
+        custom_logger,
+    )
+
+    assert {call[0] for call in opensearch.existing_id_calls} == {
+        "catalog-refugee"
+    }
+    occurrence_calls = [
+        call for call in opensearch.bulk_calls if call[0] == "occurrence"
+    ]
+    assert occurrence_calls[0][1][0]["analysisGroup"] == "Refugee"
+    assert sqs.deleted == [message]
+
+
 def test_failed_historical_message_is_not_deleted(
     service_config,
     custom_logger,
@@ -203,6 +264,34 @@ def test_failed_historical_message_is_not_deleted(
         SessionSequence([SessionFake(scalar_value=0)]),
         OpenSearchFake(),
         historical_message(404),
+        custom_logger,
+    )
+
+    assert sqs.deleted == []
+    assert sqs.sent == []
+    assert len(custom_logger.exception_messages) == 1
+
+
+def test_unsupported_analysis_group_does_not_delete_the_message(
+    service_config,
+    sentence_record,
+    custom_logger,
+):
+    sentence_record.tsp.analysis_group = "Unknown"
+    sessions = SessionSequence(
+        [
+            SessionFake(scalar_value=1),
+            SessionFake(rows=[sentence_record]),
+            SessionFake(),
+            SessionFake(rows=[]),
+        ]
+    )
+    message = historical_message()
+    sqs = run_application(
+        service_config,
+        sessions,
+        OpenSearchFake(),
+        message,
         custom_logger,
     )
 

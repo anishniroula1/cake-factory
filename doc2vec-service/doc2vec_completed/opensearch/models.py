@@ -23,13 +23,16 @@ class Base(DeclarativeBase):
 
 
 class TextSimilarityInput(Base):
-    """Provide the application ID related to a sentence document."""
+    """Provide document-level values shared by every sentence for one tsp_id."""
 
     __tablename__ = "text_similarity_input"
     __table_args__: ClassVar[dict[str, object]] = {"schema": "tsp"}
 
     tsp_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    application_id: Mapped[str] = mapped_column(Text, nullable=False)
+    application_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    section_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    analysis_group: Mapped[str] = mapped_column(String(50), nullable=False)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
 class SentencesVector(Base):

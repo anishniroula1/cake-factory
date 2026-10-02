@@ -188,17 +188,71 @@ class HistoricalHandler:
         )
 
     def _process_worker(self, rows: list[SentencesVector]) -> int:
-        """Write missing catalog entries and every historical occurrence."""
+        """Write one document's catalog entries and sentence occurrences."""
 
+        document = rows[0].tsp
+        catalog_alias = self._catalog_alias(
+            document.analysis_group,
+            document.tsp_id,
+        )
         embeddings = self._load_embeddings([row.global_id for row in rows])
-        existing_keys = self.opensearch.existing_ids(
-            self.config.catalog_alias,
-            [row.sentence_key for row in rows],
+        self._index_catalog_rows(catalog_alias, rows, embeddings)
+
+        occurrences: list[OccurrenceDocument] = []
+        for row in rows:
+            occurrences.append(
+                {
+                    "_id": row.global_id,
+                    "globalId": row.global_id,
+                    "applicationId": document.application_id,
+                    "tspId": document.tsp_id,
+                    "sectionName": document.section_name,
+                    "sentIdLocal": row.sent_id_local,
+                    "sentenceContent": row.sentence_content,
+                    "sentenceKey": row.sentence_key,
+                    "sourceType": row.source_type,
+                    "analysisGroup": document.analysis_group,
+                    "isCurrent": document.is_current,
+                    "createdAt": row.last_modified.isoformat(),
+                    "updatedAt": row.last_modified.isoformat(),
+                }
+            )
+        self.opensearch.bulk_index(
+            self.config.occurrence_alias,
+            occurrences,
+            needs_embedding=False,
+        )
+        return len(rows)
+
+    def _catalog_alias(self, analysis_group: str, tsp_id: int) -> str:
+        """Return the one catalog selected for a document's analysis group."""
+
+        normalized_group = analysis_group.strip().casefold()
+        if normalized_group == "asylee":
+            return self.config.asylee_catalog_alias
+        if normalized_group == "refugee":
+            return self.config.refugee_catalog_alias
+        raise PermanentDataError(
+            f"tsp_id {tsp_id} has unsupported analysis_group "
+            f"{analysis_group!r}"
         )
 
+    def _index_catalog_rows(
+        self,
+        catalog_alias: str,
+        rows: list[SentencesVector],
+        embeddings: dict[int, list[float]],
+    ) -> None:
+        """Write missing unique keys from one analysis group to its catalog."""
+
+        existing_keys = self.opensearch.existing_ids(
+            catalog_alias,
+            [row.sentence_key for row in rows],
+        )
         with_vectors: list[CatalogDocument] = []
         need_vectors: list[CatalogDocument] = []
         seen_keys: set[str] = set()
+
         for row in rows:
             if row.sentence_key in existing_keys or row.sentence_key in seen_keys:
                 continue
@@ -218,47 +272,18 @@ class HistoricalHandler:
             document["sentenceContentVector"] = vector
             with_vectors.append(document)
 
-        # Documents with a saved Titan vector bypass the embedding pipeline.
-        # Only documents without a saved vector call the Bedrock pipeline.
+        # Saved Titan vectors bypass the pipeline. Only missing vectors call
+        # the selected catalog's Bedrock embedding pipeline.
         self.opensearch.bulk_index(
-            self.config.catalog_alias,
+            catalog_alias,
             with_vectors,
             needs_embedding=False,
         )
         self.opensearch.bulk_index(
-            self.config.catalog_alias,
+            catalog_alias,
             need_vectors,
             needs_embedding=True,
         )
-
-        occurrences: list[OccurrenceDocument] = []
-        for row in rows:
-            occurrences.append(
-                {
-                    "_id": row.global_id,
-                    "globalId": row.global_id,
-                    "applicationId": row.tsp.application_id,
-                    "tspId": str(row.tsp_id),
-                    "sectionName": row.section_name,
-                    "sentIdLocal": row.sent_id_local,
-                    "sentenceContent": row.sentence_content,
-                    "sentenceKey": row.sentence_key,
-                    "sourceType": row.source_type,
-                    "analysisGroup": row.analysis_group,
-                    "isNonMatcher": row.is_non_matcher,
-                    "isTracer": row.is_tracer,
-                    "isFormLanguage": row.is_form_language,
-                    "isCurrent": row.is_current,
-                    "createdAt": row.last_modified.isoformat(),
-                    "updatedAt": row.last_modified.isoformat(),
-                }
-            )
-        self.opensearch.bulk_index(
-            self.config.occurrence_alias,
-            occurrences,
-            needs_embedding=False,
-        )
-        return len(rows)
 
     def _load_embeddings(self, global_ids: list[int]) -> dict[int, list[float]]:
         """Read saved Titan type-2 vectors for one worker batch."""
