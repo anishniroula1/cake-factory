@@ -18,6 +18,8 @@ class SessionFake:
         self.scalar_value = scalar_value
         self.document = document
         self.executed = []
+        self.scalar_statements = []
+        self.scalars_statements = []
         self.commits = 0
 
     def __enter__(self):
@@ -27,9 +29,11 @@ class SessionFake:
         pass
 
     def scalar(self, statement):
+        self.scalar_statements.append(statement)
         return self.scalar_value
 
     def scalars(self, statement):
+        self.scalars_statements.append(statement)
         return ScalarRows(self.rows)
 
     def get(self, model, key):

@@ -6,8 +6,9 @@ catalog selected by `analysis_group` and the occurrence alias in AWS
 OpenSearch.
 
 It is not an API or FastAPI application. It processes one SQS message at a
-time, and all historical processing logic stays inside
-`doc2vec_completed/opensearch/handlers/historical_handler.py`.
+time. `historical_handler.py` coordinates pages, worker threads, retries, and
+queue handoff. `sentence_batch_processor.py` contains the reusable batch work:
+sentence keys, saved embeddings, catalog writes, and occurrence writes.
 
 All OpenSearch flow code lives under `doc2vec_completed/opensearch`. All tests
 for this flow live under `tests/opensearch`.
@@ -75,8 +76,9 @@ the expected fields are visible before a document is sent for bulk indexing.
 
 1. Count all `sentences_vector` rows for the `tsp_id`.
 2. Read up to 3,000 rows at a time in `global_id` order.
-3. Generate and save the SHA-256 `sentence_key` for every row.
-4. Split the page into 30-sentence jobs and run up to 100 workers.
+3. Split the page into 30-sentence jobs and run up to 100 workers.
+4. Inside each worker, reuse existing sentence keys and generate and save only
+   the missing SHA-256 keys.
 5. Read the document's one `analysis_group` from `text_similarity_input`,
    select the Asylee or Refugee catalog, and check which sentence keys exist.
 6. For a missing key, reuse its saved Titan vector from `embeddings` when
@@ -121,6 +123,11 @@ The worker uses:
   `analysis_group`, `section_name`, and `is_current`
 - `embeddings`, joined by `global_id`
 
+The historical page query does not load `sentences_vector.embedding_list`.
+That legacy column is not used by this flow and may contain NumPy arrays that
+cannot be loaded through SQLAlchemy `MutableList`. Saved Titan vectors are read
+only from the separate `embeddings` table.
+
 `a_number` remains in PostgreSQL. The occurrence index stores the numeric
 `applicationId` and `tspId`. It reads `applicationId`, `analysisGroup`,
 `sectionName`, and `isCurrent` from the related `text_similarity_input` row and
@@ -152,6 +159,13 @@ classification in PostgreSQL.
 Copy `.env.example` to `.env`, set `VAULT_YAML_PATH`, and fill in the AWS,
 OpenSearch, and Sentence Similarity queue values.
 
+The OpenSearch client uses the pod service-account credentials to assume
+`OPENSEARCH_IAM_ACCESS_ROLE`. The pod role needs permission to call
+`sts:AssumeRole`, and the assumed role needs access to the OpenSearch domain.
+Do not inject `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or
+`AWS_SESSION_TOKEN` through Harness. The assumed-role credentials refresh
+automatically during a long historical run.
+
 ```bash
 make test
 make dev
@@ -161,10 +175,10 @@ make dev
 Docker. There is no HTTP port, health endpoint, or Swagger page.
 
 The main tests start at `main.run_opensearch_flow()` and execute the real SQS
-processor and historical handler. Only database sessions, OpenSearch, and SQS
-transport are replaced at the external boundary. OpenSearch retry behavior and
-sentence-key generation keep small focused tests because those rules are
-easier to verify separately.
+processor, historical handler, and sentence batch processor. Only database
+sessions, OpenSearch, and SQS transport are replaced at the external boundary.
+The batch processor does not have a duplicate test file; its behavior is
+covered by the historical flow test.
 
 ## Portable copy
 
