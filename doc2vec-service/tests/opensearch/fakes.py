@@ -104,7 +104,7 @@ class LoggerFake:
         self.info_messages = []
         self.warning_messages = []
         self.error_messages = []
-        self.exception_messages = []
+        self.raise_fatal_errors = True
 
     def debug(self, message):
         self.debug_messages.append(message)
@@ -117,6 +117,9 @@ class LoggerFake:
 
     def error(self, message):
         self.error_messages.append(message)
-
-    def exception(self, message):
-        self.exception_messages.append(message)
+        # Production keeps a failed SQS message for retry. Successful-flow
+        # tests raise here so they show that original failure immediately.
+        if self.raise_fatal_errors and message.startswith(
+            "Historical SQS message failed"
+        ):
+            raise AssertionError(message)

@@ -111,8 +111,9 @@ deletion.
 
 The OpenSearch helper also logs every ID lookup and bulk write. Its messages
 show the alias, document count, whether saved vectors or the Bedrock pipeline
-are used, retry failures, permanent failures, and shared embedding cooldown
-waits. Empty lookup and write requests are logged as skipped operations.
+are used, retry failures, and permanent failures. Shared embedding cooldown
+waits use `DEBUG` because many workers can wait at the same time. Empty lookup
+and write requests are logged as skipped operations.
 
 ## Database tables
 

@@ -38,9 +38,11 @@ class SqsProcessor:
                 f"Invalid historical SQS message: {str(error)[:500]}"
             )
             return
-        except Exception:
-            self.dependencies.logger.exception(
-                "Historical SQS message failed and was not deleted."
+        # The SQS boundary keeps any failed message on the queue for retry.
+        except Exception as error:  # noqa: BLE001
+            self.dependencies.logger.error(
+                "Historical SQS message failed and was not deleted. "
+                f"Cause: {type(error).__name__}: {str(error)[:500]}"
             )
             return
 

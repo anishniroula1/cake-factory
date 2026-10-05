@@ -30,8 +30,3 @@ class CustomLogger:
         """Write an error message."""
 
         self.logger.error(message)
-
-    def exception(self, message: str) -> None:
-        """Write an error message with the current exception details."""
-
-        self.logger.exception(message)

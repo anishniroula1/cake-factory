@@ -57,7 +57,15 @@ def sentence_from(source, global_id, content):
     return SentencesVector(**values, tsp=source.tsp)
 
 
-def run_application(config, sessions, opensearch, message, logger):
+def run_application(
+    config,
+    sessions,
+    opensearch,
+    message,
+    logger,
+    expect_processing_error=False,
+):
+    logger.raise_fatal_errors = not expect_processing_error
     sqs = OneMessageSqs(message)
     handler = HistoricalHandler(
         config,
@@ -258,6 +266,7 @@ def test_failed_historical_message_is_not_deleted(
         OpenSearchFake(),
         historical_message(404),
         custom_logger,
+        expect_processing_error=True,
     )
 
     assert sqs.deleted == []
@@ -285,6 +294,7 @@ def test_unsupported_analysis_group_does_not_delete_the_message(
         OpenSearchFake(),
         message,
         custom_logger,
+        expect_processing_error=True,
     )
 
     assert sqs.deleted == []
