@@ -45,14 +45,12 @@ elapsed time but do not query the inserted rows for validation.
 Run the non-bucket key-value test:
 
 ```bash
-POSTGRES_HOST=localhost POSTGRES_PORT=5434 \
 uv run python titan_key_matches_performance_loader.py
 ```
 
 Run the bucketed key-value test:
 
 ```bash
-POSTGRES_HOST=localhost POSTGRES_PORT=5434 \
 uv run python titan_key_match_buckets_performance_loader.py
 ```
 
