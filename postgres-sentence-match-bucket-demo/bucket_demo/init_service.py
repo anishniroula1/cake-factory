@@ -17,12 +17,6 @@ def sentenceKey(value):
 def generateFakeRequest(request):
     """Generate fake keys that can be sent to either insert endpoint."""
 
-    if not request.analysisGroup.strip():
-        raise ValueError("analysisGroup is required")
-
-    if request.matchCount < 1 or request.matchCount > 1_000:
-        raise ValueError("matchCount must be between 1 and 1000")
-
     randomGenerator = random.Random(request.randomSeed)
     sourceKey = sentenceKey("Fake source sentence")
     matches = {}
@@ -43,12 +37,6 @@ def generateFakeRequest(request):
 
 def generateFakeListRequest(request):
     """Generate production-style global IDs and a JSONB match list."""
-
-    if not request.analysisGroup.strip():
-        raise ValueError("analysisGroup is required")
-
-    if request.matchCount < 1 or request.matchCount > 1_000:
-        raise ValueError("matchCount must be between 1 and 1000")
 
     randomGenerator = random.Random(request.randomSeed)
     matches = []

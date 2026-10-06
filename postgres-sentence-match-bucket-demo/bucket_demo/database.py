@@ -5,7 +5,6 @@ from sqlalchemy.orm import sessionmaker
 
 from bucket_demo.config import getSettings
 
-
 settings = getSettings()
 
 engine = create_engine(

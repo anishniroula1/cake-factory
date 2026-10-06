@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: help setup test dev postgres local down logs psql
+.PHONY: help setup test dev postgres local down logs psql stats
 
 help:
 	@echo "make dev       Build and run PostgreSQL and the API"
@@ -10,6 +10,7 @@ help:
 	@echo "make down      Stop containers and keep database data"
 	@echo "make logs      Follow API and PostgreSQL logs"
 	@echo "make psql      Open a PostgreSQL shell"
+	@echo "make stats     Watch PostgreSQL CPU and memory usage"
 
 setup:
 	uv sync --extra dev
@@ -34,3 +35,6 @@ logs:
 
 psql:
 	docker compose exec postgres psql -U sentence_user -d sentence_matches
+
+stats:
+	docker stats $$(docker compose ps -q postgres)

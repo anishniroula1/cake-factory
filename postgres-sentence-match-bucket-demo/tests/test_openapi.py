@@ -1,8 +1,8 @@
 from bucket_demo.main import app
 
 
-def testSwaggerContainsTheRequestedCalls():
-    """Keep both bucket and JSONB-list comparisons visible."""
+def testSwaggerContainsOnlySqlFunctionCalls():
+    """Keep the small SQL-function-only POC visible."""
 
     paths = set(app.openapi()["paths"])
 
@@ -10,7 +10,5 @@ def testSwaggerContainsTheRequestedCalls():
         "/health",
         "/init",
         "/matches/sql-function",
-        "/matches/python",
         "/list-matches/sql-function",
-        "/list-matches/python",
     }

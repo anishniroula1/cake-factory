@@ -1,6 +1,9 @@
 services:
   postgres:
     image: postgres:16-alpine
+    # Match the CPU and memory size of the db.m6i.xlarge test environment.
+    cpus: 4
+    mem_limit: 16g
     env_file:
       - .env
     ports:

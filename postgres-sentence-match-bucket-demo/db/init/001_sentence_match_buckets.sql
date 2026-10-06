@@ -1,3 +1,6 @@
+CREATE SCHEMA IF NOT EXISTS test_matches;
+
+
 /*
  * This file stores sentence-key matches in both directions.
  *
@@ -17,7 +20,7 @@
  * The returned bucket is always between 0 and 31.
  * Example: a key starting with "ab" becomes 171, and 171 % 32 is bucket 11.
  */
-CREATE OR REPLACE FUNCTION sentence_match_bucket(
+CREATE OR REPLACE FUNCTION test_matches.sentence_match_bucket(
     sentence_key_value TEXT
 )
 RETURNS SMALLINT
@@ -25,6 +28,7 @@ LANGUAGE SQL
 IMMUTABLE
 STRICT
 PARALLEL SAFE
+SET search_path = test_matches, public
 AS $$
     SELECT (
         get_byte(
@@ -42,7 +46,7 @@ $$;
  * jsonb_object_length function. This small immutable helper can be used by
  * the generated match_key_count column.
  */
-CREATE OR REPLACE FUNCTION sentence_match_jsonb_object_size(
+CREATE OR REPLACE FUNCTION test_matches.sentence_match_jsonb_object_size(
     jsonb_value JSONB
 )
 RETURNS INTEGER
@@ -50,6 +54,7 @@ LANGUAGE SQL
 IMMUTABLE
 STRICT
 PARALLEL SAFE
+SET search_path = test_matches, public
 AS $$
     SELECT COUNT(*)::INTEGER
     FROM jsonb_object_keys(jsonb_value);
@@ -61,14 +66,14 @@ $$;
  * Empty bucket rows are never created.
  * Example row: ("Asylee", "A", 11, {"B": 0.1, "C": 0.5}).
  */
-CREATE TABLE IF NOT EXISTS sentence_key_matches (
+CREATE TABLE IF NOT EXISTS test_matches.sentence_key_matches (
     analysis_group TEXT NOT NULL,
     sentence_key TEXT NOT NULL,
     match_bucket_number SMALLINT NOT NULL,
     matches JSONB NOT NULL DEFAULT '{}'::JSONB,
 
     match_key_count INTEGER GENERATED ALWAYS AS (
-        sentence_match_jsonb_object_size(matches)
+        test_matches.sentence_match_jsonb_object_size(matches)
     ) STORED,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -100,10 +105,9 @@ CREATE TABLE IF NOT EXISTS sentence_key_matches (
  * The function saves A-to-B, A-to-C, B-to-A, and C-to-A.
  * All writes use the same transaction. Any failure rolls everything back.
  *
- * The caller validates the group, SHA-256 keys, JSON shape, and distances.
  * This function owns bucket calculation, stable locking, and database writes.
  */
-CREATE OR REPLACE FUNCTION upsert_bidirectional_sentence_key_matches(
+CREATE OR REPLACE FUNCTION test_matches.upsert_bidirectional_sentence_key_matches(
     p_analysis_group TEXT,
     p_source_sentence_key TEXT,
     p_matches JSONB
@@ -111,6 +115,7 @@ CREATE OR REPLACE FUNCTION upsert_bidirectional_sentence_key_matches(
 RETURNS INTEGER
 LANGUAGE PLPGSQL
 STRICT
+SET search_path = test_matches, public
 AS $$
 DECLARE
     processed_match_count INTEGER;
@@ -214,7 +219,7 @@ BEGIN
         FROM incoming_matches
         GROUP BY sentence_match_bucket(match_key)
     )
-    INSERT INTO sentence_key_matches (
+    INSERT INTO test_matches.sentence_key_matches (
         analysis_group,
         sentence_key,
         match_bucket_number,
@@ -256,7 +261,7 @@ BEGIN
         /* Do not create an A-to-A reverse relationship. */
         WHERE item.match_key <> p_source_sentence_key
     )
-    INSERT INTO sentence_key_matches (
+    INSERT INTO test_matches.sentence_key_matches (
         analysis_group,
         sentence_key,
         match_bucket_number,
@@ -295,7 +300,7 @@ $$;
 
 /* Add a description that can be viewed in psql with
  * This is documentation only and does not run with the function. */
-COMMENT ON FUNCTION upsert_bidirectional_sentence_key_matches(
+COMMENT ON FUNCTION test_matches.upsert_bidirectional_sentence_key_matches(
     TEXT,
     TEXT,
     JSONB

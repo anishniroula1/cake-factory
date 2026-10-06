@@ -1,26 +1,20 @@
-from fastapi import APIRouter
-from fastapi import Depends
-from fastapi import HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from bucket_demo.database import getSession
-from bucket_demo.database import initializeDatabase
-from bucket_demo.init_service import generateFakeListRequest
-from bucket_demo.init_service import generateFakeRequest
-from bucket_demo.list_python_service import insertListMatchesWithPython
+from bucket_demo.database import getSession, initializeDatabase
+from bucket_demo.init_service import generateFakeListRequest, generateFakeRequest
 from bucket_demo.list_sql_function_service import (
     insertListMatchesWithSqlFunction,
 )
-from bucket_demo.python_service import insertMatchesWithPython
-from bucket_demo.schemas import InitRequest
-from bucket_demo.schemas import ListMatchRequest
-from bucket_demo.schemas import MatchRequest
+from bucket_demo.schemas import InitRequest, ListMatchRequest, MatchRequest
 from bucket_demo.sql_function_service import insertMatchesWithSqlFunction
 
-
 router = APIRouter()
+DatabaseSession = Annotated[Session, Depends(getSession)]
 
 
 def databaseFailure(error):
@@ -33,7 +27,7 @@ def databaseFailure(error):
 
 
 @router.get("/health", tags=["1. Health"])
-def health(session: Session = Depends(getSession)):
+def health(session: DatabaseSession):
     """Check PostgreSQL only when this endpoint is called manually."""
 
     try:
@@ -45,7 +39,7 @@ def health(session: Session = Depends(getSession)):
 
 
 @router.post("/init", tags=["2. Generate fake request"])
-def initialize(request: InitRequest, session: Session = Depends(getSession)):
+def initialize(request: InitRequest, session: DatabaseSession):
     """Create the schema and return fake keys for either insert endpoint."""
 
     try:
@@ -56,8 +50,11 @@ def initialize(request: InitRequest, session: Session = Depends(getSession)):
                 text(
                     """
                     TRUNCATE TABLE
-                        sentence_key_matches,
-                        matches
+                        test_matches.sentence_key_matches,
+                        test_matches.titan_matches,
+                        test_matches.sentence_matches,
+                        test_matches.titan_key_matches,
+                        test_matches.titan_key_match_buckets
                     """
                 )
             )
@@ -65,8 +62,6 @@ def initialize(request: InitRequest, session: Session = Depends(getSession)):
 
         fakeRequest = generateFakeRequest(request)
         fakeListRequest = generateFakeListRequest(request)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
     except SQLAlchemyError as error:
         session.rollback()
         raise databaseFailure(error) from error
@@ -89,32 +84,12 @@ def initialize(request: InitRequest, session: Session = Depends(getSession)):
 @router.post("/matches/sql-function", tags=["3. PostgreSQL function"])
 def sqlFunctionInsert(
     request: MatchRequest,
-    session: Session = Depends(getSession),
+    session: DatabaseSession,
 ):
     """Insert bidirectional bucket matches using the PostgreSQL function."""
 
     try:
         return insertMatchesWithSqlFunction(session, request)
-    except ValueError as error:
-        session.rollback()
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except SQLAlchemyError as error:
-        session.rollback()
-        raise databaseFailure(error) from error
-
-
-@router.post("/matches/python", tags=["4. Python and SQLAlchemy"])
-def pythonInsert(
-    request: MatchRequest,
-    session: Session = Depends(getSession),
-):
-    """Insert bidirectional bucket matches using Python and bind parameters."""
-
-    try:
-        return insertMatchesWithPython(session, request)
-    except ValueError as error:
-        session.rollback()
-        raise HTTPException(status_code=400, detail=str(error)) from error
     except SQLAlchemyError as error:
         session.rollback()
         raise databaseFailure(error) from error
@@ -122,39 +97,16 @@ def pythonInsert(
 
 @router.post(
     "/list-matches/sql-function",
-    tags=["5. JSONB list PostgreSQL function"],
+    tags=["4. JSONB list PostgreSQL function"],
 )
 def listSqlFunctionInsert(
     request: ListMatchRequest,
-    session: Session = Depends(getSession),
+    session: DatabaseSession,
 ):
     """Save bidirectional lists and generate verbatim IDs in PostgreSQL."""
 
     try:
         return insertListMatchesWithSqlFunction(session, request)
-    except ValueError as error:
-        session.rollback()
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except SQLAlchemyError as error:
-        session.rollback()
-        raise databaseFailure(error) from error
-
-
-@router.post(
-    "/list-matches/python",
-    tags=["6. JSONB list Python and SQLAlchemy"],
-)
-def listPythonInsert(
-    request: ListMatchRequest,
-    session: Session = Depends(getSession),
-):
-    """Save bidirectional lists and let PostgreSQL generate verbatim IDs."""
-
-    try:
-        return insertListMatchesWithPython(session, request)
-    except ValueError as error:
-        session.rollback()
-        raise HTTPException(status_code=400, detail=str(error)) from error
     except SQLAlchemyError as error:
         session.rollback()
         raise databaseFailure(error) from error

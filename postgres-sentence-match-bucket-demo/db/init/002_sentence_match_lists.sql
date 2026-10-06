@@ -1,3 +1,6 @@
+CREATE SCHEMA IF NOT EXISTS test_matches;
+
+
 /*
  * Return the unique global IDs whose distance is exactly 0.0.
  *
@@ -7,7 +10,7 @@
  *
  * Output: {10}
  */
-CREATE OR REPLACE FUNCTION sentence_match_verbatim_ids(
+CREATE OR REPLACE FUNCTION test_matches.sentence_match_verbatim_ids(
     match_values JSONB
 )
 RETURNS INTEGER[]
@@ -15,6 +18,7 @@ LANGUAGE SQL
 IMMUTABLE
 STRICT
 PARALLEL SAFE
+SET search_path = test_matches, public
 AS $$
     SELECT COALESCE(
         array_agg(exact_match.global_id ORDER BY exact_match.global_id),
@@ -30,7 +34,7 @@ $$;
 
 
 /* Merge by global_id and let the incoming object replace the saved object. */
-CREATE OR REPLACE FUNCTION sentence_match_merge_lists(
+CREATE OR REPLACE FUNCTION test_matches.sentence_match_merge_lists(
     existing_matches JSONB,
     incoming_matches JSONB
 )
@@ -39,6 +43,7 @@ LANGUAGE SQL
 IMMUTABLE
 STRICT
 PARALLEL SAFE
+SET search_path = test_matches, public
 AS $$
     WITH combined_matches AS (
         SELECT
@@ -78,7 +83,7 @@ $$;
  * and matches.
  * PostgreSQL maintains match_count, verbatim, and last_modified.
  */
-CREATE TABLE IF NOT EXISTS titan_matches (
+CREATE TABLE IF NOT EXISTS test_matches.titan_matches (
     global_id INTEGER PRIMARY KEY,
     tsp_id INTEGER NOT NULL,
     matches JSONB NOT NULL DEFAULT '[]'::JSONB,
@@ -88,7 +93,7 @@ CREATE TABLE IF NOT EXISTS titan_matches (
     ) STORED NOT NULL,
 
     verbatim INTEGER[] GENERATED ALWAYS AS (
-        sentence_match_verbatim_ids(matches)
+        test_matches.sentence_match_verbatim_ids(matches)
     ) STORED NOT NULL,
 
     last_modified TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -110,7 +115,7 @@ CREATE TABLE IF NOT EXISTS titan_matches (
  * matches and last_modified. PostgreSQL regenerates match_count and verbatim.
  * An empty p_matches array still creates the source row.
  */
-CREATE OR REPLACE FUNCTION upsert_bidirectional_titan_matches(
+CREATE OR REPLACE FUNCTION test_matches.upsert_bidirectional_titan_matches(
     p_source_global_id INTEGER,
     p_source_tsp_id INTEGER,
     p_source_a_number INTEGER,
@@ -118,6 +123,7 @@ CREATE OR REPLACE FUNCTION upsert_bidirectional_titan_matches(
 )
 RETURNS INTEGER
 LANGUAGE PLPGSQL
+SET search_path = test_matches, public
 AS $$
 DECLARE
     normalized_matches JSONB;
@@ -181,7 +187,7 @@ BEGIN
     END LOOP;
 
     /* Always create the source row, even when it has no matches. */
-    INSERT INTO titan_matches (
+    INSERT INTO test_matches.titan_matches (
         global_id,
         tsp_id,
         matches
@@ -200,7 +206,7 @@ BEGIN
         last_modified = NOW();
 
     /* Create missing target rows and add the reverse source relationship. */
-    INSERT INTO titan_matches (
+    INSERT INTO test_matches.titan_matches (
         global_id,
         tsp_id,
         matches
@@ -229,11 +235,11 @@ END;
 $$;
 
 
-COMMENT ON FUNCTION sentence_match_verbatim_ids(JSONB)
+COMMENT ON FUNCTION test_matches.sentence_match_verbatim_ids(JSONB)
 IS
 'Builds the stored integer[] of exact-match global IDs from matches JSONB.';
 
-COMMENT ON FUNCTION upsert_bidirectional_titan_matches(
+COMMENT ON FUNCTION test_matches.upsert_bidirectional_titan_matches(
     INTEGER,
     INTEGER,
     INTEGER,

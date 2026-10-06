@@ -1,168 +1,66 @@
-# Test the Bidirectional Titan Matches Function
+# Test Bidirectional Titan Matches
 
-Use this SQL to test `upsert_bidirectional_titan_matches` from a SQL editor.
+All test objects are under the `test_matches` schema.
 
-The test uses `BEGIN` and `ROLLBACK`, so the test rows are not permanently
-saved.
+## Apply the SQL
 
-## Test a New Bidirectional Match
-
-```sql
-BEGIN;
-
--- Sentence 900001 matches:
--- 900010 exactly because its distance is 0.0.
--- 900040 similarly because its distance is 0.12.
-SELECT upsert_bidirectional_titan_matches(
-    900001, -- Source global_id
-    1001,   -- Source tsp_id
-    123456, -- Source a_number
-    '[
-        {
-            "global_id": 900010,
-            "tsp_id": 1010,
-            "a_number": 654321,
-            "distance": 0.0
-        },
-        {
-            "global_id": 900040,
-            "tsp_id": 1040,
-            "a_number": 777777,
-            "distance": 0.12
-        }
-    ]'::JSONB
-);
-
--- View the source row and the two reverse rows.
-SELECT
-    global_id,
-    tsp_id,
-    matches,
-    match_count,
-    verbatim,
-    last_modified
-FROM titan_matches
-WHERE global_id IN (900001, 900010, 900040)
-ORDER BY global_id;
+```bash
+docker compose exec -T postgres psql \
+  -U sentence_user \
+  -d sentence_matches \
+  < db/init/005_titan_key_match_buckets.sql
 ```
 
-Expected result:
-
-| global_id | match_count | Matches contain | verbatim |
-|---:|---:|---|---|
-| 900001 | 2 | 900010 and 900040 | `{900010}` |
-| 900010 | 1 | 900001 | `{900001}` |
-| 900040 | 1 | 900001 | `{}` |
-
-The function automatically saves both directions:
-
-```text
-900001 -> 900010
-900010 -> 900001
-
-900001 -> 900040
-900040 -> 900001
-```
-
-## Test Updating a Distance
-
-Run this before the final `ROLLBACK`.
+## Call the bucket function
 
 ```sql
--- Change the relationship between 900001 and 900040 from a distance
--- of 0.12 to an exact-match distance of 0.0.
-SELECT upsert_bidirectional_titan_matches(
-    900001,
-    1001,
-    123456,
-    '[
-        {
-            "global_id": 900040,
-            "tsp_id": 1040,
-            "a_number": 777777,
-            "distance": 0.0
-        }
-    ]'::JSONB
+SELECT test_matches.upsert_bidirectional_titan_key_match_buckets(
+    100,
+    10,
+    1,
+    '{
+      "200": {
+        "tsp_id": 20,
+        "application_id": 2,
+        "distance": 0.10
+      },
+      "232": {
+        "tsp_id": 22,
+        "application_id": 3,
+        "distance": 0.0
+      }
+    }'::JSONB
 );
+```
 
+The function stores the forward relationships under global ID `100` and the
+reverse relationships under global IDs `200` and `232`. Only
+`{global_id: distance}` is kept inside `matches`.
+
+## Inspect one owner
+
+```sql
 SELECT
     global_id,
+    match_bucket_number,
     matches,
-    match_count,
+    matches_count,
     verbatim
-FROM titan_matches
-WHERE global_id IN (900001, 900040)
-ORDER BY global_id;
+FROM test_matches.titan_key_match_buckets
+WHERE global_id = 100
+ORDER BY match_bucket_number;
 ```
 
-Both directions should now contain distance `0.0`. The `verbatim` values
-should be:
-
-```text
-900001 -> {900010,900040}
-900040 -> {900001}
-```
-
-## Test an Empty Match List
-
-An empty list still creates the source row.
+Get the total across all buckets:
 
 ```sql
-SELECT upsert_bidirectional_titan_matches(
-    900099,
-    1099,
-    999999,
-    '[]'::JSONB
-);
-
 SELECT
     global_id,
-    tsp_id,
-    matches,
-    match_count,
-    verbatim
-FROM titan_matches
-WHERE global_id = 900099;
+    SUM(matches_count) AS total_matches
+FROM test_matches.titan_key_match_buckets
+WHERE global_id = 100
+GROUP BY global_id;
 ```
 
-Expected values:
-
-```text
-matches: []
-match_count: 0
-verbatim: {}
-```
-
-## Remove All Test Changes
-
-Run this after checking the results:
-
-```sql
-ROLLBACK;
-```
-
-## If the Objects Use the tsp Schema
-
-If the function and table were created under the `tsp` schema, include the
-schema name:
-
-```sql
-SELECT tsp.upsert_bidirectional_titan_matches(
-    900001,
-    1001,
-    123456,
-    '[
-        {
-            "global_id": 900010,
-            "tsp_id": 1010,
-            "a_number": 654321,
-            "distance": 0.0
-        }
-    ]'::JSONB
-);
-
-SELECT *
-FROM tsp.titan_matches
-WHERE global_id IN (900001, 900010)
-ORDER BY global_id;
-```
+Targets with the same `application_id` as the source are ignored. Calling the
+function again with a new distance replaces the saved value in both directions.
