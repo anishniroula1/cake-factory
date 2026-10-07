@@ -8,6 +8,8 @@ from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
 class ClientFake:
     def __init__(self, found=None):
         self.found = found or set()
+        self.refreshed_indices = []
+        self.indices = self
 
     def mget(self, index, body, params):
         return {
@@ -15,6 +17,9 @@ class ClientFake:
                 {"_id": value, "found": value in self.found} for value in body["ids"]
             ]
         }
+
+    def refresh(self, index):
+        self.refreshed_indices.append(index)
 
 
 def no_wait(value):
@@ -79,6 +84,22 @@ def test_empty_opensearch_operations_are_logged_and_skipped(
     )
     assert any(
         "Skipped the OpenSearch bulk write" in message
+        for message in custom_logger.info_messages
+    )
+
+
+def test_refresh_makes_catalog_and_occurrences_searchable(
+    service_config,
+    custom_logger,
+):
+    client = ClientFake()
+    helper = OpenSearchHelper(service_config, client, custom_logger)
+
+    helper.refresh_indices("catalog-asylee")
+
+    assert client.refreshed_indices == ["catalog-asylee,occurrence"]
+    assert any(
+        "Newly indexed sentences are now available" in message
         for message in custom_logger.info_messages
     )
 

@@ -35,6 +35,7 @@ class HistoricalHandler:
 
         self.config = config
         self.session_factory = session_factory
+        self.opensearch = opensearch
         self.aws_sqs = aws_sqs
         self.logger = custom_logger
         self.batch_processor = SentenceBatchProcessor(
@@ -65,6 +66,7 @@ class HistoricalHandler:
         indexed = 0
         after_global_id = 0
         page_number = 0
+        catalog_alias: str | None = None
 
         with ThreadPoolExecutor(
             max_workers=self.config.thread_worker_count,
@@ -96,6 +98,10 @@ class HistoricalHandler:
                     f"sentence(s), global IDs {rows[0].global_id} through "
                     f"{rows[-1].global_id}."
                 )
+                if catalog_alias is None:
+                    catalog_alias = self.batch_processor.catalog_alias(
+                        rows[0].tsp.analysis_group
+                    )
 
                 # Split this database page into small jobs. Each worker prepares
                 # missing keys and writes its catalog and occurrence documents.
@@ -112,6 +118,22 @@ class HistoricalHandler:
                     f"{page_indexed} sentence(s) from this page and {indexed} "
                     f"sentence(s) in total through global ID {after_global_id}."
                 )
+
+        if catalog_alias is None:
+            raise PermanentDataError(
+                "the historical document did not provide an analysis-group catalog"
+            )
+
+        # All worker writes have returned. Refresh once here so Sentence
+        # Similarity cannot receive the next message before these writes can be
+        # found through normal OpenSearch search requests.
+        retry_operation(
+            "Refresh indexed historical sentences",
+            self.opensearch.refresh_indices,
+            catalog_alias,
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
+        )
 
         # Publish only after every historical sentence is safely indexed. The
         # SQS processor deletes the source message after this method returns.

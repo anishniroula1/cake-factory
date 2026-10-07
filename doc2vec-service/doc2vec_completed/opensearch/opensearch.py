@@ -187,6 +187,26 @@ class OpenSearchHelper:
             self.logger.error(f"OpenSearch vector validation failed: {message}")
             raise PermanentDataError(message)
 
+    def refresh_indices(self, catalog_alias: str) -> None:
+        """Make this document's catalog and occurrence writes searchable.
+
+        Input: catalog_alias=sentence_semantic_catalog_asylee
+
+        This runs once after all worker batches finish. It does not refresh
+        after every bulk request, which would unnecessarily slow ingestion.
+        """
+
+        indices = f"{catalog_alias},{self.config.occurrence_alias}"
+        self.logger.info(
+            "Refreshing the OpenSearch catalog and occurrence indexes before "
+            "sending the document to Sentence Similarity."
+        )
+        self.client.indices.refresh(index=indices)
+        self.logger.info(
+            "OpenSearch refresh completed. Newly indexed sentences are now "
+            "available to Sentence Similarity."
+        )
+
     def _retryable_documents(
         self,
         failures: list,

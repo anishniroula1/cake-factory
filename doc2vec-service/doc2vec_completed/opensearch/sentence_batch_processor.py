@@ -46,7 +46,7 @@ class SentenceBatchProcessor:
 
             stage = "catalog selection"
             document = rows[0].tsp
-            catalog_alias = self._catalog_alias(document.analysis_group)
+            catalog_alias = self.catalog_alias(document.analysis_group)
             self.logger.info(
                 f"{label} selected catalog {catalog_alias} for analysis group "
                 f"{document.analysis_group}."
@@ -133,7 +133,7 @@ class SentenceBatchProcessor:
             raise
         return len(updates), reused_count
 
-    def _catalog_alias(self, analysis_group: str) -> str:
+    def catalog_alias(self, analysis_group: str) -> str:
         """Return the catalog selected for one analysis group."""
 
         normalized_group = analysis_group.strip().casefold()

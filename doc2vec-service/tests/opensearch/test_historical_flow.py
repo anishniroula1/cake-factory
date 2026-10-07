@@ -169,6 +169,7 @@ def test_historical_message_runs_the_complete_ingestion_flow(
     assert occurrence["globalId"] == 1
     assert occurrence["applicationId"] == 1001
     assert occurrence["analysisGroup"] == "Asylee"
+    assert opensearch.refresh_calls == ["catalog-asylee"]
     assert sqs.sent[0]["message_body"] == {
         "reason": "HISTORICAL",
         "tsp_id": 10,
@@ -253,6 +254,7 @@ def test_refugee_document_uses_only_the_refugee_catalog(
         call for call in opensearch.bulk_calls if call[0] == "occurrence"
     ]
     assert occurrence_calls[0][1][0]["analysisGroup"] == "Refugee"
+    assert opensearch.refresh_calls == ["catalog-refugee"]
     assert sqs.deleted == [message]
 
 
