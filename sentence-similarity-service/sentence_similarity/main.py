@@ -1,44 +1,27 @@
-import logging
-
-import boto3
-
-from sentence_similarity.config import Config
-from sentence_similarity.database import Database
-from sentence_similarity.handlers.sentence_similarity_handler import (
-    SentenceSimilarityHandler,
-)
-from sentence_similarity.open_search_client import OpenSearchClient
-from sentence_similarity.opensearch import OpenSearchStore
-from sentence_similarity.sqs_listener import SqsListener
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+from sentence_similarity.custom_logger import CustomLogger
+from sentence_similarity.DatabaseConnection import DatabaseConnection
+from sentence_similarity.dependencies import Dependencies
+from sentence_similarity.sqs_processor import SqsProcessor
 
 
-def run():
-    """Create the application and start listening for tsp_id messages."""
+def run_opensearch_flow(
+    custom_logger: CustomLogger | None = None,
+    database_connection: DatabaseConnection | None = None,
+    dependencies: Dependencies | None = None,
+) -> None:
+    """Build one dependency container and start the SQS processor."""
 
-    config = Config.fromEnvironment()
-    database = Database(config)
-    awsSession = boto3.Session(region_name=config.awsRegion)
-    sqsClient = awsSession.client("sqs", region_name=config.awsRegion)
-    opensearchClient = OpenSearchClient(config).create_client()
-    opensearch = OpenSearchStore(config, opensearchClient)
-    handler = SentenceSimilarityHandler(
-        config,
-        database.sessionFactory,
-        opensearch,
-        sqsClient,
+    service_dependencies = dependencies or Dependencies(
+        custom_logger,
+        database_connection,
     )
-    listener = SqsListener(config, sqsClient, handler)
+    processor = SqsProcessor(service_dependencies)
 
     try:
-        listener.run()
+        processor.run()
     finally:
-        database.close()
+        service_dependencies.close()
 
 
 if __name__ == "__main__":
-    run()
+    run_opensearch_flow()

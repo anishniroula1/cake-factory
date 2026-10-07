@@ -2,80 +2,71 @@ from dataclasses import replace
 
 import pytest
 
-from sentence_similarity.config import Config, readInteger
-from sentence_similarity.database import Database
+from sentence_similarity.config import Config, read_integer
+from sentence_similarity.custom_logger import CustomLogger
 from sentence_similarity.open_search_client import OpenSearchClient
 
 
-def baseEnvironment(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@db/name")
+class Secrets:
+    def get(self, name, default=None):
+        values = {
+            "pgUser": "user",
+            "pgPassword": "password",
+            "pgHost": "database",
+            "pgDatabase": "sentence",
+            "pgPort": 5432,
+        }
+        return values.get(name, default)
+
+
+def required_environment(monkeypatch):
     monkeypatch.setenv("OPENSEARCH_HOST", "search.example.com")
-    monkeypatch.setenv(
-        "SENTENCE_SIMILARITY_QUEUE_URL",
-        "https://sqs.example.com/source.fifo",
-    )
-    monkeypatch.setenv(
-        "API_TRANSFORM_QUEUE_URL",
-        "https://sqs.example.com/next.fifo",
-    )
+    monkeypatch.setenv("SENTENCE_SIMILARITY_QUEUE_URL", "source.fifo")
+    monkeypatch.setenv("API_TRANSFORM_QUEUE_URL", "next.fifo")
+    monkeypatch.setattr("sentence_similarity.config.VaultSecrets", Secrets)
 
 
-def test_config_reads_defaults_and_validates(monkeypatch):
-    baseEnvironment(monkeypatch)
-    config = Config.fromEnvironment()
-    assert config.sourcePageSize == 100
-    assert config.workerCount == 16
-    assert config.sqsVisibilitySeconds == 7_200
+def test_config_reads_service_defaults(monkeypatch):
+    required_environment(monkeypatch)
 
-    invalidValues = [
-        replace(config, databaseUrl=""),
-        replace(config, opensearchHost=""),
-        replace(config, sourceQueueUrl=""),
-        replace(config, nextQueueUrl=""),
-        replace(config, workerCount=21),
-        replace(config, vectorDimension=1024),
-        replace(config, matchThreshold=101),
-        replace(config, tracerThreshold=0),
-        replace(config, sqsWaitSeconds=21),
+    config = Config.from_environment()
+
+    assert config.source_sentence_batch_size == 30
+    assert config.thread_worker_count == 30
+    assert config.vector_dimension == 512
+    assert config.occurrence_alias == "sentence_occurrences"
+    assert config.asylee_catalog_alias == "sentence_semantic_catalog_asylee"
+
+    invalid_values = [
+        replace(config, opensearch_host=""),
+        replace(config, sentence_similarity_queue_url=""),
+        replace(config, api_transform_queue_url=""),
+        replace(config, occurrence_alias=""),
+        replace(config, asylee_catalog_alias=""),
+        replace(config, thread_worker_count=31),
+        replace(config, vector_dimension=1024),
+        replace(config, match_threshold=101),
+        replace(config, tracer_threshold=0),
+        replace(config, sqs_wait_seconds=21),
     ]
-    for invalid in invalidValues:
+    for invalid in invalid_values:
         with pytest.raises(ValueError):
             invalid.validate()
 
 
-def test_environment_number_parser_rejects_bad_values(monkeypatch):
+def test_integer_reader_rejects_bad_values(monkeypatch):
     monkeypatch.setenv("NUMBER", "word")
     with pytest.raises(ValueError):
-        readInteger("NUMBER", 1)
+        read_integer("NUMBER", 1)
     monkeypatch.setenv("NUMBER", "0")
     with pytest.raises(ValueError):
-        readInteger("NUMBER", 1)
+        read_integer("NUMBER", 1)
 
 
-def test_database_builds_and_closes_pool(monkeypatch, serviceConfig):
-    class Engine:
-        def dispose(self):
-            self.closed = True
-
-    engine = Engine()
-    captured = {}
-
-    def createEngine(url, **values):
-        captured.update(values)
-        return engine
-
-    def sessionMaker(**values):
-        return object()
-
-    monkeypatch.setattr("sentence_similarity.database.create_engine", createEngine)
-    monkeypatch.setattr("sentence_similarity.database.sessionmaker", sessionMaker)
-    database = Database(serviceConfig)
-    database.close()
-    assert captured["pool_pre_ping"] is True
-    assert engine.closed is True
-
-
-def test_opensearch_client_uses_aws_signing(monkeypatch, serviceConfig):
+def test_opensearch_client_uses_active_aws_credentials(
+    monkeypatch,
+    service_config,
+):
     credentials = object()
 
     class Session:
@@ -83,53 +74,29 @@ def test_opensearch_client_uses_aws_signing(monkeypatch, serviceConfig):
             return credentials
 
     captured = {}
-
-    def sessionFactory(**values):
-        return Session()
-
-    def signer(*values):
-        return "auth"
-
-    def opensearch(**values):
-        captured.update(values)
-        return "client"
-
     monkeypatch.setattr(
         "sentence_similarity.open_search_client.boto3.Session",
-        sessionFactory,
+        lambda **values: Session(),
     )
     monkeypatch.setattr(
         "sentence_similarity.open_search_client.AWSV4SignerAuth",
-        signer,
+        lambda *values: "auth",
     )
     monkeypatch.setattr(
         "sentence_similarity.open_search_client.OpenSearch",
-        opensearch,
+        lambda **values: captured.update(values) or "client",
     )
 
-    assert OpenSearchClient(serviceConfig).create_client() == "client"
-    assert captured["pool_maxsize"] == 20
+    assert OpenSearchClient(service_config).create_client() == "client"
+    assert captured["pool_maxsize"] == 1
     assert captured["max_retries"] == 5
 
 
-def test_opensearch_client_requires_credentials(monkeypatch, serviceConfig):
-    class Session:
-        def get_credentials(self):
-            return None
-
-    def sessionFactory(**values):
-        return Session()
-
-    monkeypatch.setattr(
-        "sentence_similarity.open_search_client.boto3.Session",
-        sessionFactory,
+def test_opensearch_client_can_assume_role(monkeypatch, service_config):
+    service_config = replace(
+        service_config,
+        opensearch_iam_access_role="arn:aws:iam::1:role/opensearch",
     )
-    with pytest.raises(RuntimeError):
-        OpenSearchClient(serviceConfig).create_client()
-
-
-def test_opensearch_client_can_assume_role(monkeypatch, serviceConfig):
-    serviceConfig.iamAccessRole = "arn:aws:iam::1:role/opensearch"
 
     class Sts:
         def assume_role(self, **values):
@@ -145,15 +112,60 @@ def test_opensearch_client_can_assume_role(monkeypatch, serviceConfig):
         def client(self, name):
             return Sts()
 
-    assumedSession = object()
+    assumed_session = object()
 
-    def sessionFactory(**values):
+    def session_factory(**values):
         if "aws_access_key_id" in values:
-            return assumedSession
+            return assumed_session
         return BaseSession()
 
     monkeypatch.setattr(
         "sentence_similarity.open_search_client.boto3.Session",
-        sessionFactory,
+        session_factory,
     )
-    assert OpenSearchClient(serviceConfig)._session() is assumedSession
+    assert OpenSearchClient(service_config)._session() is assumed_session
+
+
+def test_opensearch_client_requires_credentials(monkeypatch, service_config):
+    class Session:
+        def get_credentials(self):
+            return None
+
+    monkeypatch.setattr(
+        "sentence_similarity.open_search_client.boto3.Session",
+        lambda **values: Session(),
+    )
+    with pytest.raises(RuntimeError):
+        OpenSearchClient(service_config).create_client()
+
+
+def test_custom_logger_forwards_each_log_level():
+    class Logger:
+        def __init__(self):
+            self.calls = []
+
+        def debug(self, message):
+            self.calls.append(("debug", message))
+
+        def info(self, message):
+            self.calls.append(("info", message))
+
+        def warning(self, message):
+            self.calls.append(("warning", message))
+
+        def error(self, message):
+            self.calls.append(("error", message))
+
+    logger = Logger()
+    custom_logger = CustomLogger(logger=logger)
+    custom_logger.debug("one")
+    custom_logger.info("two")
+    custom_logger.warning("three")
+    custom_logger.error("four")
+
+    assert [level for level, message in logger.calls] == [
+        "debug",
+        "info",
+        "warning",
+        "error",
+    ]

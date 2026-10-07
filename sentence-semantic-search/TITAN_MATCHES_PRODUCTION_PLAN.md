@@ -64,8 +64,8 @@ Sentence Similarity receives tsp_id
     -> Reuse a saved classification or search the tracer/form-language catalog
     -> Save the classification on the selected catalog document
     -> Update sentences_vector by global_id
-    -> Non-matcher found: save no relationships and take the next sentence
-    -> No non-matcher found: search only the selected group catalog
+    -> Tracer reference found: save no relationships and take the next sentence
+    -> No tracer reference found: search only the selected group catalog
     -> Remove ineligible and same-application targets
     -> Update titan_matches for the source and every target in both directions
     -> Commit and take the next sentence
@@ -317,6 +317,9 @@ PUT /tracer_form_language_catalog-v1
   "mappings": {
     "dynamic": "strict",
     "properties": {
+      "tracerId": {
+        "type": "integer"
+      },
       "sentenceContent": {
         "type": "text"
       },
@@ -328,9 +331,6 @@ PUT /tracer_form_language_catalog-v1
           "name": "hnsw",
           "engine": "lucene"
         }
-      },
-      "isTracer": {
-        "type": "boolean"
       },
       "isFormLanguage": {
         "type": "boolean"
@@ -385,12 +385,21 @@ SHA-256 hash made from `analysisGroup` and normalized `sentenceContent`.
 Reindexing the same reference then updates it instead of creating a duplicate,
 even when its flags change.
 
-`isTracer` identifies a tracer reference. `isFormLanguage` identifies a
-form-language reference. Both values may be true when the sentence belongs to
-both groups.
+The reference catalog stores only `isNonMatcher` and `isFormLanguage`.
+`isTracer` does not exist in the tracer table or this reference index. Sentence
+Similarity creates `isTracer` for `sentences_vector` and the selected sentence
+catalog using these rules:
 
-`isNonMatcher = true` means that a source sentence matching this reference
-must not receive exact or similar relationships.
+| Reference found | `isNonMatcher` | `isFormLanguage` | Saved `isTracer` | Search sentence catalog? |
+|---|---:|---:|---:|---|
+| No | false | false | false | Yes |
+| Yes | false | false | true | No |
+| Yes | true | false | false | No |
+| Yes | true | true | false | No |
+| Yes | false | true | false | No |
+
+Any tracer-catalog match stops normal sentence matching. Only a sentence with
+no tracer-catalog match continues to the selected sentence catalog.
 
 The reference catalog is managed separately from normal document ingestion.
 Adding or changing a tracer or form-language rule updates this catalog; DOC2Vec
@@ -530,7 +539,7 @@ Sentence Similarity receives `tsp_id` and loads its current sentences from
 It processes one source sentence at a time. Every source occurrence keeps its
 own `global_id`, but repeated text reuses the same sentence key and vector.
 
-### First search the non-matcher catalog
+### First search the tracer/form-language catalog
 
 For the current source sentence:
 
@@ -538,22 +547,26 @@ For the current source sentence:
    `sentence_semantic_catalog_refugee`.
 2. Read the source vector and any saved classification from that catalog by
    `sentence_key`.
-3. Reuse the saved classification when the flag fields are present.
-4. If the flag fields are missing, search the tracer/form-language catalog
+3. Reuse the saved classification when all three catalog flags are present.
+4. If the classification fields are missing, search the tracer/form-language catalog
    with the source vector and filter that search by `analysis_group`.
-5. Apply the configured non-matcher threshold and only consider reference
-   records where `isNonMatcher = true`.
-6. Save `isNonMatcher`, `isTracer`, and `isFormLanguage` on the selected group
+5. Apply the configured threshold and read the returned reference's
+   `isNonMatcher` and `isFormLanguage` values.
+6. Set `isTracer = true` only when a reference was found and both reference
+   flags are false.
+7. Save `isNonMatcher`, derived `isTracer`, and `isFormLanguage` on the selected group
    catalog document.
-7. Copy the completed classification to the source `sentences_vector` row.
+8. Copy the completed classification to the source `sentences_vector` row.
 
-If a qualifying reference is found:
+If any reference is found:
 
 ```text
 Update the sentences_vector row using its global_id.
-Set is_non_matcher to true.
-Copy is_tracer and is_form_language from the qualifying reference flags.
-Set non_matcher_checked to true.
+Copy is_non_matcher from the matching reference.
+Set closest_non_matcher to the matching tracer_sentence_id.
+Set closest_nn_score to the decimal cosine similarity, such as 0.96 for 96%.
+Set is_form_language from the matching reference.
+Derive is_tracer as true only when is_non_matcher and is_form_language are false.
 Do not run the normal similarity search on the selected group catalog.
 Do not add exact matches.
 Do not update titan_matches.
@@ -567,10 +580,11 @@ The update uses the source sentence's `global_id`:
 UPDATE sentences_vector
 SET
     is_non_matcher = :isNonMatcher,
+    closest_non_matcher = :closestNonMatcher,
+    closest_nn_score = :closestNnScore,
     is_tracer = :isTracer,
     is_form_language = :isFormLanguage,
-    non_matcher_checked = TRUE,
-    updated_at = NOW()
+    last_modified = NOW()
 WHERE global_id = :globalId;
 ```
 
@@ -578,10 +592,10 @@ The group catalog is updated by `sentenceKey`, and `sentences_vector` is
 updated by `globalId`. Both updates are safe to retry because they replace the
 same classification fields on stable IDs.
 
-`:isNonMatcher` is true on this path because a qualifying exclusion reference
-matched. `:isTracer` is true when at least one qualifying tracer reference matched.
-`:isFormLanguage` is true when at least one qualifying form-language reference
-matched. At least one of these values must be true on the non-matcher path.
+`:isNonMatcher` and `:isFormLanguage` come from the matching reference.
+`:isTracer` is calculated because the reference table does not have that
+column. If both reference flags are false, `:isTracer` is true. Every reference
+match skips the normal sentence catalog search.
 
 The same update rule applies when a candidate target is checked and found to
 be a non-matcher. In that case, the target row is updated using the target's
@@ -592,7 +606,7 @@ search. Titan is not called during Sentence Similarity.
 
 ### Search the selected group catalog only when allowed
 
-When the source is not a non-matcher:
+When the tracer catalog returns no reference:
 
 1. Find exact occurrences using the same sentence key and analysis group.
 2. Search only the catalog selected by the source `analysis_group`, using the
@@ -639,8 +653,8 @@ Before saving either direction, the service checks target 8507 against
 `tracer_form_language_catalog`. Suppose it matches a form-language reference.
 The service then:
 
-1. Updates `sentences_vector` row 8507 with `is_non_matcher = true`,
-   `is_form_language = true`, and `non_matcher_checked = true`.
+1. Updates `sentences_vector` row 8507 with the non-matcher flags, closest
+   tracer sentence ID, and decimal match score.
 2. Saves the classification on the selected group catalog document.
 3. Saves neither 1001-to-8507 nor 8507-to-1001.
 
@@ -655,8 +669,7 @@ Saved fields: isNonMatcher=true, isTracer=false, isFormLanguage=true
 ```
 
 The presence of all three classification fields means the catalog decision is
-complete. The `sentences_vector` row still uses `non_matcher_checked` because
-its boolean classification fields already exist before the check.
+complete.
 
 When another occurrence uses `KEY-B` in the `Asylee` group, the service reuses
 that decision instead of running another tracer/form-language vector search.
@@ -962,7 +975,7 @@ processed again.
 6. DOC2Vec writes every occurrence and creates a missing catalog vector only
    in the catalog selected by `analysis_group`.
 7. Sentence Similarity reuses a saved group-catalog classification or checks
-   the non-matcher catalog before normal similarity search.
+   the tracer/form-language catalog before normal similarity search.
 8. A non-matcher updates its group catalog document and `sentences_vector`
    row and creates no relationship.
 9. Exact occurrences are found using the same sentence key.

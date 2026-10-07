@@ -1,44 +1,46 @@
-import logging
 import time
 from collections.abc import Callable
 from typing import Any
 
+from sentence_similarity.custom_logger import CustomLogger
 from sentence_similarity.errors import PermanentDataError, PermanentMessageError
 
-logger = logging.getLogger(__name__)
 
-
-def retryOperation(
+def retry_operation[Result](
     label: str,
-    operation: Callable[..., Any],
+    operation: Callable[..., Result],
     *arguments: Any,
-    waitSeconds: int,
-    maxAttempts: int = 3,
-) -> Any:
-    """Try an operation up to three times unless another limit is passed."""
+    wait_seconds: int,
+    max_attempts: int = 3,
+    custom_logger: CustomLogger | None = None,
+) -> Result:
+    """Retry one complete operation up to the requested attempt limit."""
 
-    if maxAttempts < 1:
-        raise ValueError("maxAttempts must be at least 1")
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
 
-    for attempt in range(1, maxAttempts + 1):
+    for attempt in range(1, max_attempts + 1):
         try:
             return operation(*arguments)
         except Exception as error:
             if isinstance(error, (PermanentDataError, PermanentMessageError)):
+                if custom_logger:
+                    custom_logger.error(
+                        f"{label} cannot be retried: {str(error)[:500]}"
+                    )
                 raise
-            if attempt == maxAttempts:
-                logger.error(
-                    "%s failed after %s attempt(s): %s",
-                    label,
-                    maxAttempts,
-                    str(error)[:500],
+            if attempt == max_attempts:
+                if custom_logger:
+                    custom_logger.error(
+                        f"{label} failed after {max_attempts} attempts: "
+                        f"{str(error)[:500]}"
+                    )
+                raise
+            if custom_logger:
+                custom_logger.warning(
+                    f"{label} attempt {attempt} failed: {str(error)[:500]}; "
+                    f"retrying in {wait_seconds} seconds"
                 )
-                raise
-            logger.warning(
-                "%s attempt %s failed: %s; retrying in %s seconds",
-                label,
-                attempt,
-                str(error)[:500],
-                waitSeconds,
-            )
-            time.sleep(waitSeconds)
+            time.sleep(wait_seconds)
+
+    raise RuntimeError("retry loop ended without returning or raising")

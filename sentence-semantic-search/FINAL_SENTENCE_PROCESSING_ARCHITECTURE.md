@@ -98,16 +98,7 @@ PUT /sentence_occurrences-v1
       "analysisGroup": {
         "type": "keyword"
       },
-      "isNonMatcher": {
-        "type": "boolean"
-      },
-      "isTracer": {
-        "type": "boolean"
-      },
       "isFormLanguage": {
-        "type": "boolean"
-      },
-      "nonMatcherChecked": {
         "type": "boolean"
       },
       "createdAt": {
@@ -139,17 +130,8 @@ POST /_aliases
 
 The OpenSearch document `_id` is `globalId`.
 
-The occurrence index keeps a searchable copy of the classification stored in
-`sentences_vector`:
-
-- `isNonMatcher` says the occurrence must not participate in matching.
-- `isTracer` says the reason includes a tracer reference.
-- `isFormLanguage` says the reason includes a form-language reference.
-- `nonMatcherChecked` says Sentence Similarity has completed the reference
-  catalog check.
-
-`nonMatcherChecked` is important. When it is false,
-`isNonMatcher = false` means "not checked yet," not "safe to match."
+The occurrence index stores sentence identity and location. Classification is
+stored in `sentences_vector` and on the selected group catalog document.
 
 ### Group-specific sentence semantic catalogs
 
@@ -316,6 +298,9 @@ PUT /tracer_form_language_catalog-v1
   "mappings": {
     "dynamic": "strict",
     "properties": {
+      "tracerId": {
+        "type": "integer"
+      },
       "sentenceContent": {
         "type": "text"
       },
@@ -327,9 +312,6 @@ PUT /tracer_form_language_catalog-v1
           "name": "hnsw",
           "engine": "lucene"
         }
-      },
-      "isTracer": {
-        "type": "boolean"
       },
       "isFormLanguage": {
         "type": "boolean"
@@ -384,12 +366,15 @@ SHA-256 hash made from `analysisGroup` and normalized `sentenceContent`.
 Reindexing the same reference then updates it instead of creating a duplicate,
 even when its flags change.
 
-`isTracer` identifies a tracer reference. `isFormLanguage` identifies a
-form-language reference. Both values may be true when the sentence belongs to
-both groups.
+The reference catalog stores only `isNonMatcher` and `isFormLanguage`.
+`isTracer` does not exist on the reference. Sentence Similarity derives it:
 
-`isNonMatcher = true` means that a source sentence matching this reference
-must not receive exact or similar relationships.
+- A reference with both flags false produces `isTracer = true`.
+- Any reference with `isNonMatcher = true` is excluded.
+- Any reference with `isFormLanguage = true` is excluded.
+- Every tracer-catalog match skips the normal sentence catalog search.
+- No tracer-catalog match leaves all three sentence flags false and allows
+  normal matching.
 
 The reference catalog is managed separately from normal document ingestion.
 Adding or changing a tracer or form-language rule updates this catalog; DOC2Vec
@@ -496,19 +481,21 @@ For the current source sentence:
 3. When the catalog classification is missing, search the
    tracer/form-language catalog with that vector.
 4. Filter the reference search by the source `analysis_group`.
-5. Apply the configured non-matcher threshold and consider only reference
-   records where `isNonMatcher = true`.
-6. Save `isNonMatcher`, `isTracer`, and `isFormLanguage` on the selected group
+5. Apply the configured threshold and read `isNonMatcher` and
+   `isFormLanguage` from every returned reference.
+6. Derive `isTracer = true` only when a reference was found and both returned
+   flags are false.
+7. Save `isNonMatcher`, derived `isTracer`, and `isFormLanguage` on the selected group
    catalog document so later occurrences reuse the decision.
-7. Copy the decision to `sentences_vector` and `sentence_occurrences` for the
+8. Copy the decision to `sentences_vector` and `sentence_occurrences` for the
    source `global_id`.
 
 If a qualifying reference is found:
 
 ```text
 Update the sentences_vector row using its global_id.
-Set is_non_matcher to true.
-Copy is_tracer and is_form_language from the qualifying reference flags.
+Copy is_non_matcher and is_form_language from the matching reference.
+Derive is_tracer as true only when both reference flags are false.
 Set non_matcher_checked to true.
 Update the occurrence document with the same global_id and values.
 Do not run the normal similarity search against the selected group catalog.
@@ -551,10 +538,9 @@ Update PostgreSQL first. If the OpenSearch update temporarily fails, retry it
 with the same `globalId`. The update is safe to repeat because it replaces the
 same fields on the same occurrence document.
 
-`:isNonMatcher` is true on this path because a qualifying exclusion reference
-matched. `:isTracer` is true when at least one qualifying tracer reference matched.
-`:isFormLanguage` is true when at least one qualifying form-language reference
-matched. At least one of these values must be true on the non-matcher path.
+`:isNonMatcher` and `:isFormLanguage` come from the matching reference.
+`:isTracer` is derived because it does not exist in the reference table. Every
+reference match skips the normal sentence catalog search.
 
 The same update rule applies when a candidate target is checked and found to
 be a non-matcher. In that case, the target row is updated using the target's
@@ -818,8 +804,9 @@ Verify:
    `sentences_vector`, and writes the occurrence index and the catalog selected
    by `analysis_group`.
 3. DOC2Vec does not perform tracer or form-language matching.
-4. The reference catalog stores a vector, `isTracer`, `isFormLanguage`,
-   `analysisGroup`, and `isNonMatcher` for every reference sentence.
+4. The reference catalog stores `tracerId`, a vector, `isFormLanguage`,
+   `analysisGroup`, and `isNonMatcher`. Sentence Similarity derives
+   `isTracer`; the reference does not store it.
 5. The reference catalog uses Lucene HNSW and does not require IVF training.
 6. The Asylee and Refugee catalogs use the same trained 512-dimension Faiss
    IVF-SQ16 model and store group-specific classification flags.

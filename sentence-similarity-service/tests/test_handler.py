@@ -1,129 +1,336 @@
-import json
-
 import pytest
 
 from sentence_similarity.errors import PermanentDataError
+from sentence_similarity.handlers import sentence_similarity_handler as handler_module
 from sentence_similarity.handlers.sentence_similarity_handler import (
     SentenceSimilarityHandler,
 )
 from tests.fakes import (
-    OpenSearchHandlerFake,
+    LoggerFake,
+    OpenSearchFake,
     SessionFake,
     SessionSequence,
     SqsFake,
 )
 
 
-def test_handler_processes_page_saves_matches_and_publishes(
-    serviceConfig,
-    sentenceRow,
+def source_record(sentence_key, classification=None):
+    return {
+        "sentence_key": sentence_key,
+        "vector": [0.1, 0.2],
+        "classification": classification,
+    }
+
+
+@pytest.fixture(autouse=True)
+def use_fake_opensearch_queries(monkeypatch):
+    """Route handler query functions through the small OpenSearch test fake."""
+
+    def select_alias(config, analysis_group):
+        return f"catalog-{analysis_group.casefold()}"
+
+    def load_records_by_sentence_keys(store, catalog_alias, sentence_keys):
+        return store.client.catalog_records(catalog_alias, sentence_keys)
+
+    def classify_sentence_by_vector(store, vector, analysis_group):
+        return store.client.tracer_classification(vector, analysis_group)
+
+    def update_classification_by_sentence_key(
+        store,
+        catalog_alias,
+        sentence_key,
+        classification,
+    ):
+        store.client.save_catalog_classification(
+            catalog_alias,
+            sentence_key,
+            classification,
+        )
+
+    def search_semantic_matches_by_vector(
+        store,
+        catalog_alias,
+        source_key,
+        vector,
+    ):
+        return store.client.catalog_matches(catalog_alias, source_key, vector)
+
+    def search_matching_occurrences_outside_application(
+        store,
+        key_distances,
+        analysis_group,
+        source_application_id,
+    ):
+        return store.client.target_occurrences(
+            key_distances,
+            analysis_group,
+            source_application_id,
+        )
+
+    monkeypatch.setattr(handler_module, "select_catalog_alias", select_alias)
+    monkeypatch.setattr(
+        handler_module.SentenceCatalogStore,
+        "load_records_by_sentence_keys",
+        load_records_by_sentence_keys,
+    )
+    monkeypatch.setattr(
+        handler_module.TracerStore,
+        "classify_sentence_by_vector",
+        classify_sentence_by_vector,
+    )
+    monkeypatch.setattr(
+        handler_module.SentenceCatalogStore,
+        "update_classification_by_sentence_key",
+        update_classification_by_sentence_key,
+    )
+    monkeypatch.setattr(
+        handler_module.SentenceCatalogStore,
+        "search_semantic_matches_by_vector",
+        search_semantic_matches_by_vector,
+    )
+    monkeypatch.setattr(
+        handler_module.OccurrenceStore,
+        "search_matching_occurrences_outside_application",
+        search_matching_occurrences_outside_application,
+    )
+
+
+def test_complete_document_flow_saves_bucket_matches_and_publishes(
+    service_config,
+    sentence_row,
 ):
-    classifySession = SessionFake()
-    matchSession = SessionFake(executeValue=1)
-    stateSession = SessionFake()
+    allowed = {
+        "is_non_matcher": False,
+        "closest_non_matcher": None,
+        "closest_nn_score": None,
+        "is_tracer": False,
+        "is_form_language": False,
+    }
+    source_update = SessionFake()
+    target_update = SessionFake()
+    match_write = SessionFake(execute_value=1)
     sessions = SessionSequence(
         [
-            SessionFake(scalarValue=1),
-            SessionFake(rows=[sentenceRow]),
-            classifySession,
-            SessionFake(rows=["b" * 64]),
-            matchSession,
+            SessionFake(scalar_value=1),
+            SessionFake(rows=[sentence_row]),
+            source_update,
+            target_update,
+            match_write,
             SessionFake(rows=[]),
-            stateSession,
         ]
     )
-    opensearch = OpenSearchHandlerFake(sentenceRow.sentence_key)
+    opensearch = OpenSearchFake(sentence_row.sentence_key)
     sqs = SqsFake()
-    handler = SentenceSimilarityHandler(serviceConfig, sessions, opensearch, sqs)
+    handler = SentenceSimilarityHandler(
+        service_config,
+        sessions,
+        opensearch,
+        sqs,
+        LoggerFake(),
+    )
 
     result = handler.process(10)
 
     assert result == {
-        "tspId": 10,
-        "sourceCount": 1,
-        "processedCount": 1,
-        "nonMatcherCount": 0,
-        "savedRelationshipCount": 1,
+        "tsp_id": 10,
+        "source_count": 1,
+        "processed_count": 1,
+        "non_matcher_count": 0,
+        "saved_relationship_count": 1,
     }
-    assert classifySession.commits == 1
-    assert matchSession.commits == 1
-    assert stateSession.commits == 1
-    assert opensearch.updated[0][0] == 101
-    assert json.loads(sqs.sent[0]["MessageBody"]) == {"tsp_id": 10}
-    assert sqs.sent[0]["MessageGroupId"] == "10"
+    assert source_update.commits == 1
+    assert target_update.commits == 1
+    assert match_write.commits == 1
+    parameters = match_write.executed[0][1]
+    assert parameters["source_global_id"] == 100
+    assert parameters["source_application_id"] == 1
+    assert parameters["matches"] == {
+        "200": {
+            "tsp_id": 20,
+            "application_id": 2,
+            "distance": 0.0,
+        }
+    }
+    assert sqs.sent[0]["message_body"] == {"tsp_id": 10}
+    assert allowed == opensearch.catalog_records(
+        "catalog-asylee",
+        [sentence_row.sentence_key],
+    )[sentence_row.sentence_key]["classification"]
 
 
-def test_non_matcher_updates_flags_and_skips_catalog(serviceConfig, sentenceRow):
+def test_non_matcher_skips_catalog_search_without_creating_match_row(
+    service_config,
+    sentence_row,
+):
+    class NonMatcherOpenSearch(OpenSearchFake):
+        def catalog_matches(self, catalog_alias, source_key, vector):
+            raise AssertionError("non-matcher must not enter semantic search")
+
+    classification_update = SessionFake()
+    sessions = SessionSequence([classification_update])
+    opensearch = NonMatcherOpenSearch(
+        sentence_row.sentence_key,
+        non_matcher=True,
+    )
+    handler = SentenceSimilarityHandler(
+        service_config,
+        sessions,
+        opensearch,
+        SqsFake(),
+        LoggerFake(),
+    )
+    record = opensearch.catalog_records(
+        "catalog-asylee",
+        [sentence_row.sentence_key],
+    )[sentence_row.sentence_key]
+
+    result = handler._process_sentence(
+        sentence_row,
+        "catalog-asylee",
+        record,
+    )
+
+    assert result == {"is_non_matcher": True, "saved_relationships": 0}
+    update_values = classification_update.executed[0][0].compile().params
+    assert update_values["closest_non_matcher"] == 501
+    assert update_values["closest_nn_score"] == pytest.approx(0.95)
+    assert sessions.sessions == []
+
+
+@pytest.mark.parametrize(
+    "classification",
+    [
+        {
+            "is_non_matcher": False,
+            "closest_non_matcher": 501,
+            "closest_nn_score": 0.95,
+            "is_tracer": True,
+            "is_form_language": False,
+        },
+        {
+            "is_non_matcher": False,
+            "closest_non_matcher": 502,
+            "closest_nn_score": 0.94,
+            "is_tracer": False,
+            "is_form_language": True,
+        },
+    ],
+)
+def test_tracer_and_form_language_skip_catalog_search(
+    service_config,
+    sentence_row,
+    classification,
+):
+    class ExcludedOpenSearch(OpenSearchFake):
+        def tracer_classification(self, vector, analysis_group):
+            return classification
+
+        def catalog_matches(self, catalog_alias, source_key, vector):
+            raise AssertionError("excluded sentence must not enter catalog search")
+
     sessions = SessionSequence([SessionFake()])
-    opensearch = OpenSearchHandlerFake(sentenceRow.sentence_key, nonMatcher=True)
     handler = SentenceSimilarityHandler(
-        serviceConfig,
+        service_config,
         sessions,
-        opensearch,
+        ExcludedOpenSearch(sentence_row.sentence_key),
         SqsFake(),
+        LoggerFake(),
     )
 
-    result = handler._processSentence(sentenceRow, [0.1, 0.2])
-
-    assert result == {"isNonMatcher": True, "savedRelationships": 0}
-    assert opensearch.catalogCalls == 0
-
-
-def test_process_stops_when_catalog_vector_is_missing(serviceConfig, sentenceRow):
-    sessions = SessionSequence(
-        [
-            SessionFake(scalarValue=1),
-            SessionFake(rows=[sentenceRow]),
-        ]
+    result = handler._process_sentence(
+        sentence_row,
+        "catalog-asylee",
+        source_record(sentence_row.sentence_key),
     )
-    opensearch = OpenSearchHandlerFake(sentenceRow.sentence_key)
-    opensearch.catalogVectors = missingVectors
+
+    assert result == {"is_non_matcher": True, "saved_relationships": 0}
+    assert sessions.sessions == []
+
+
+def test_missing_classification_is_calculated_and_saved(
+    service_config,
+    sentence_row,
+):
+    opensearch = OpenSearchFake(sentence_row.sentence_key)
     handler = SentenceSimilarityHandler(
-        serviceConfig,
-        sessions,
+        service_config,
+        SessionSequence([]),
         opensearch,
         SqsFake(),
+        LoggerFake(),
+    )
+    record = source_record(sentence_row.sentence_key)
+
+    classification = handler._classify_sentence(
+        "catalog-asylee",
+        record,
+        "Asylee",
+    )
+
+    assert classification["is_non_matcher"] is False
+    assert record["classification"] == classification
+    assert len(opensearch.saved_classifications) == 1
+
+
+def test_saved_non_matcher_is_rechecked_for_reference_id_and_score(
+    service_config,
+    sentence_row,
+):
+    opensearch = OpenSearchFake(sentence_row.sentence_key, non_matcher=True)
+    handler = SentenceSimilarityHandler(
+        service_config,
+        SessionSequence([]),
+        opensearch,
+        SqsFake(),
+        LoggerFake(),
+    )
+    record = source_record(
+        sentence_row.sentence_key,
+        {
+            "is_non_matcher": True,
+            "closest_non_matcher": None,
+            "closest_nn_score": None,
+            "is_tracer": False,
+            "is_form_language": False,
+        },
+    )
+
+    classification = handler._classify_sentence(
+        "catalog-asylee",
+        record,
+        "Asylee",
+    )
+
+    assert classification["closest_non_matcher"] == 501
+    assert classification["closest_nn_score"] == pytest.approx(0.95)
+    assert len(opensearch.saved_classifications) == 1
+
+
+def test_empty_document_is_rejected(service_config):
+    handler = SentenceSimilarityHandler(
+        service_config,
+        SessionSequence([SessionFake(scalar_value=0)]),
+        OpenSearchFake("a" * 64),
+        SqsFake(),
+        LoggerFake(),
     )
 
     with pytest.raises(PermanentDataError):
         handler.process(10)
 
 
-def missingVectors(sentenceKeys):
-    return {}
-
-
-def test_match_writes_are_split_into_small_commits(serviceConfig, sentenceRow):
-    first = SessionFake(executeValue=2)
-    second = SessionFake(executeValue=1)
+def test_sentence_count_uses_only_sentences_vector_tsp_id(service_config):
+    count_session = SessionFake(scalar_value=25)
     handler = SentenceSimilarityHandler(
-        serviceConfig,
-        SessionSequence([first, second]),
-        OpenSearchHandlerFake(sentenceRow.sentence_key),
+        service_config,
+        SessionSequence([count_session]),
+        OpenSearchFake("a" * 64),
         SqsFake(),
-    )
-    matches = {
-        "b" * 64: 0.1,
-        "c" * 64: 0.2,
-        "d" * 64: 0.3,
-    }
-
-    assert handler._saveMatches("Asylee", sentenceRow.sentence_key, matches) == 3
-    assert first.commits == 1
-    assert second.commits == 1
-    assert handler._saveMatches("Asylee", sentenceRow.sentence_key, {}) == 0
-
-
-def test_non_fifo_publish_has_no_fifo_fields(serviceConfig, sentenceRow):
-    serviceConfig.nextQueueUrl = "https://sqs.example.com/standard"
-    sqs = SqsFake()
-    handler = SentenceSimilarityHandler(
-        serviceConfig,
-        SessionSequence([]),
-        OpenSearchHandlerFake(sentenceRow.sentence_key),
-        sqs,
+        LoggerFake(),
     )
 
-    handler._publish(10)
-
-    assert "MessageGroupId" not in sqs.sent[0]
+    assert handler.sentences_vector_store.count_sentences_by_tsp_id(10) == 25
+    sql = str(count_session.scalar_statements[0])
+    assert "JOIN" not in sql.upper()
+    assert "is_current" not in sql
+    assert "sentences_vector.tsp_id" in sql

@@ -1,55 +1,53 @@
-from types import SimpleNamespace
+import pytest
 
 from sentence_similarity import main
+from tests.fakes import LoggerFake, SqsFake
 
 
-class ReturnValue:
-    def __init__(self, value):
-        self.value = value
-
-    def __call__(self, *args, **kwargs):
-        return self.value
+class StopApplication(Exception):
+    pass
 
 
-class ClientCreator:
-    def __init__(self, value):
-        self.value = value
+class OneMessageSqs(SqsFake):
+    def listen_sqs_message(self):
+        self.polls += 1
+        if self.polls == 1:
+            return self.messages
+        raise StopApplication
 
-    def create_client(self):
-        return self.value
+
+class Handler:
+    def __init__(self):
+        self.processed = []
+
+    def process(self, tsp_id):
+        self.processed.append(tsp_id)
 
 
-def test_main_builds_worker_runs_listener_and_closes(monkeypatch):
-    config = SimpleNamespace(awsRegion="us-east-1")
+class Dependencies:
+    def __init__(self, queue, handler):
+        self.aws_sqs = queue
+        self.sentence_similarity_handler = handler
+        self.logger = LoggerFake()
+        self.closed = False
 
-    class AwsSession:
-        def client(self, name, region_name):
-            return "sqs-client"
+    def close(self):
+        self.closed = True
 
-    class Database:
-        sessionFactory = object()
 
-        def close(self):
-            self.closed = True
+def test_main_processes_one_message_deletes_it_and_closes():
+    message = {
+        "tsp_id": "TSP-10",
+        "MessageId": "message-1",
+        "ReceiptHandle": "receipt-1",
+    }
+    queue = OneMessageSqs([message])
+    handler = Handler()
+    dependencies = Dependencies(queue, handler)
 
-    class Listener:
-        def run(self):
-            self.ran = True
+    with pytest.raises(StopApplication):
+        main.run_opensearch_flow(dependencies=dependencies)
 
-    database = Database()
-    listener = Listener()
-
-    def settings():
-        return config
-
-    monkeypatch.setattr(main.Config, "fromEnvironment", settings)
-    monkeypatch.setattr(main.boto3, "Session", ReturnValue(AwsSession()))
-    monkeypatch.setattr(main, "Database", ReturnValue(database))
-    monkeypatch.setattr(main, "OpenSearchClient", ReturnValue(ClientCreator(object())))
-    monkeypatch.setattr(main, "OpenSearchStore", ReturnValue(object()))
-    monkeypatch.setattr(main, "SentenceSimilarityHandler", ReturnValue(object()))
-    monkeypatch.setattr(main, "SqsListener", ReturnValue(listener))
-
-    main.run()
-
-    assert listener.ran and database.closed
+    assert handler.processed == ["TSP-10"]
+    assert queue.deleted == [message]
+    assert dependencies.closed is True

@@ -1,81 +1,54 @@
-import json
-
-import pytest
-
-from sentence_similarity.errors import PermanentMessageError
-from sentence_similarity.sqs_listener import SqsListener
-from tests.fakes import SqsFake
+from sentence_similarity.sqs_processor import SqsProcessor
+from tests.fakes import LoggerFake, SqsFake
 
 
 class Handler:
     def __init__(self, fails=False):
         self.fails = fails
-        self.values = []
+        self.processed = []
 
-    def process(self, tspId):
+    def process(self, tsp_id):
         if self.fails:
-            raise RuntimeError("failed")
-        self.values.append(tspId)
+            raise RuntimeError("temporary failure")
+        self.processed.append(tsp_id)
 
 
-def listener(serviceConfig, sqs=None, handler=None):
-    return SqsListener(
-        serviceConfig,
-        sqs or SqsFake(),
-        handler or Handler(),
-    )
+class Dependencies:
+    def __init__(self, handler):
+        self.aws_sqs = SqsFake()
+        self.sentence_similarity_handler = handler
+        self.logger = LoggerFake()
 
 
-def test_tsp_id_parser_accepts_snake_and_camel_case(serviceConfig):
-    worker = listener(serviceConfig)
-    assert worker._tspId('{"tsp_id": 10}') == 10
-    assert worker._tspId('{"tspId": "11"}') == 11
+def test_invalid_or_failed_messages_are_not_deleted():
+    invalid = Dependencies(Handler())
+    failed = Dependencies(Handler(fails=True))
 
-
-def test_tsp_id_parser_rejects_invalid_messages(serviceConfig):
-    worker = listener(serviceConfig)
-    for body in ["bad", "[]", "{}", '{"tsp_id": 0}']:
-        with pytest.raises(PermanentMessageError):
-            worker._tspId(body)
-
-
-def test_successful_message_is_deleted(serviceConfig):
-    sqs = SqsFake()
-    handler = Handler()
-    worker = listener(serviceConfig, sqs, handler)
-    worker._processMessage(
+    SqsProcessor(invalid)._process_message({"MessageId": "missing"})
+    SqsProcessor(failed)._process_message(
         {
-            "Body": json.dumps({"tsp_id": 10}),
+            "tsp_id": 10,
+            "MessageId": "failed",
             "ReceiptHandle": "receipt",
         }
     )
-    assert handler.values == [10]
-    assert sqs.deleted[0]["ReceiptHandle"] == "receipt"
+
+    assert invalid.aws_sqs.deleted == []
+    assert failed.aws_sqs.deleted == []
 
 
-def test_invalid_or_failed_message_is_not_deleted(serviceConfig):
-    sqs = SqsFake()
-    worker = listener(serviceConfig, sqs, Handler(fails=True))
-    worker._processMessage({"Body": "bad", "ReceiptHandle": "one"})
-    worker._processMessage(
-        {"Body": json.dumps({"tsp_id": 10}), "ReceiptHandle": "two"}
+def test_delete_failure_is_logged_after_success():
+    dependencies = Dependencies(Handler())
+    dependencies.aws_sqs.delete_messages = lambda message: False
+    processor = SqsProcessor(dependencies)
+
+    processor._process_message(
+        {
+            "tsp_id": 10,
+            "MessageId": "message",
+            "ReceiptHandle": "receipt",
+        }
     )
-    assert sqs.deleted == []
 
-
-def test_listener_keeps_polling(serviceConfig):
-    class Queue(SqsFake):
-        def __init__(self):
-            super().__init__()
-            self.calls = 0
-
-        def receive_message(self, **values):
-            self.calls += 1
-            if self.calls == 1:
-                return {"Messages": []}
-            raise KeyboardInterrupt
-
-    queue = Queue()
-    with pytest.raises(KeyboardInterrupt):
-        listener(serviceConfig, queue).run()
-    assert queue.calls == 2
+    assert dependencies.sentence_similarity_handler.processed == [10]
+    assert any(level == "warning" for level, message in dependencies.logger.messages)

@@ -1,293 +1,329 @@
-import json
-import logging
-import uuid
+from collections import defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 
-from sqlalchemy import bindparam, func, select, text, update
-from sqlalchemy.dialects.postgresql import JSONB
+from opensearchpy import OpenSearch
+from sqlalchemy.orm import Session
 
+from sentence_similarity.AwsSQS import AwsSQS
+from sentence_similarity.config import Config
+from sentence_similarity.contracts import (
+    CatalogRecord,
+    Classification,
+    MatchTarget,
+    ProcessResult,
+    SentenceResult,
+    TargetOccurrence,
+    TspId,
+)
+from sentence_similarity.custom_logger import CustomLogger
+from sentence_similarity.db_store import (
+    SentencesVectorStore,
+    TitanMatchesStore,
+)
 from sentence_similarity.errors import PermanentDataError
-from sentence_similarity.models import SentenceVector, TextSimilarityInput
-from sentence_similarity.retry import retryOperation
-
-logger = logging.getLogger(__name__)
-
-# PostgreSQL calculates buckets, locks affected rows in a stable order, and
-# writes both directions. The worker only supplies one source key and a JSONB
-# object containing matching keys and cosine distances.
-SAVE_MATCHES = text(
-    """
-    SELECT upsert_bidirectional_sentence_key_matches(
-        :analysisGroup,
-        :sourceSentenceKey,
-        :matches
-    )
-    """
-).bindparams(bindparam("matches", type_=JSONB))
-
-TERMS_BATCH_SIZE = 1_000  # Keys checked in one PostgreSQL IN query.
+from sentence_similarity.models import SentencesVector
+from sentence_similarity.opensearch_store import (
+    OccurrenceStore,
+    SentenceCatalogStore,
+    TracerStore,
+)
+from sentence_similarity.retry import retry_operation
+from sentence_similarity.utill.catalog import select_catalog_alias
+from sentence_similarity.utill.filtering import (
+    should_skip_sentence_catalog_search,
+)
 
 
 class SentenceSimilarityHandler:
-    def __init__(self, config, sessionFactory, opensearch, sqsClient):
-        """Keep everything required to process one tsp_id."""
+    def __init__(
+        self,
+        config: Config,
+        session_factory: Callable[[], Session],
+        opensearch_client: OpenSearch,
+        aws_sqs: AwsSQS,
+        custom_logger: CustomLogger,
+    ) -> None:
+        """Keep everything required to process one document message."""
 
         self.config = config
-        self.sessionFactory = sessionFactory
-        self.opensearch = opensearch
-        self.sqsClient = sqsClient
-
-    def process(self, tspId: int) -> dict:
-        """Classify and match every current sentence for one tsp_id."""
-
-        total = retryOperation(
-            f"count tsp_id {tspId} sentences",
-            self._countSentences,
-            tspId,
-            waitSeconds=self.config.retrySeconds,
+        self.opensearch_client = opensearch_client
+        self.aws_sqs = aws_sqs
+        self.logger = custom_logger
+        self.sentences_vector_store = SentencesVectorStore(
+            config,
+            session_factory,
         )
-        logger.info("tsp_id=%s contains %s current sentence(s)", tspId, total)
+        self.titan_matches_store = TitanMatchesStore(
+            config,
+            session_factory,
+        )
+        self.occurrence_store = OccurrenceStore(config, opensearch_client)
+        self.sentence_catalog_store = SentenceCatalogStore(
+            config,
+            opensearch_client,
+        )
+        self.tracer_store = TracerStore(config, opensearch_client)
+
+    def process(self, tsp_id: TspId) -> ProcessResult:
+        """Classify and match every sentence belonging to one document."""
+
+        self.logger.info("Sentence Similarity processing started.")
+        total = retry_operation(
+            "Count source sentences",
+            self.sentences_vector_store.count_sentences_by_tsp_id,
+            tsp_id,
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
+        )
+        if total == 0:
+            raise PermanentDataError(
+                "sentences_vector has no rows for the requested document"
+            )
+        self.logger.info(f"Found {total} source sentence(s).")
 
         processed = 0
-        nonMatchers = 0
-        savedRelationships = 0
-        afterGlobalId = 0
+        non_matchers = 0
+        saved_relationships = 0
+        after_global_id = 0
+        batch_number = 0
 
         with ThreadPoolExecutor(
-            max_workers=self.config.workerCount,
+            max_workers=self.config.thread_worker_count,
             thread_name_prefix="sentence-similarity",
         ) as executor:
             while True:
-                rows = retryOperation(
-                    f"load tsp_id {tspId} sentence page",
-                    self._loadPage,
-                    tspId,
-                    afterGlobalId,
-                    waitSeconds=self.config.retrySeconds,
+                batch_number += 1
+                rows = retry_operation(
+                    f"Load source sentence batch {batch_number}",
+                    self.sentences_vector_store.load_sentence_batch_by_tsp_id,
+                    tsp_id,
+                    after_global_id,
+                    wait_seconds=self.config.retry_seconds,
+                    custom_logger=self.logger,
                 )
                 if not rows:
                     break
 
-                vectors = retryOperation(
-                    f"load tsp_id {tspId} catalog vectors",
-                    self.opensearch.catalogVectors,
+                catalog_alias = select_catalog_alias(
+                    self.config,
+                    rows[0].tsp.analysis_group,
+                )
+                source_records = retry_operation(
+                    f"Load catalog vectors for sentence batch {batch_number}",
+                    self.sentence_catalog_store.load_records_by_sentence_keys,
+                    catalog_alias,
                     [row.sentence_key for row in rows],
-                    waitSeconds=self.config.retrySeconds,
+                    wait_seconds=self.config.retry_seconds,
+                    custom_logger=self.logger,
                 )
-                missingKeys = sorted(
-                    {
-                        row.sentence_key
-                        for row in rows
-                        if row.sentence_key not in vectors
-                    }
-                )
-                if missingKeys:
-                    raise PermanentDataError(
-                        f"catalog vector is missing for {missingKeys[0]}"
-                    )
 
-                jobs = []
-                for row in rows:
-                    jobs.append(
-                        executor.submit(
-                            self._runWorker,
-                            row,
-                            vectors[row.sentence_key],
-                        )
+                jobs = [
+                    executor.submit(
+                        self._process_sentence_with_retry,
+                        row,
+                        catalog_alias,
+                        source_records[row.sentence_key],
                     )
+                    for row in rows
+                ]
                 for job in jobs:
                     result = job.result()
                     processed += 1
-                    nonMatchers += int(result["isNonMatcher"])
-                    savedRelationships += result["savedRelationships"]
+                    non_matchers += int(result["is_non_matcher"])
+                    saved_relationships += result["saved_relationships"]
 
-                afterGlobalId = rows[-1].global_id
-                logger.info(
-                    "tsp_id=%s processed through global_id=%s",
-                    tspId,
-                    afterGlobalId,
+                after_global_id = rows[-1].global_id
+                self.logger.info(
+                    "Completed source sentence batch "
+                    f"{batch_number} with {len(rows)} sentence(s)."
                 )
 
-        retryOperation(
-            f"update tsp_id {tspId} state",
-            self._updateDocumentState,
-            tspId,
-            waitSeconds=self.config.retrySeconds,
+        retry_operation(
+            "Send completed document to the next queue",
+            self._send_to_api_transform,
+            tsp_id,
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
         )
-        retryOperation(
-            f"publish tsp_id {tspId}",
-            self._publish,
-            tspId,
-            waitSeconds=self.config.retrySeconds,
+        self.logger.info(
+            f"Sentence Similarity completed {processed} sentence(s), including "
+            f"{non_matchers} non-matcher(s) and {saved_relationships} saved "
+            "relationships."
         )
         return {
-            "tspId": tspId,
-            "sourceCount": total,
-            "processedCount": processed,
-            "nonMatcherCount": nonMatchers,
-            "savedRelationshipCount": savedRelationships,
+            "tsp_id": tsp_id,
+            "source_count": total,
+            "processed_count": processed,
+            "non_matcher_count": non_matchers,
+            "saved_relationship_count": saved_relationships,
         }
 
-    def _runWorker(self, row, vector: list) -> dict:
-        """Retry one complete sentence flow up to three times."""
-
-        return retryOperation(
-            f"global_id {row.global_id}",
-            self._processSentence,
-            row,
-            vector,
-            waitSeconds=self.config.retrySeconds,
-        )
-
-    def _processSentence(self, row, vector: list) -> dict:
-        """Check tracer rules first and save eligible semantic matches."""
-
-        classification = self.opensearch.tracerClassification(
-            vector,
-            row.analysis_group,
-        )
-        self._saveClassification(row.global_id, classification)
-        self.opensearch.updateOccurrence(row.global_id, classification)
-
-        if classification["is_non_matcher"]:
-            return {"isNonMatcher": True, "savedRelationships": 0}
-
-        matches = self.opensearch.catalogMatches(row.sentence_key, vector)
-        eligibleKeys = self._eligibleCandidateKeys(row, list(matches))
-        eligibleMatches = {
-            key: distance
-            for key, distance in matches.items()
-            if key in eligibleKeys
-        }
-        saved = self._saveMatches(
-            row.analysis_group,
-            row.sentence_key,
-            eligibleMatches,
-        )
-        return {"isNonMatcher": False, "savedRelationships": saved}
-
-    def _countSentences(self, tspId: int) -> int:
-        """Count current source sentences for the provided document."""
-
-        with self.sessionFactory() as session:
-            statement = select(func.count()).select_from(SentenceVector).where(
-                SentenceVector.tsp_id == tspId,
-                SentenceVector.is_current.is_(True),
-            )
-            return int(session.scalar(statement) or 0)
-
-    def _loadPage(self, tspId: int, afterGlobalId: int) -> list:
-        """Read the next 100 source rows without loading sentence content."""
-
-        with self.sessionFactory() as session:
-            statement = (
-                select(SentenceVector)
-                .where(
-                    SentenceVector.tsp_id == tspId,
-                    SentenceVector.is_current.is_(True),
-                    SentenceVector.global_id > afterGlobalId,
-                )
-                .order_by(SentenceVector.global_id)
-                .limit(self.config.sourcePageSize)
-            )
-            return list(session.scalars(statement))
-
-    def _saveClassification(self, globalId: int, classification: dict):
-        """Save one tracer decision to sentences_vector by global_id."""
-
-        with self.sessionFactory() as session:
-            statement = (
-                update(SentenceVector)
-                .where(SentenceVector.global_id == globalId)
-                .values(
-                    is_non_matcher=classification["is_non_matcher"],
-                    is_tracer=classification["is_tracer"],
-                    is_form_language=classification["is_form_language"],
-                    updated_at=datetime.now(UTC),
-                )
-            )
-            session.execute(statement)
-            session.commit()
-
-    def _eligibleCandidateKeys(self, sourceRow, candidateKeys: list) -> set:
-        """Keep eligible keys found outside the source application."""
-
-        eligible = set()
-        uniqueKeys = list(dict.fromkeys(candidateKeys))
-        for offset in range(0, len(uniqueKeys), TERMS_BATCH_SIZE):
-            batch = uniqueKeys[offset : offset + TERMS_BATCH_SIZE]
-            with self.sessionFactory() as session:
-                statement = (
-                    select(SentenceVector.sentence_key)
-                    .where(
-                        SentenceVector.sentence_key.in_(batch),
-                        SentenceVector.analysis_group == sourceRow.analysis_group,
-                        SentenceVector.application_id != sourceRow.application_id,
-                        SentenceVector.is_current.is_(True),
-                        SentenceVector.is_non_matcher.is_(False),
-                        SentenceVector.is_tracer.is_(False),
-                        SentenceVector.is_form_language.is_(False),
-                    )
-                    .distinct()
-                )
-                eligible.update(session.scalars(statement))
-        return eligible
-
-    def _saveMatches(
+    def _process_sentence_with_retry(
         self,
-        analysisGroup: str,
-        sourceSentenceKey: str,
-        matches: dict,
-    ) -> int:
-        """Save matches in smaller commits through the bucket SQL function."""
+        source: SentencesVector,
+        catalog_alias: str,
+        source_record: CatalogRecord,
+    ) -> SentenceResult:
+        """Retry the complete classification and match flow for one sentence."""
 
-        if not matches:
-            return 0
+        return retry_operation(
+            f"Process source global ID {source.global_id}",
+            self._process_sentence,
+            source,
+            catalog_alias,
+            source_record,
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
+        )
 
-        saved = 0
-        items = list(matches.items())
-        for offset in range(0, len(items), self.config.matchWriteBatchSize):
-            matchBatch = dict(
-                items[offset : offset + self.config.matchWriteBatchSize]
+    def _process_sentence(
+        self,
+        source: SentencesVector,
+        catalog_alias: str,
+        source_record: CatalogRecord,
+    ) -> SentenceResult:
+        """Classify one source, find eligible occurrences, and save matches."""
+
+        stage = "source classification"
+        try:
+            classification = self._classify_sentence(
+                catalog_alias,
+                source_record,
+                source.tsp.analysis_group,
             )
-            with self.sessionFactory() as session:
-                processed = session.execute(
-                    SAVE_MATCHES,
-                    {
-                        "analysisGroup": analysisGroup,
-                        "sourceSentenceKey": sourceSentenceKey,
-                        "matches": matchBatch,
-                    },
-                ).scalar_one()
-                session.commit()
-                saved += int(processed)
-        return saved
-
-    def _updateDocumentState(self, tspId: int):
-        """Move the completed document to the API Transform state."""
-
-        with self.sessionFactory() as session:
-            statement = (
-                update(TextSimilarityInput)
-                .where(TextSimilarityInput.tsp_id == tspId)
-                .values(document_state=self.config.nextDocumentState)
+            self.sentences_vector_store.update_classification_by_global_ids(
+                [source.global_id],
+                classification,
             )
-            session.execute(statement)
-            session.commit()
 
-    def _publish(self, tspId: int):
-        """Send the completed tsp_id to the next SQS queue."""
+            if should_skip_sentence_catalog_search(classification):
+                return {"is_non_matcher": True, "saved_relationships": 0}
 
-        body = json.dumps({"tsp_id": tspId})
-        parameters = {
-            "QueueUrl": self.config.nextQueueUrl,
-            "MessageBody": body,
-        }
-        if self.config.nextQueueUrl.endswith(".fifo"):
-            parameters["MessageGroupId"] = str(tspId)
-            parameters["MessageDeduplicationId"] = (
-                f"sentence-similarity-{tspId}-"
-                f"{uuid.uuid5(uuid.NAMESPACE_URL, body)}"
-            )[:128]
-        self.sqsClient.send_message(**parameters)
+            stage = "semantic catalog search"
+            key_distances = (
+                self.sentence_catalog_store.search_semantic_matches_by_vector(
+                    catalog_alias,
+                    source.sentence_key,
+                    source_record["vector"],
+                )
+            )
+
+            stage = "target occurrence expansion"
+            targets = self._find_eligible_match_targets(
+                source,
+                catalog_alias,
+                key_distances,
+                source_record,
+            )
+
+            stage = "bidirectional Titan match write"
+            saved = self.titan_matches_store.save_bidirectional_matches(
+                source,
+                targets,
+            )
+            return {
+                "is_non_matcher": False,
+                "saved_relationships": saved,
+            }
+        except Exception as error:
+            self.logger.error(
+                f"Source global ID {source.global_id} failed during {stage}: "
+                f"{str(error)[:500]}"
+            )
+            raise
+
+    def _classify_sentence(
+        self,
+        catalog_alias: str,
+        record: CatalogRecord,
+        analysis_group: str,
+    ) -> Classification:
+        """Reuse a catalog decision or calculate and save it once."""
+
+        saved = record["classification"]
+        # The catalog keeps only the three flags. A saved non-matcher must be
+        # searched again so sentences_vector also receives its reference ID
+        # and score. Allowed sentences do not need those two database values.
+        if saved is not None and not should_skip_sentence_catalog_search(saved):
+            return saved
+        classification = self.tracer_store.classify_sentence_by_vector(
+            record["vector"],
+            analysis_group,
+        )
+        self.sentence_catalog_store.update_classification_by_sentence_key(
+            catalog_alias,
+            record["sentence_key"],
+            classification,
+        )
+        record["classification"] = classification
+        return classification
+
+    def _find_eligible_match_targets(
+        self,
+        source: SentencesVector,
+        catalog_alias: str,
+        key_distances: dict[str, float],
+        source_record: CatalogRecord,
+    ) -> dict[str, MatchTarget]:
+        """Expand matching keys and remove every ineligible target occurrence."""
+
+        occurrences = (
+            self.occurrence_store.search_matching_occurrences_outside_application(
+                key_distances,
+                source.tsp.analysis_group,
+                source.tsp.application_id,
+            )
+        )
+        if not occurrences:
+            return {}
+
+        occurrences_by_key: dict[str, list[TargetOccurrence]] = defaultdict(list)
+        for occurrence in occurrences:
+            occurrences_by_key[occurrence["sentence_key"]].append(occurrence)
+
+        records = self.sentence_catalog_store.load_records_by_sentence_keys(
+            catalog_alias,
+            list(occurrences_by_key),
+        )
+        records[source_record["sentence_key"]] = source_record
+
+        missing_keys = sorted(set(occurrences_by_key) - set(records))
+        if missing_keys:
+            raise PermanentDataError(
+                f"catalog vector is missing for sentence key {missing_keys[0]}"
+            )
+
+        targets: dict[str, MatchTarget] = {}
+        for sentence_key, matching_occurrences in occurrences_by_key.items():
+            record = records[sentence_key]
+            classification = self._classify_sentence(
+                catalog_alias,
+                record,
+                source.tsp.analysis_group,
+            )
+            self.sentences_vector_store.update_classification_by_global_ids(
+                [item["global_id"] for item in matching_occurrences],
+                classification,
+            )
+            if should_skip_sentence_catalog_search(classification):
+                continue
+
+            for occurrence in matching_occurrences:
+                targets[str(occurrence["global_id"])] = {
+                    "tsp_id": occurrence["tsp_id"],
+                    "application_id": occurrence["application_id"],
+                    "distance": occurrence["distance"],
+                }
+        return targets
+
+    def _send_to_api_transform(self, tsp_id: TspId) -> None:
+        """Send the completed document to API Transform."""
+
+        sent = self.aws_sqs.send_sqs_message(
+            send_queue_url=self.config.api_transform_queue_url,
+            message_body={"tsp_id": tsp_id},
+            is_fifo=self.config.api_transform_queue_url.endswith(".fifo"),
+        )
+        if not sent:
+            raise RuntimeError("failed to send the completed API Transform message")

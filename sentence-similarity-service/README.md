@@ -1,121 +1,102 @@
-# Sentence Similarity Worker
+# Sentence Similarity Service
 
-This is a standalone SQS worker. It is not a FastAPI application and it does
-not import files from another project.
+This is a standalone SQS worker. The same image is used for real-time and
+historical processing; Harness gives each deployment a different source queue.
 
-## Simple code flow
+## Flow
 
 ```text
-Listen for one SQS message
-    -> Read tsp_id
-    -> Load 100 current sentences from sentences_vector
-    -> Load all 100 catalog vectors in one OpenSearch request
-    -> Process the page with up to 16 sentence workers
-    -> Search tracer_form_language_catalog first
-    -> Update sentence flags in PostgreSQL and sentence_occurrences
-    -> Skip semantic matching when the sentence is a non-matcher
-    -> Otherwise search sentence_semantic_catalog at the configured threshold
-    -> Keep eligible keys from the same analysis group and another application
-    -> Save both key directions through the bucket SQL function
-    -> Update document state and send tsp_id to API Transform
+Receive one SQS message with tsp_id
+    -> Load 30 sentences from sentences_vector
+    -> Read application_id and analysis_group from text_similarity_input
+    -> Load their vectors from the selected Asylee or Refugee catalog
+    -> Process up to 30 sentences with 30 workers
+    -> Reuse saved catalog classification or search the tracer catalog
+    -> Update classification in the group catalog and sentences_vector
+    -> Skip normal matching for tracer, form-language, or non-matcher sentences
+    -> Search the selected sentence catalog for exact and similar keys
+    -> Expand keys through sentence_occurrences for other applications
+    -> Verify target classifications before saving either direction
+    -> Save bidirectional global_id matches in tsp.titan_matches
+    -> Repeat until every sentence is complete
+    -> Send tsp_id to API Transform
     -> Delete the source SQS message
 ```
 
-Live and historical messages use exactly the same flow:
+The tracer table and tracer index do not contain `is_tracer`. Sentence
+Similarity derives it after a tracer-catalog hit:
+
+```text
+is_non_matcher=false and is_form_language=false -> is_tracer=true
+is_non_matcher=true                              -> skip sentence matching
+is_form_language=true                            -> skip sentence matching
+no tracer-catalog hit                            -> search sentence catalog
+```
+
+Every tracer-catalog hit skips the normal sentence-catalog search. The search
+continues only when the tracer catalog returns no result.
+
+## Titan match buckets
+
+`tsp.titan_matches` uses 16 buckets per source `global_id`. The matching
+global ID selects its stable bucket:
+
+```text
+bucket = matching global_id % 16
+```
+
+The JSONB object stores only the matching ID and cosine distance:
 
 ```json
-{"tsp_id": 1040}
+{"200": 0.10, "232": 0.0}
 ```
 
-## Why the page has 100 sentences but only 16 workers
+PostgreSQL creates the reverse relationship in the same transaction. It also
+calculates `match_count` and `verbatim`. Smaller bucket rows reduce the
+amount of JSONB rewritten and reduce row-lock contention between workers.
 
-The page size controls how many source rows and vectors are loaded together.
-The worker count controls simultaneous database and OpenSearch work.
+The Flyway-ready SQL is in `sql/002_titan_match_buckets.sql`.
 
-Starting 100 workers would allow one document to request 100 database
-connections and 100 OpenSearch connections at once. The OpenSearch client pool
-contains 20 connections, so most of those workers would only wait while adding
-memory, thread scheduling, and throttling pressure. The default 16 workers keep
-the page parallel without exhausting the connection pools. Increase it only
-after a load test; configuration currently prevents values above 20.
+Database access is separated by table under `sentence_similarity/db_store`:
 
-## Tracer classification
+- `SentencesVectorStore` loads sentence batches by `tsp_id` and updates
+  classifications by `global_id`.
+- `TitanMatchesStore` saves bidirectional matches through the bucket function.
 
-Every source vector is searched against `tracer_form_language_catalog` using:
+The handler only controls the order of database and OpenSearch operations.
 
-- The source row's `analysis_group`.
-- `isNonMatcher = true` references.
-- The configured `TRACER_THRESHOLD`, default 90 percent.
+OpenSearch access is also separated by index under
+`sentence_similarity/opensearch_store`:
 
-The result updates these `sentences_vector` columns by `global_id`:
+- `OccurrenceStore` finds matching occurrences outside the source application.
+- `TracerStore` classifies a sentence using its vector.
+- `SentenceCatalogStore` loads records by sentence key, searches semantic
+  matches by vector, and updates reusable classification flags by sentence key.
 
-- `is_non_matcher`
-- `is_tracer`
-- `is_form_language`
-- `updated_at`
+## Configuration
 
-The same three flags are copied to the occurrence document whose OpenSearch
-`_id` is that `global_id`. A non-matcher is not searched against the main
-catalog and creates no sentence-key relationship.
+Copy `.env.example` and provide the Vault file, OpenSearch host and role,
+occurrence and group catalog aliases, tracer alias, source queue, and API
+Transform queue.
 
-## Semantic matching
+Processing constants are kept in `sentence_similarity/config.py`:
 
-An eligible source uses its already saved 512-dimension vector. Titan is not
-called by this service. The catalog search uses IVF `nprobes` and radial
-`min_score`, and composite aggregation pages return every key found at or above
-`MATCH_THRESHOLD`.
-
-Before saving, PostgreSQL keeps candidate keys that:
-
-- Exist in the same `analysis_group`.
-- Have a current occurrence outside the source application.
-- Are not marked as non-matcher, tracer, or form language.
-
-The source key itself is not stored as its own match.
-
-## Only one match table
-
-This worker does not read or write the old `matches` table. It only calls:
-
-```sql
-upsert_bidirectional_sentence_key_matches(
-    analysis_group,
-    source_sentence_key,
-    matches_jsonb
-)
+```text
+Source sentence batch: 30 sentences
+Workers: 30
+Titan vector: 512 dimensions
+Retry wait: 5 seconds
+Match write batch: 500 occurrences
 ```
-
-The function stores both directions and uses 32 deterministic buckets. Match
-values are cosine distance values where `0.0` means an exact vector match.
-Relationships are sent to PostgreSQL in groups of 500 so one transaction does
-not lock thousands of bucket rows.
-
-The required table, functions, and query indexes are in
-`sql/001_sentence_key_matches.sql`. The two `CREATE INDEX CONCURRENTLY`
-statements must run outside a Flyway transaction.
-
-## Failure behavior
-
-- A temporary operation is attempted three times, waiting five seconds between
-  failures.
-- Stable `global_id` and sentence-key bucket identities make retries safe.
-- A failed message is not deleted and becomes available again after the
-  two-hour SQS visibility timeout.
-- The next SQS message is sent before the source message is deleted.
 
 ## Run
 
-Copy `.env.example` to `.env` and set the real PostgreSQL, AWS, OpenSearch, and
-SQS values.
+```bash
+make local
+```
+
+## Test
 
 ```bash
 make test
-make dev
 ```
-
-`make local` runs the same foreground worker outside Docker.
-
-## Portable copy
-
-Run `make generate`. It creates `sentence_similarity_service_project.py`.
-Copy that file anywhere and run it to rebuild the complete project.

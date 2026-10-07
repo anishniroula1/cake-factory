@@ -1,11 +1,8 @@
 import pytest
 
 from sentence_similarity.errors import PermanentDataError
-from sentence_similarity.retry import retryOperation
-
-
-def noWait(value):
-    pass
+from sentence_similarity.retry import retry_operation
+from tests.fakes import LoggerFake
 
 
 def test_retry_returns_after_temporary_failure(monkeypatch):
@@ -17,29 +14,47 @@ def test_retry_returns_after_temporary_failure(monkeypatch):
             raise RuntimeError("temporary")
         return value
 
-    monkeypatch.setattr("sentence_similarity.retry.time.sleep", noWait)
-    assert retryOperation("work", operation, "done", waitSeconds=5) == "done"
+    monkeypatch.setattr("sentence_similarity.retry.time.sleep", lambda value: None)
+    result = retry_operation(
+        "work",
+        operation,
+        "done",
+        wait_seconds=5,
+        custom_logger=LoggerFake(),
+    )
+
+    assert result == "done"
     assert len(attempts) == 2
 
 
-def test_retry_stops_at_limit_and_rejects_invalid_limit(monkeypatch):
-    attempts = []
+def test_retry_stops_at_limit_and_rejects_bad_limit(monkeypatch):
+    monkeypatch.setattr("sentence_similarity.retry.time.sleep", lambda value: None)
+    logger = LoggerFake()
 
     def operation():
-        attempts.append(1)
         raise RuntimeError("unavailable")
 
-    monkeypatch.setattr("sentence_similarity.retry.time.sleep", noWait)
     with pytest.raises(RuntimeError):
-        retryOperation("work", operation, waitSeconds=5, maxAttempts=2)
-    assert len(attempts) == 2
+        retry_operation(
+            "work",
+            operation,
+            wait_seconds=5,
+            max_attempts=2,
+            custom_logger=logger,
+        )
     with pytest.raises(ValueError):
-        retryOperation("work", operation, waitSeconds=5, maxAttempts=0)
+        retry_operation("work", operation, wait_seconds=5, max_attempts=0)
+    assert any(level == "error" for level, message in logger.messages)
 
 
-def test_retry_does_not_hide_permanent_data_error():
+def test_permanent_data_error_is_not_retried():
     def operation():
         raise PermanentDataError("bad data")
 
     with pytest.raises(PermanentDataError):
-        retryOperation("work", operation, waitSeconds=5)
+        retry_operation(
+            "work",
+            operation,
+            wait_seconds=5,
+            custom_logger=LoggerFake(),
+        )

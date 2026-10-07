@@ -311,6 +311,9 @@ PUT /tracer_form_language_catalog-v1
   "mappings": {
     "dynamic": "strict",
     "properties": {
+      "tracerId": {
+        "type": "integer"
+      },
       "sentenceContent": {
         "type": "text"
       },
@@ -322,9 +325,6 @@ PUT /tracer_form_language_catalog-v1
           "name": "hnsw",
           "engine": "lucene"
         }
-      },
-      "isTracer": {
-        "type": "boolean"
       },
       "isFormLanguage": {
         "type": "boolean"
@@ -1292,16 +1292,19 @@ Given a worker receives one sentence
 When analysisGroup selects the Asylee or Refugee sentence catalog
 Then the worker first reads any saved isNonMatcher, isTracer, and isFormLanguage values from that group catalog
 And when those values are missing it checks the sentence vector against tracer_form_language_catalog for the same analysisGroup
+And the tracer catalog returns isNonMatcher and isFormLanguage but does not contain isTracer
+And isTracer is true only when a tracer result is found and both returned flags are false
 And it saves the completed classification on the selected group catalog document
-And the sentence row in sentences_vector is updated using global_id
-And a sentence marked as a non-matcher is not sent to normal sentence similarity matching
+And the sentence row in sentences_vector is updated using global_id with the flags, matching tracerId, and decimal similarity score
+And any sentence found in the tracer catalog is not sent to normal sentence similarity matching
 ```
 
 ```gherkin
 Given a group-catalog read or update, tracer lookup, or sentences_vector update fails temporarily
 When the worker retries the sentence
 Then the same sentence is processed again without creating a duplicate
-And the group catalog and sentences_vector row contain the same classification after the retry succeeds
+And the group catalog and sentences_vector row contain the same three classification flags after the retry succeeds
+And sentences_vector also contains the matching tracerId and decimal similarity score returned by the tracer search
 ```
 
 ## 21. Sentence Similarity | Search eligible sentences and save Titan matches (Assign this to Anish, I already have the code for this.)

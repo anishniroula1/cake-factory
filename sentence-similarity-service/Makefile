@@ -1,12 +1,11 @@
 SHELL := /bin/sh
 
-.PHONY: help setup test dev local down logs generate
+.PHONY: help setup test dev local down logs
 
 help:
 	@echo "make dev       Build and run the SQS worker"
 	@echo "make local     Run the SQS worker locally"
 	@echo "make test      Run tests with coverage"
-	@echo "make generate  Create the portable project file"
 
 setup:
 	uv sync --extra dev
@@ -26,6 +25,3 @@ down:
 
 logs:
 	docker compose logs -f worker
-
-generate:
-	uv run python generate_project.py
