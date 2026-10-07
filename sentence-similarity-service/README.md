@@ -57,7 +57,8 @@ amount of JSONB rewritten and reduce row-lock contention between workers.
 
 The Flyway-ready SQL is in `sql/002_titan_match_buckets.sql`.
 
-Database access is separated by table under `sentence_similarity/db_store`:
+Database access is separated by table under
+`similarity_completed/opensearch/db_store`:
 
 - `SentencesVectorStore` loads sentence batches by `tsp_id` and updates
   classifications by `global_id`.
@@ -66,7 +67,7 @@ Database access is separated by table under `sentence_similarity/db_store`:
 The handler only controls the order of database and OpenSearch operations.
 
 OpenSearch access is also separated by index under
-`sentence_similarity/opensearch_store`:
+`similarity_completed/opensearch/opensearch_store`:
 
 - `OccurrenceStore` finds matching occurrences outside the source application.
 - `TracerStore` classifies a sentence using its vector.
@@ -79,7 +80,8 @@ Copy `.env.example` and provide the Vault file, OpenSearch host and role,
 occurrence and group catalog aliases, tracer alias, source queue, and API
 Transform queue.
 
-Processing constants are kept in `sentence_similarity/config.py`:
+Processing constants are kept in
+`similarity_completed/opensearch/config.py`:
 
 ```text
 Source sentence batch: 30 sentences

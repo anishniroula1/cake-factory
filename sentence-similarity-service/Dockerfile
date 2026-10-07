@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
-COPY sentence_similarity ./sentence_similarity
+COPY similarity_completed ./similarity_completed
 RUN pip install --no-cache-dir .
 
-CMD ["python", "-m", "sentence_similarity.main"]
+CMD ["python", "-m", "similarity_completed.opensearch.main"]

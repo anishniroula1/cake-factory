@@ -25,20 +25,20 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["sentence_similarity*"]
+include = ["similarity_completed*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "--cov=sentence_similarity --cov-report=term-missing --cov-fail-under=95"
+addopts = "--cov=similarity_completed.opensearch --cov-report=term-missing --cov-fail-under=95"
 
 [tool.coverage.run]
 omit = [
-  "sentence_similarity/AwsSQS.py",
-  "sentence_similarity/DatabaseConnection.py",
-  "sentence_similarity/VaultSecrets.py",
-  "sentence_similarity/database.py",
-  "sentence_similarity/sqs_listener.py",
+  "similarity_completed/opensearch/AwsSQS.py",
+  "similarity_completed/opensearch/DatabaseConnection.py",
+  "similarity_completed/opensearch/VaultSecrets.py",
+  "similarity_completed/opensearch/database.py",
+  "similarity_completed/opensearch/sqs_listener.py",
 ]
 
 [tool.ruff]
@@ -46,6 +46,6 @@ line-length = 88
 target-version = "py312"
 
 [tool.ruff.lint.per-file-ignores]
-"sentence_similarity/AwsSQS.py" = ["N999"]
-"sentence_similarity/DatabaseConnection.py" = ["N999"]
-"sentence_similarity/VaultSecrets.py" = ["N999"]
+"similarity_completed/opensearch/AwsSQS.py" = ["N999"]
+"similarity_completed/opensearch/DatabaseConnection.py" = ["N999"]
+"similarity_completed/opensearch/VaultSecrets.py" = ["N999"]

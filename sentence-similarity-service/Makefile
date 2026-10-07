@@ -11,14 +11,14 @@ setup:
 	uv sync --extra dev
 
 test: setup
-	uv run ruff check sentence_similarity tests generate_project.py decode_project.py
+	uv run ruff check similarity_completed tests generate_project.py decode_project.py
 	uv run pytest -q
 
 dev:
 	docker compose up --build
 
 local: setup
-	uv run python -m sentence_similarity.main
+	uv run python -m similarity_completed.opensearch.main
 
 down:
 	docker compose down
