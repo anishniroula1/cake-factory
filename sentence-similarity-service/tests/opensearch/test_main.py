@@ -1,27 +1,32 @@
+import json
+from dataclasses import replace
+
+import boto3
 import pytest
+from moto import mock_aws
 
 from similarity_completed.opensearch import main
-from tests.opensearch.fakes import LoggerFake, SqsFake
+from similarity_completed.opensearch.handlers.sentence_similarity_handler import SentenceSimilarityHandler
+from ta_utils.aws.sqs.AwsSQS import AwsSQS
+from tests.opensearch.fakes import LoggerFake, SessionSequence, opensearch_mock, session_mock
 
 
 class StopApplication(Exception):
     pass
 
 
-class OneMessageSqs(SqsFake):
+class OneMessageAwsSqs(AwsSQS):
+    """Use Moto for one real SQS poll, then stop the worker loop."""
+
+    def __init__(self, **values):
+        super().__init__(**values)
+        self.polls = 0
+
     def listen_sqs_message(self):
         self.polls += 1
         if self.polls == 1:
-            return self.messages
+            return super().listen_sqs_message()
         raise StopApplication
-
-
-class Handler:
-    def __init__(self):
-        self.processed = []
-
-    def process(self, tsp_id):
-        self.processed.append(tsp_id)
 
 
 class Dependencies:
@@ -35,15 +40,60 @@ class Dependencies:
         self.closed = True
 
 
-def test_main_processes_one_message_deletes_it_and_closes():
-    message = {"tsp_id": "TSP-10", "MessageId": "message-1", "ReceiptHandle": "receipt-1"}
-    queue = OneMessageSqs([message])
-    handler = Handler()
+@mock_aws
+def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_config, sentence_row):
+    sqs_client = boto3.client("sqs", region_name="us-east-1")
+    source_queue_url = sqs_client.create_queue(QueueName="sentence-similarity")["QueueUrl"]
+    next_queue_url = sqs_client.create_queue(
+        QueueName="sentence-transform.fifo", Attributes={"FifoQueue": "true", "ContentBasedDeduplication": "true"}
+    )["QueueUrl"]
+    sqs_client.send_message(QueueUrl=source_queue_url, MessageBody=json.dumps({"tsp_id": 10}))
+
+    queue = OneMessageAwsSqs(
+        queue_url=source_queue_url,
+        aws_region="us-east-1",
+        max_number_of_messages=1,
+        wait_time=0,
+        logger=LoggerFake(),
+        visibility_timeout=0,
+        retry_wait_seconds=0,
+        sqs_client=sqs_client,
+    )
+    source_update = session_mock()
+    target_update = session_mock()
+    match_write = session_mock(execute_value=1)
+    sessions = SessionSequence(
+        [
+            session_mock(scalar_value=1),
+            session_mock(rows=[sentence_row]),
+            source_update,
+            target_update,
+            match_write,
+            session_mock(rows=[]),
+        ]
+    )
+    opensearch, _ = opensearch_mock(sentence_row.sentence_key)
+    config = replace(service_config, receive_sqs_endpoint=source_queue_url, sent_sqs_endpoint=next_queue_url)
+    handler = SentenceSimilarityHandler(config, sessions, opensearch, queue, LoggerFake())
     dependencies = Dependencies(queue, handler)
 
     with pytest.raises(StopApplication):
         main.run_opensearch_flow(dependencies=dependencies)
 
-    assert handler.processed == ["TSP-10"]
-    assert queue.deleted == [message]
+    assert "Messages" not in sqs_client.receive_message(QueueUrl=source_queue_url, WaitTimeSeconds=0)
+    next_message = sqs_client.receive_message(QueueUrl=next_queue_url, WaitTimeSeconds=0)["Messages"][0]
+    assert json.loads(next_message["Body"]) == {"tsp_id": 10}
+
+    source_update.commit.assert_called_once_with()
+    target_update.commit.assert_called_once_with()
+    match_write.commit.assert_called_once_with()
+    parameters = match_write.execute.call_args.args[1]
+    assert parameters["source_global_id"] == 100
+    assert parameters["matches"] == {"200": {"tsp_id": 20, "application_id": 2, "distance": 0.0}}
+    assert [call.kwargs["index"] for call in opensearch.search.call_args_list] == [
+        "catalog-asylee",
+        "catalog-asylee",
+        "occurrence",
+        "catalog-asylee",
+    ]
     assert dependencies.closed is True

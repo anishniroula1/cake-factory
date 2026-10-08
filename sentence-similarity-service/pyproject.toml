@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "moto[sqs]>=5.1,<6",
   "pytest>=8,<10",
   "pytest-cov>=6,<8",
   "ruff>=0.14,<1",
