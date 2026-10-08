@@ -28,7 +28,6 @@ class Dependencies:
             wait_time=self.config.sqs_wait_seconds,
             logger=self.logger,
             visibility_timeout=self.config.sqs_visibility_seconds,
-            retry_wait_seconds=self.config.retry_seconds,
         )
         self.sentence_similarity_handler = SentenceSimilarityHandler(
             self.config, self.session_factory, self.opensearch_client, self.aws_sqs, self.logger

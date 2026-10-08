@@ -8,7 +8,8 @@ from moto import mock_aws
 from similarity_completed.opensearch import main
 from similarity_completed.opensearch.handlers.sentence_similarity_handler import SentenceSimilarityHandler
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
-from tests.opensearch.fakes import LoggerFake, SessionSequence, opensearch_mock, session_mock
+from ta_utils.logger.CustomLogger import CustomLogger
+from tests.opensearch.fakes import SessionSequence, opensearch_mock, session_mock
 
 
 class StopApplication(Exception):
@@ -30,10 +31,10 @@ class OneMessageAwsSqs(AwsSQS):
 
 
 class Dependencies:
-    def __init__(self, queue, handler):
+    def __init__(self, queue, handler, custom_logger):
         self.aws_sqs = queue
         self.sentence_similarity_handler = handler
-        self.logger = LoggerFake()
+        self.logger = custom_logger
         self.closed = False
 
     def close(self):
@@ -49,15 +50,14 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
     )["QueueUrl"]
     sqs_client.send_message(QueueUrl=source_queue_url, MessageBody=json.dumps({"tsp_id": 10}))
 
+    custom_logger = CustomLogger("sentence_similarity_unit_test")
     queue = OneMessageAwsSqs(
         queue_url=source_queue_url,
         aws_region="us-east-1",
         max_number_of_messages=1,
         wait_time=0,
-        logger=LoggerFake(),
+        logger=custom_logger,
         visibility_timeout=0,
-        retry_wait_seconds=0,
-        sqs_client=sqs_client,
     )
     source_update = session_mock()
     target_update = session_mock()
@@ -74,8 +74,8 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
     )
     opensearch, _ = opensearch_mock(sentence_row.sentence_key)
     config = replace(service_config, receive_sqs_endpoint=source_queue_url, sent_sqs_endpoint=next_queue_url)
-    handler = SentenceSimilarityHandler(config, sessions, opensearch, queue, LoggerFake())
-    dependencies = Dependencies(queue, handler)
+    handler = SentenceSimilarityHandler(config, sessions, opensearch, queue, custom_logger)
+    dependencies = Dependencies(queue, handler, custom_logger)
 
     with pytest.raises(StopApplication):
         main.run_opensearch_flow(dependencies=dependencies)

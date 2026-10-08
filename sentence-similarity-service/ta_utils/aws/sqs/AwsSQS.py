@@ -18,18 +18,15 @@ class AwsSQS:
         wait_time: int = 20,
         logger=None,
         visibility_timeout: int = 7_200,
-        retry_wait_seconds: int = 5,
-        sqs_client=None,
     ) -> None:
         """Create the SQS wrapper shared by real-time and backfill pods."""
 
         self._logger = logger
-        self._sqs = sqs_client or boto3.client("sqs", region_name=aws_region, endpoint_url=aws_endpoint_url)
+        self._sqs = boto3.client("sqs", region_name=aws_region, endpoint_url=aws_endpoint_url)
         self._queue_url = queue_url
         self._max_number_of_messages = max_number_of_messages
         self._wait_time = wait_time
         self._visibility_timeout = visibility_timeout
-        self._retry_wait_seconds = retry_wait_seconds
 
     def receive_messages(self) -> list[RawSqsMessage]:
         """Receive one message and return an empty list after a temporary error."""
@@ -45,7 +42,6 @@ class AwsSQS:
             )
         except (BotoCoreError, ClientError) as error:
             self._logger.error(f"Failed to receive an SQS message: {str(error)[:500]}")
-            time.sleep(self._retry_wait_seconds)
             return []
         return response.get("Messages", [])
 
