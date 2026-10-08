@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 import pytest
+from botocore.exceptions import NoCredentialsError
 
 from similarity_completed.opensearch.config import Config, _aws_hostname
 from similarity_completed.opensearch.open_search_client import OpenSearchClient
@@ -137,5 +138,5 @@ def test_opensearch_client_requires_credentials(monkeypatch, service_config):
     monkeypatch.setattr(
         "similarity_completed.opensearch.open_search_client.boto3.Session", lambda **values: MissingCredentialsSession()
     )
-    with pytest.raises(RuntimeError):
+    with pytest.raises(NoCredentialsError):
         OpenSearchClient(service_config).create_client()

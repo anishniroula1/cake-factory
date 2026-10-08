@@ -83,7 +83,15 @@ def _encoded_vector(values):
 class OpenSearchResponseRouter:
     """Return OpenSearch-shaped JSON while the real stores build each query."""
 
-    def __init__(self, source_key, *, saved_classification=None, tracer_result=None, missing_catalog_keys=None):
+    def __init__(
+        self,
+        source_key,
+        *,
+        saved_classification=None,
+        tracer_result=None,
+        missing_catalog_keys=None,
+        occurrence_counts=None,
+    ):
         self.source_key = source_key
         self.saved_classification = saved_classification or {
             "is_non_matcher": False,
@@ -94,6 +102,13 @@ class OpenSearchResponseRouter:
         self.missing_catalog_keys = set(missing_catalog_keys or [])
         self.saved_classifications = []
         self.semantic_search_count = 0
+        self.occurrence_counts = list(occurrence_counts or [1])
+
+    def count(self, **values):
+        """Return each configured occurrence-readiness count in order."""
+
+        count = self.occurrence_counts.pop(0) if len(self.occurrence_counts) > 1 else self.occurrence_counts[0]
+        return {"count": count}
 
     def search(self, **values):
         """Route a real store request to its matching unit-test response."""
@@ -181,7 +196,9 @@ class OpenSearchResponseRouter:
         return {"hits": {"hits": hits}}
 
 
-def opensearch_mock(source_key, *, saved_classification=None, tracer_result=None, missing_catalog_keys=None):
+def opensearch_mock(
+    source_key, *, saved_classification=None, tracer_result=None, missing_catalog_keys=None, occurrence_counts=None
+):
     """Mock only the OpenSearch client; production stores still run."""
 
     router = OpenSearchResponseRouter(
@@ -189,8 +206,10 @@ def opensearch_mock(source_key, *, saved_classification=None, tracer_result=None
         saved_classification=saved_classification,
         tracer_result=tracer_result,
         missing_catalog_keys=missing_catalog_keys,
+        occurrence_counts=occurrence_counts,
     )
     client = create_autospec(OpenSearch, instance=True)
+    client.count.side_effect = router.count
     client.search.side_effect = router.search
     client.update.side_effect = router.update
     return client, router

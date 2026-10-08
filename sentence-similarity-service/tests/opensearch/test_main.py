@@ -80,6 +80,9 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
     with pytest.raises(StopApplication):
         main.run_opensearch_flow(dependencies=dependencies)
 
+    readiness_query = opensearch.count.call_args.kwargs
+    assert readiness_query["index"] == "occurrence"
+    assert readiness_query["body"] == {"query": {"term": {"tspId": 10}}}
     assert "Messages" not in sqs_client.receive_message(QueueUrl=source_queue_url, WaitTimeSeconds=0)
     next_message = sqs_client.receive_message(QueueUrl=next_queue_url, WaitTimeSeconds=0)["Messages"][0]
     assert json.loads(next_message["Body"]) == {"tsp_id": 10}

@@ -51,5 +51,4 @@ class Dependencies:
             max_overflow=self.config.database_max_overflow,
             dynamic_credentials_file=(self.config.dynamic_credential_file or None),
             application_name="sentence_similarity",
-            logger=self.logger,
         )

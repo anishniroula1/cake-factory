@@ -1,6 +1,6 @@
 import pytest
 
-from similarity_completed.opensearch.errors import PermanentDataError
+from similarity_completed.opensearch.handlers import sentence_similarity_handler as handler_module
 from similarity_completed.opensearch.handlers.sentence_similarity_handler import SentenceSimilarityHandler
 from tests.opensearch.fakes import LoggerFake, SessionSequence, SqsFake, opensearch_mock, session_mock
 
@@ -72,27 +72,40 @@ def test_saved_non_matcher_is_rechecked(service_config, sentence_row):
     assert len(router.saved_classifications) == 1
 
 
-def test_all_missing_catalog_keys_are_reported(service_config, sentence_row):
+def test_all_missing_catalog_keys_stop_the_current_message(service_config, sentence_row):
     opensearch, _ = opensearch_mock(sentence_row.sentence_key, missing_catalog_keys={"KEY-B", "KEY-C"})
-    handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), LoggerFake())
+    logger = LoggerFake()
+    handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), logger)
     source = source_record(sentence_row.sentence_key)
 
-    with pytest.raises(PermanentDataError) as error:
-        handler.tracer_filtering_service.find_eligible_match_targets(
-            sentence_row, "catalog-asylee", {"KEY-B": 0.1, "KEY-C": 0.2}, source
-        )
-
-    assert str(error.value) == "catalog vectors are missing for sentence keys: KEY-B, KEY-C"
-
-
-def test_empty_document_is_rejected(service_config):
-    opensearch, _ = opensearch_mock("a" * 64)
-    handler = SentenceSimilarityHandler(
-        service_config, SessionSequence([session_mock(scalar_value=0)]), opensearch, SqsFake(), LoggerFake()
+    result = handler.tracer_filtering_service.find_eligible_match_targets(
+        sentence_row, "catalog-asylee", {"KEY-B": 0.1, "KEY-C": 0.2}, source
     )
 
-    with pytest.raises(PermanentDataError):
-        handler.process(10)
+    assert result is None
+    assert any("KEY-B, KEY-C" in message for level, message in logger.messages if level == "error")
+
+
+def test_empty_document_stops_without_forwarding(service_config):
+    opensearch, _ = opensearch_mock("a" * 64)
+    sqs = SqsFake()
+    handler = SentenceSimilarityHandler(
+        service_config, SessionSequence([session_mock(scalar_value=0)]), opensearch, sqs, LoggerFake()
+    )
+
+    assert handler.process(10) is None
+    assert sqs.sent == []
+
+
+def test_occurrence_readiness_waits_once_and_then_continues(monkeypatch, service_config):
+    waits = []
+    opensearch, _ = opensearch_mock("a" * 64, occurrence_counts=[0, 1])
+    handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), LoggerFake())
+    monkeypatch.setattr(handler_module.time, "sleep", waits.append)
+
+    assert handler._wait_for_searchable_occurrences(10) is True
+    assert waits == [30]
+    assert opensearch.count.call_count == 2
 
 
 def test_sentence_count_uses_only_sentences_vector_tsp_id(service_config):

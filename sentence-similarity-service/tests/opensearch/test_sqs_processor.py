@@ -1,3 +1,4 @@
+from similarity_completed.opensearch.errors import OperationFailedError
 from similarity_completed.opensearch.sqs_processor import SqsProcessor
 from tests.opensearch.fakes import LoggerFake, SqsFake
 
@@ -9,8 +10,9 @@ class Handler:
 
     def process(self, tsp_id):
         if self.fails:
-            raise RuntimeError("temporary failure")
+            raise OperationFailedError("temporary failure")
         self.processed.append(tsp_id)
+        return {"tsp_id": tsp_id}
 
 
 class Dependencies:
@@ -39,4 +41,4 @@ def test_delete_failure_is_logged_after_success():
     processor._process_message({"tsp_id": 10, "MessageId": "message", "ReceiptHandle": "receipt"})
 
     assert dependencies.sentence_similarity_handler.processed == [10]
-    assert any(level == "warning" for level, message in dependencies.logger.messages)
+    assert any(level == "error" for level, message in dependencies.logger.messages)

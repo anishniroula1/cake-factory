@@ -1,4 +1,5 @@
 import boto3
+from botocore.exceptions import NoCredentialsError
 from opensearchpy import AWSV4SignerAuth, OpenSearch, RequestsHttpConnection
 
 from similarity_completed.opensearch.config import Config
@@ -16,7 +17,7 @@ class OpenSearchClient:
         session = self._session()
         credentials = session.get_credentials()
         if credentials is None:
-            raise RuntimeError("AWS credentials are required")
+            raise NoCredentialsError()
         auth = AWSV4SignerAuth(credentials, self.config.aws_region, self.config.opensearch_service)
         return OpenSearch(
             hosts=[{"host": self.config.opensearch_host, "port": self.config.opensearch_port}],

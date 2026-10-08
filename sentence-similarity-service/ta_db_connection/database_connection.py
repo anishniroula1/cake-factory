@@ -13,12 +13,10 @@ class DatabaseConnection:
         max_overflow: int = 10,
         dynamic_credentials_file: str | None = None,
         application_name: str = "sentence_similarity",
-        logger=None,
     ) -> None:
         """Create the PostgreSQL connection pool used by sentence workers."""
 
         self.dynamic_credentials_file = dynamic_credentials_file
-        self.logger = logger
         connection_string = URL.create(
             "postgresql+psycopg",
             username=pg_db_user,
@@ -36,6 +34,3 @@ class DatabaseConnection:
             future=True,
             connect_args={"application_name": application_name},
         )
-
-        if logger:
-            logger.info("Created the Sentence Similarity PostgreSQL pool.")

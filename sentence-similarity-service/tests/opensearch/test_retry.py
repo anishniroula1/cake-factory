@@ -1,6 +1,6 @@
 import pytest
 
-from similarity_completed.opensearch.errors import PermanentDataError
+from similarity_completed.opensearch.errors import OperationFailedError, PermanentDataError
 from similarity_completed.opensearch.retry import retry_operation
 from tests.opensearch.fakes import LoggerFake
 
@@ -11,7 +11,7 @@ def test_retry_returns_after_temporary_failure(monkeypatch):
     def operation(value):
         attempts.append(value)
         if len(attempts) == 1:
-            raise RuntimeError("temporary")
+            raise TimeoutError("temporary")
         return value
 
     monkeypatch.setattr("similarity_completed.opensearch.retry.time.sleep", lambda value: None)
@@ -26,13 +26,13 @@ def test_retry_stops_at_limit_and_rejects_bad_limit(monkeypatch):
     logger = LoggerFake()
 
     def operation():
-        raise RuntimeError("unavailable")
+        raise TimeoutError("unavailable")
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(OperationFailedError):
         retry_operation("work", operation, wait_seconds=5, max_attempts=2, custom_logger=logger)
     with pytest.raises(ValueError):
-        retry_operation("work", operation, wait_seconds=5, max_attempts=0)
-    assert any(level == "error" for level, message in logger.messages)
+        retry_operation("work", operation, wait_seconds=5, max_attempts=0, custom_logger=logger)
+    assert any(level == "warning" for level, message in logger.messages)
 
 
 def test_permanent_data_error_is_not_retried():

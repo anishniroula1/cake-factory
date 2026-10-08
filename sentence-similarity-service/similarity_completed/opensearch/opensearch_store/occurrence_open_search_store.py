@@ -9,6 +9,16 @@ class OccurrenceOpenSearchStore:
         self.config = config
         self.client = client
 
+    def has_occurrences_for_tsp_id(self, tsp_id: int | str) -> bool:
+        """Return whether Doc2Vec occurrence rows are searchable for a document.
+
+        Input: tsp_id=100
+        Output: True when at least one occurrence is visible in OpenSearch.
+        """
+
+        response = self.client.count(index=self.config.occurrence_alias, body={"query": {"term": {"tspId": tsp_id}}})
+        return int(response.get("count", 0)) > 0
+
     def search_matching_occurrences_outside_application(
         self, key_distances: dict[str, float], analysis_group: str, source_application_id: int
     ) -> list[TargetOccurrence]:
