@@ -169,16 +169,11 @@ class SeedService:
     def seed(
         self,
         path: Path,
-        reset: bool,
     ) -> dict:
         """Index the CSV in order without running sentence matching."""
 
         if not path.is_file():
             raise ValueError(f"CSV file does not exist: {path}")
-        if reset:
-            self.opensearch.recreate_indices()
-        else:
-            self.opensearch.ensure_indices()
 
         records_read = 0
         occurrences_indexed = 0
@@ -229,7 +224,9 @@ class SeedService:
                 )
                 pending_batches.append(batch_future)
                 for catalog_source in new_catalog_sources:
-                    pending_catalog_futures[catalog_source["sentenceKey"]] = batch_future
+                    pending_catalog_futures[catalog_source["sentenceKey"]] = (
+                        batch_future
+                    )
 
                 if len(pending_batches) == self.config.seed_workers:
                     result = self._complete_wave(pending_batches)
@@ -256,7 +253,6 @@ class SeedService:
             "completedWaves": completed_waves,
             "seedBatchSize": self.config.seed_batch_size,
             "seedWorkers": self.config.seed_workers,
-            "reset": reset,
             "matchProcessing": "searchTime",
         }
 

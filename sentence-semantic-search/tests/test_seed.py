@@ -61,12 +61,6 @@ class FakeParallelOpenSearchStore:
         self.max_active_catalog_calls = 0
         self._lock = Lock()
 
-    def recreate_indices(self):
-        return None
-
-    def ensure_indices(self):
-        return None
-
     def existing_catalog_keys(self, keys):
         return set(keys) & self.catalog_keys
 
@@ -121,12 +115,11 @@ def test_seed_runs_bounded_catalog_workers_without_matching(tmp_path):
         opensearch,
     )
 
-    result = service.seed(csv_file, reset=True)
+    result = service.seed(csv_file)
 
     assert sorted(opensearch.occurrence_ids) == list(range(1, 7))
     assert all(
-        name.startswith("sentence-seed")
-        for name in opensearch.occurrence_thread_names
+        name.startswith("sentence-seed") for name in opensearch.occurrence_thread_names
     )
     assert opensearch.max_active_catalog_calls == workers
     assert opensearch.refresh_calls == 1
@@ -155,7 +148,7 @@ def test_repeated_sentence_waits_for_the_worker_creating_its_vector(tmp_path):
         opensearch,
     )
 
-    result = service.seed(csv_file, reset=True)
+    result = service.seed(csv_file)
 
     assert opensearch.occurrence_ids == [1, 2]
     assert result["catalogDocumentsIndexed"] == 1

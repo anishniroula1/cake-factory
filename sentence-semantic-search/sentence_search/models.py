@@ -6,6 +6,8 @@ from sentence_search.text import sentence_key
 
 OPENSEARCH_LONG_MIN = -(2**63)
 OPENSEARCH_LONG_MAX = (2**63) - 1
+OPENSEARCH_INTEGER_MIN = -(2**31)
+OPENSEARCH_INTEGER_MAX = (2**31) - 1
 
 
 def utc_now() -> datetime:
@@ -52,4 +54,28 @@ class SentenceOccurrence(BaseModel):
         current_time = utc_now()
         self.createdAt = self.createdAt or current_time
         self.updatedAt = self.updatedAt or current_time
+        return self
+
+
+class TracerSentence(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    tracerId: int
+    sentenceContent: str
+    analysisGroup: str
+    isNonMatcher: bool
+    isFormLanguage: bool
+    createdAt: datetime | None = None
+    updatedAt: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_record(self):
+        """Validate the tracer values stored in the strict OpenSearch mapping."""
+
+        if not OPENSEARCH_INTEGER_MIN <= self.tracerId <= OPENSEARCH_INTEGER_MAX:
+            raise ValueError("tracerId must fit in an OpenSearch signed 32-bit integer")
+        if not self.sentenceContent:
+            raise ValueError("sentenceContent cannot be empty")
+        if not self.analysisGroup:
+            raise ValueError("analysisGroup cannot be empty")
         return self

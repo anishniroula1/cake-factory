@@ -11,19 +11,16 @@ from sentence_search.summary_routes import router as summary_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Prepare OpenSearch before accepting requests."""
+    """Confirm OpenSearch is available before accepting requests."""
 
     opensearch_store.wait_until_ready()
-    opensearch_store.ensure_indices()
     yield
 
 
 app = FastAPI(
     title="Semantic Sentence Matching",
     version="1.0.0",
-    description=(
-        "Sentence-level semantic matching with Amazon Titan and OpenSearch."
-    ),
+    description=("Sentence-level semantic matching with Amazon Titan and OpenSearch."),
     lifespan=lifespan,
 )
 # Match pages contain repeated field names and sentence text. Compressing only

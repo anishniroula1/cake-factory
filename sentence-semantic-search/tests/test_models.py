@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from sentence_search.main import app
-from sentence_search.models import SentenceOccurrence
+from sentence_search.models import SentenceOccurrence, TracerSentence
 from sentence_search.text import sentence_key
 
 
@@ -58,14 +58,43 @@ def test_wrong_supplied_key_is_rejected():
         SentenceOccurrence.model_validate(values)
 
 
-def test_seed_swagger_uses_query_inputs_instead_of_a_json_body():
+def test_tracer_sentence_uses_numeric_id_and_has_no_embedding_input():
+    tracer = TracerSentence.model_validate(
+        {
+            "tracerId": "42",
+            "sentenceContent": "A known tracer sentence.",
+            "analysisGroup": "Asylee",
+            "isNonMatcher": False,
+            "isFormLanguage": False,
+        }
+    )
+
+    assert tracer.tracerId == 42
+    assert "sentenceContentVector" not in tracer.model_dump()
+
+
+def test_seed_swagger_uses_csv_path_without_index_reset():
     operation = app.openapi()["paths"]["/admin/seed"]["post"]
     parameters = {item["name"]: item for item in operation["parameters"]}
 
     assert "requestBody" not in operation
-    assert parameters["reset"]["in"] == "query"
-    assert parameters["reset"]["required"] is True
+    assert set(parameters) == {"csvPath"}
     assert parameters["csvPath"]["schema"]["default"] == "data/seed.csv"
+
+
+def test_tracer_seed_swagger_accepts_a_csv_file():
+    operation = app.openapi()["paths"]["/admin/tracer-sentences/seed"]["post"]
+    content = operation["requestBody"]["content"]
+
+    assert "multipart/form-data" in content
+    assert operation["requestBody"]["required"] is True
+
+
+def test_api_does_not_create_opensearch_indexes():
+    paths = app.openapi()["paths"]
+
+    assert "/admin/init" not in paths
+    assert "/admin/storage" in paths
 
 
 def test_sentence_key_search_swagger_has_no_public_pagination():

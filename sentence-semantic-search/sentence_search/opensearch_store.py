@@ -5,7 +5,7 @@ import struct
 import threading
 import time
 
-from opensearchpy import NotFoundError, RequestError, TransportError, helpers
+from opensearchpy import NotFoundError, TransportError, helpers
 from opensearchpy.helpers.errors import BulkIndexError
 
 from sentence_search.config import Config
@@ -31,69 +31,14 @@ RETRYABLE_STATUSES = {408, 424, 429, 500, 502, 503, 504}
 logger = logging.getLogger(__name__)
 
 
-def occurrence_index_definition(config: Config) -> dict:
-    """Make the mapping for every sentence occurrence."""
-
-    return {
-        "settings": {
-            "number_of_shards": config.index_shards,
-            "number_of_replicas": config.index_replicas,
-        },
-        "mappings": {
-            "dynamic": "strict",
-            "properties": {
-                "applicationId": {"type": "keyword"},
-                "tspId": {"type": "keyword"},
-                "sectionName": {"type": "keyword"},
-                "globalId": {"type": "long"},
-                "sentIdLocal": {"type": "long"},
-                "sentenceContent": {"type": "text"},
-                "isTracer": {"type": "boolean"},
-                "isFormLanguage": {"type": "boolean"},
-                "sentenceKey": {"type": "keyword"},
-                "sourceType": {"type": "keyword"},
-                "createdAt": {"type": "date"},
-                "updatedAt": {"type": "date"},
-                "analysisGroup": {"type": "keyword"},
-            },
-        },
-    }
-
-
-def catalog_index_definition(config: Config) -> dict:
-    """Make the Titan-backed catalog using the trained Faiss IVF-SQ16 model."""
-
-    return {
-        "settings": {
-            "index.knn": True,
-            "index.default_pipeline": config.ingest_pipeline,
-            "number_of_shards": config.index_shards,
-            "number_of_replicas": config.index_replicas,
-        },
-        "mappings": {
-            "dynamic": "strict",
-            "properties": {
-                "sentenceContent": {"type": "text"},
-                "sentenceContentVector": {
-                    "type": "knn_vector",
-                    "model_id": config.ivf_model_id,
-                },
-                "sentenceKey": {"type": "keyword"},
-                "createdAt": {"type": "date"},
-                "updatedAt": {"type": "date"},
-            },
-        },
-    }
-
-
 class OpenSearchStore:
     def __init__(self, config: Config, client=None):
         """Create the store with an injected client or an AWS client."""
 
         self.config = config
         self.client = client or OpenSearchClient(config).create_client()
-        self._catalog_backoff_lock = threading.Lock()
-        self._catalog_cooldown_until = 0.0
+        self._embedding_backoff_lock = threading.Lock()
+        self._embedding_cooldown_until = 0.0
 
     def wait_until_ready(self, attempts: int = 60):
         """Wait for OpenSearch during application startup."""
@@ -104,54 +49,14 @@ class OpenSearchStore:
             time.sleep(2)
         raise RuntimeError("OpenSearch did not become ready")
 
-    def ensure_indices(self):
-        """Create both physical indexes and aliases when missing."""
-
-        self._ensure_index(
-            self.config.occurrence_index,
-            self.config.occurrence_alias,
-            occurrence_index_definition(self.config),
-        )
-        self._ensure_index(
-            self.config.catalog_index,
-            self.config.catalog_alias,
-            catalog_index_definition(self.config),
-        )
-
-    def _ensure_index(self, index: str, alias: str, definition: dict):
-        """Create one physical index and point its write alias at it."""
-
-        if not self.client.indices.exists(index=index):
-            try:
-                self.client.indices.create(index=index, body=definition)
-            except RequestError:
-                # The API can start while another process creates storage. Continue when
-                # the other process successfully created this same index.
-                if not self.client.indices.exists(index=index):
-                    raise
-        if not self.client.indices.exists_alias(name=alias):
-            self.client.indices.put_alias(
-                index=index,
-                name=alias,
-                body={"is_write_index": True},
-            )
-
-    def recreate_indices(self):
-        """Delete and recreate both OpenSearch indexes."""
-
-        self.delete_indices()
-        self.ensure_indices()
-
     def delete_indices(self) -> dict:
-        """Delete configured indexes and any indexes behind project aliases."""
+        """Delete the physical indexes currently connected to project aliases."""
 
-        indexes = {
-            self.config.occurrence_index,
-            self.config.catalog_index,
-        }
+        indexes = set()
         for alias in (
             self.config.occurrence_alias,
             self.config.catalog_alias,
+            self.config.tracer_alias,
         ):
             if self.client.indices.exists_alias(name=alias):
                 indexes.update(self.client.indices.get_alias(name=alias))
@@ -197,7 +102,35 @@ class OpenSearchStore:
         self._bulk_with_retry(
             actions,
             "catalog",
-            shared_catalog_cooldown=True,
+            shared_embedding_cooldown=True,
+        )
+        return len(actions)
+
+    def bulk_index_tracer_sentences(self, documents: list):
+        """Index tracer rows and let the alias ingest pipeline create vectors.
+
+        Input: validated tracer rows without an embedding field.
+        Output: number of tracer documents sent to OpenSearch.
+        """
+
+        if not documents:
+            return 0
+        actions = []
+        for document in documents:
+            actions.append(
+                {
+                    "_op_type": "index",
+                    "_index": self.config.tracer_alias,
+                    "_id": str(document["tracerId"]),
+                    "_source": document,
+                }
+            )
+        # Tracer writes call the same Lasso/Titan path as catalog writes, so
+        # both flows share one cooldown when that external service is busy.
+        self._bulk_with_retry(
+            actions,
+            "tracer sentence",
+            shared_embedding_cooldown=True,
         )
         return len(actions)
 
@@ -223,7 +156,7 @@ class OpenSearchStore:
         self,
         actions: list,
         label: str,
-        shared_catalog_cooldown: bool = False,
+        shared_embedding_cooldown: bool = False,
     ):
         """Retry temporary bulk failures inside the worker handling the batch."""
 
@@ -232,8 +165,8 @@ class OpenSearchStore:
         pending_actions = actions
         last_error = None
         for attempt in range(1, BULK_RETRY_ATTEMPTS + 1):
-            if shared_catalog_cooldown:
-                self._wait_for_catalog_cooldown()
+            if shared_embedding_cooldown:
+                self._wait_for_embedding_cooldown()
             try:
                 helpers.bulk(
                     self.client,
@@ -265,10 +198,10 @@ class OpenSearchStore:
                     len(pending_actions),
                     BULK_RETRY_SECONDS,
                 )
-                if shared_catalog_cooldown:
-                    # One Lasso or Titan failure pauses new catalog attempts
+                if shared_embedding_cooldown:
+                    # One Lasso or Titan failure pauses new embedding attempts
                     # from every worker. Requests already in flight continue.
-                    self._start_catalog_cooldown()
+                    self._start_embedding_cooldown()
                 else:
                     # Occurrence indexing does not call Lasso or Titan, so
                     # only its own worker needs to pause before retrying.
@@ -279,21 +212,21 @@ class OpenSearchStore:
             f"{BULK_RETRY_ATTEMPTS} attempts: {last_error}"
         ) from last_error
 
-    def _start_catalog_cooldown(self):
-        """Set one shared retry time for all catalog workers."""
+    def _start_embedding_cooldown(self):
+        """Set one shared retry time for all Titan embedding workers."""
 
-        with self._catalog_backoff_lock:
-            self._catalog_cooldown_until = max(
-                self._catalog_cooldown_until,
+        with self._embedding_backoff_lock:
+            self._embedding_cooldown_until = max(
+                self._embedding_cooldown_until,
                 time.monotonic() + BULK_RETRY_SECONDS,
             )
 
-    def _wait_for_catalog_cooldown(self):
-        """Wait until catalog workers may call Lasso and Titan again."""
+    def _wait_for_embedding_cooldown(self):
+        """Wait until embedding workers may call Lasso and Titan again."""
 
         while True:
-            with self._catalog_backoff_lock:
-                remaining = self._catalog_cooldown_until - time.monotonic()
+            with self._embedding_backoff_lock:
+                remaining = self._embedding_cooldown_until - time.monotonic()
             if remaining <= 0:
                 return
             time.sleep(remaining)
@@ -342,6 +275,11 @@ class OpenSearchStore:
         self.client.indices.refresh(
             index=(f"{self.config.catalog_alias},{self.config.occurrence_alias}")
         )
+
+    def refresh_tracer_sentences(self):
+        """Make newly uploaded tracer rows searchable."""
+
+        self.client.indices.refresh(index=self.config.tracer_alias)
 
     def catalog_vector(self, key: str) -> list:
         """Read one saved vector using fast binary doc values."""
@@ -690,11 +628,7 @@ class OpenSearchStore:
             composite = {
                 "size": APPLICATION_BUCKET_PAGE_SIZE,
                 "sources": [
-                    {
-                        "applicationId": {
-                            "terms": {"field": "applicationId"}
-                        }
-                    },
+                    {"applicationId": {"terms": {"field": "applicationId"}}},
                     {"sentenceKey": {"terms": {"field": "sentenceKey"}}},
                 ],
             }
@@ -720,11 +654,7 @@ class OpenSearchStore:
                                 {"term": {"isFormLanguage": False}},
                             ],
                             "must_not": [
-                                {
-                                    "term": {
-                                        "applicationId": excluded_application_id
-                                    }
-                                }
+                                {"term": {"applicationId": excluded_application_id}}
                             ],
                         }
                     },
@@ -916,6 +846,7 @@ class OpenSearchStore:
         return {
             "occurrenceDocuments": self._count(self.config.occurrence_alias),
             "catalogDocuments": self._count(self.config.catalog_alias),
+            "tracerDocuments": self._count(self.config.tracer_alias),
             "clusterHealth": self.client.cluster.health()["status"],
         }
 
@@ -931,7 +862,11 @@ class OpenSearchStore:
         """Return unfiltered documents and include catalog vectors."""
 
         body = {"size": size, "query": {"match_all": {}}}
-        if index == self.config.catalog_alias:
+        vector_indexes = {
+            self.config.catalog_alias,
+            self.config.tracer_alias,
+        }
+        if index in vector_indexes:
             body["_source"] = {"excludes": [VECTOR_FIELD]}
             body["docvalue_fields"] = [
                 {
@@ -943,7 +878,7 @@ class OpenSearchStore:
         documents = []
         for hit in response["hits"]["hits"]:
             document = {"id": hit["_id"], **hit["_source"]}
-            if index == self.config.catalog_alias:
+            if index in vector_indexes:
                 encoded_vector = hit.get("fields", {}).get(VECTOR_FIELD)
                 if encoded_vector:
                     document[VECTOR_FIELD] = self._decode_binary_vector(

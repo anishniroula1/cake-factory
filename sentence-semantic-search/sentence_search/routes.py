@@ -2,7 +2,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from opensearchpy.exceptions import OpenSearchException
 
 from sentence_search.components import (
@@ -10,6 +10,7 @@ from sentence_search.components import (
     opensearch_store,
     seed_service,
     sentence_service,
+    tracer_seed_service,
 )
 from sentence_search.config import config
 from sentence_search.models import SentenceOccurrence
@@ -21,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 class IndexSelection(StrEnum):
     occurrences = config.occurrence_alias
     semantic_catalog = config.catalog_alias
+    tracer_catalog = config.tracer_alias
 
 
 @router.get("/health", tags=["System"])
@@ -34,21 +36,17 @@ def health():
     return {
         "status": "ok" if opensearch_ready else "down",
         "opensearch": (f"{config.opensearch_host}:{config.opensearch_port}"),
-        "occurrenceIndex": config.occurrence_index,
         "occurrenceAlias": config.occurrence_alias,
-        "catalogIndex": config.catalog_index,
         "catalogAlias": config.catalog_alias,
-        "semanticModelId": config.semantic_model_id,
-        "ivfModelId": config.ivf_model_id,
+        "tracerAlias": config.tracer_alias,
         "ivfNprobes": config.ivf_nprobes,
-        "ingestPipeline": config.ingest_pipeline,
         "modelInvoked": False,
     }
 
 
 @router.get("/stats", tags=["System"])
 def stats():
-    """Show the occurrence and catalog record counts."""
+    """Show occurrence, sentence catalog, and tracer catalog counts."""
 
     try:
         return opensearch_store.stats()
@@ -60,11 +58,11 @@ def stats():
 def index_documents(
     index: Annotated[
         IndexSelection,
-        Query(description="Choose the occurrence or catalog alias."),
+        Query(description="Choose an occurrence, sentence catalog, or tracer alias."),
     ],
     count: Annotated[int, Query(ge=1, le=100)] = 10,
 ):
-    """Preview unfiltered documents, including catalog embeddings."""
+    """Preview unfiltered documents, including either catalog embedding."""
 
     try:
         return {
@@ -75,32 +73,14 @@ def index_documents(
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
-@router.post("/admin/init", tags=["Admin"])
-def initialize_storage():
-    """Create the occurrence index and separate IVF-PQ catalog."""
-
-    try:
-        opensearch_store.ensure_indices()
-    except (OpenSearchException, RuntimeError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    return {
-        "message": "Sentence semantic-search storage is ready",
-        "occurrenceIndex": config.occurrence_index,
-        "catalogIndex": config.catalog_index,
-        "catalogAlias": config.catalog_alias,
-        "ivfModelId": config.ivf_model_id,
-        "ivfNprobes": config.ivf_nprobes,
-    }
-
-
 @router.delete("/admin/storage", tags=["Admin"])
 def delete_storage(
     confirm: Annotated[
         bool,
-        Query(description="Must be true to delete all project data."),
+        Query(description="Must be true to delete all project indexes."),
     ] = False,
 ):
-    """Delete both OpenSearch indexes and their aliases."""
+    """Delete indexes currently connected to the three configured aliases."""
 
     if not confirm:
         raise HTTPException(
@@ -119,15 +99,6 @@ def delete_storage(
 
 @router.post("/admin/seed", tags=["Admin"])
 def seed(
-    reset: Annotated[
-        bool,
-        Query(
-            description=(
-                "true recreates all storage; false keeps existing data and "
-                "only creates missing catalog vectors."
-            ),
-        ),
-    ],
     csvPath: Annotated[
         str,
         Query(
@@ -144,12 +115,38 @@ def seed(
     try:
         return seed_service.seed(
             path,
-            reset,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except (OpenSearchException, RuntimeError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@router.post("/admin/tracer-sentences/seed", tags=["Admin"])
+async def seed_tracer_sentences(
+    csvFile: Annotated[
+        UploadFile,
+        File(
+            description=(
+                "UTF-8 CSV containing tracer_id, sentence_content, "
+                "analysis_group, is_non_matcher, and is_form_language."
+            )
+        ),
+    ],
+):
+    """Upload tracer sentences and let OpenSearch create Titan embeddings."""
+
+    try:
+        result = tracer_seed_service.seed(await csvFile.read())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except (OpenSearchException, RuntimeError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {
+        "fileName": csvFile.filename,
+        **result,
+    }
+
 
 @router.post("/sentences", tags=["Sentences"])
 def add_sentence(sentence: SentenceOccurrence):

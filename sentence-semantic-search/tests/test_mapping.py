@@ -9,8 +9,6 @@ from sentence_search.config import config
 from sentence_search.opensearch_store import (
     BULK_RETRY_SECONDS,
     OpenSearchStore,
-    catalog_index_definition,
-    occurrence_index_definition,
 )
 
 
@@ -123,12 +121,11 @@ class AliasIndexClient:
             return name in {
                 config.occurrence_alias,
                 config.catalog_alias,
+                config.tracer_alias,
             }
 
         def get_alias(self, name):
-            if name == config.occurrence_alias:
-                return {"sentence_occurrences-old-v1": {}}
-            return {"sentence_semantic_catalog-ivf-pq64-old-v1": {}}
+            return {f"physical-{name}": {}}
 
         def exists(self, index):
             return True
@@ -188,38 +185,6 @@ class CatalogVectorsWithoutDocumentIdClient:
                 ]
             }
         }
-
-
-def test_occurrence_mapping_has_requested_sentence_fields():
-    properties = occurrence_index_definition(config)["mappings"]["properties"]
-    assert set(properties) == {
-        "applicationId",
-        "tspId",
-        "sectionName",
-        "globalId",
-        "sentIdLocal",
-        "sentenceContent",
-        "isTracer",
-        "isFormLanguage",
-        "sentenceKey",
-        "sourceType",
-        "createdAt",
-        "updatedAt",
-        "analysisGroup",
-    }
-    assert properties["globalId"] == {"type": "long"}
-
-
-def test_catalog_mapping_uses_trained_ivf_model():
-    definition = catalog_index_definition(config)
-    vector = definition["mappings"]["properties"]["sentenceContentVector"]
-    assert vector == {
-        "type": "knn_vector",
-        "model_id": "test-ivf-model",
-    }
-    assert definition["settings"]["index.default_pipeline"] == (
-        "sentence_bedrock_embedding_pipeline"
-    )
 
 
 def test_catalog_radial_search_uses_configured_ivf_nprobes():
@@ -290,22 +255,21 @@ def test_source_sentence_eligibility_uses_all_matching_filters():
     ]
 
 
-def test_reset_deletes_configured_indexes_and_existing_alias_targets():
+def test_storage_delete_resolves_all_indexes_from_configured_aliases():
     client = AliasIndexClient()
     store = OpenSearchStore(config, client)
 
     result = store.delete_indices()
 
-    assert result["deletedIndexes"] == sorted(
+    expected = sorted(
         {
-            config.occurrence_index,
-            config.catalog_index,
-            "sentence_occurrences-old-v1",
-            "sentence_semantic_catalog-ivf-pq64-old-v1",
+            f"physical-{config.occurrence_alias}",
+            f"physical-{config.catalog_alias}",
+            f"physical-{config.tracer_alias}",
         }
     )
-    assert "sentence_semantic_catalog-ivf-sq16-v1" not in result["deletedIndexes"]
-    assert client.indices.deleted == result["deletedIndexes"]
+    assert result == {"deletedIndexes": expected}
+    assert client.indices.deleted == expected
 
 
 @pytest.mark.parametrize(
@@ -385,8 +349,8 @@ def test_catalog_retry_uses_the_shared_cooldown(monkeypatch):
         fail_second_document_once,
     )
     store = OpenSearchStore(config, EmptySearchClient())
-    monkeypatch.setattr(store, "_wait_for_catalog_cooldown", capture_cooldown_wait)
-    monkeypatch.setattr(store, "_start_catalog_cooldown", capture_cooldown_start)
+    monkeypatch.setattr(store, "_wait_for_embedding_cooldown", capture_cooldown_wait)
+    monkeypatch.setattr(store, "_start_embedding_cooldown", capture_cooldown_start)
 
     indexed = store.bulk_index_catalog(documents)
 
@@ -395,6 +359,41 @@ def test_catalog_retry_uses_the_shared_cooldown(monkeypatch):
     assert [action["_id"] for action in bulk_calls[1]] == ["key-2"]
     assert len(cooldown_starts) == 1
     assert len(cooldown_waits) == 2
+
+
+def test_tracer_bulk_uses_tracer_id_and_configured_alias(monkeypatch):
+    bulk_calls = []
+    documents = [
+        {
+            "tracerId": 91,
+            "sentenceContent": "This is tracer text.",
+            "analysisGroup": "Asylee",
+            "isNonMatcher": False,
+            "isFormLanguage": False,
+        }
+    ]
+
+    def capture_bulk(client, actions, chunk_size, raise_on_error):
+        bulk_calls.append(list(actions))
+
+    monkeypatch.setattr(
+        "sentence_search.opensearch_store.helpers.bulk",
+        capture_bulk,
+    )
+    store = OpenSearchStore(config, EmptySearchClient())
+
+    indexed = store.bulk_index_tracer_sentences(documents)
+
+    assert indexed == 1
+    assert bulk_calls[0] == [
+        {
+            "_op_type": "index",
+            "_index": config.tracer_alias,
+            "_id": "91",
+            "_source": documents[0],
+        }
+    ]
+    assert "sentenceContentVector" not in bulk_calls[0][0]["_source"]
 
 
 def test_occurrence_bulk_retries_only_its_failed_documents(monkeypatch):
@@ -529,9 +528,7 @@ def test_application_comparison_counts_only_eligible_other_applications():
     assert {"term": {"analysisGroup": "Asylee"}} in filters
     assert {"term": {"isTracer": False}} in filters
     assert {"term": {"isFormLanguage": False}} in filters
-    assert {"term": {"applicationId": "A1"}} in body["query"]["bool"][
-        "must_not"
-    ]
+    assert {"term": {"applicationId": "A1"}} in body["query"]["bool"]["must_not"]
     sources = body["aggs"]["matches"]["composite"]["sources"]
     assert sources == [
         {"applicationId": {"terms": {"field": "applicationId"}}},
@@ -557,9 +554,7 @@ def test_application_comparison_details_filter_selected_applications():
     assert {"term": {"analysisGroup": "Asylee"}} in filters
     assert {"term": {"isTracer": False}} in filters
     assert {"term": {"isFormLanguage": False}} in filters
-    assert {"term": {"applicationId": "A1"}} in body["query"]["bool"][
-        "must_not"
-    ]
+    assert {"term": {"applicationId": "A1"}} in body["query"]["bool"]["must_not"]
 
 
 def test_occurrence_bulk_uses_global_id_as_an_index_upsert(monkeypatch):

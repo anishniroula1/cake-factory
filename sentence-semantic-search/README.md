@@ -42,11 +42,12 @@ adding the database flow back.
 
 ## What is stored
 
-The project creates two OpenSearch indexes.
+The project writes to three OpenSearch aliases. The physical indexes, mappings,
+ingest pipelines, and aliases must already exist before this API starts. This
+application does not create or reset indexes.
 
 ### Sentence occurrences
 
-Index: sentence_occurrences-v1  
 Alias: sentence_occurrences
 
 This index stores every sentence occurrence. It contains the application,
@@ -71,10 +72,9 @@ Production design: Faiss IVF-SQ16 with 512-dimension Titan vectors and cosine
 similarity.
 
 This index stores one record for each unique sentenceKey. It contains the
-sentence text and its 512-dimension Titan vector. The physical index and alias
-come from OPENSEARCH_CATALOG_INDEX and OPENSEARCH_CATALOG_ALIAS. Production
-must point them at the approved SQ16 catalog, not the older PQ comparison
-catalog.
+sentence text and its 512-dimension Titan vector. The alias comes from
+OPENSEARCH_CATALOG_ALIAS. Production must point it at the approved SQ16
+catalog, not the older PQ comparison catalog.
 
 Titan creates the embedding. The trained IVF-SQ16 model does not create
 embeddings; it organizes existing embeddings into buckets and stores their
@@ -83,6 +83,15 @@ OPENSEARCH_IVF_NPROBES, so no fixed top-K limit is used.
 
 If the same sentence appears in many documents, its vector is created only
 once. All occurrence records use the same sentenceKey.
+
+### Tracer and form-language catalog
+
+Alias: tracer_form_language_catalog
+
+This small catalog stores `tracerId`, `sentenceContent`, `analysisGroup`,
+`isNonMatcher`, and `isFormLanguage`. Uploading a CSV does not send an
+embedding. The ingest pipeline already attached to this alias calls Lasso and
+Titan and stores the 512-dimension vector.
 
 ## Seeding flow
 
@@ -265,22 +274,36 @@ GET    /health
 GET    /stats
 GET    /index-documents?index=sentence_occurrences&count=10
 GET    /index-documents?index=sentence_semantic_catalog&count=10
+GET    /index-documents?index=tracer_form_language_catalog&count=10
 GET    /applications/{applicationId}/sentences/semantic-summary
 GET    /applications/{applicationId}/sentences/semantic-summary-all
 GET    /applications/{applicationId}/sentences/semantic-search
 GET    /applications/{applicationId}/sentences/semantic-search-paginated
 GET    /applications/{applicationId}/sentences/application-matches
-POST   /admin/init
-POST   /admin/seed?reset=false&csvPath=data/seed.csv
+POST   /admin/seed?csvPath=data/seed.csv
+POST   /admin/tracer-sentences/seed
 POST   /sentences
 DELETE /applications/{applicationId}?confirm=true
 DELETE /documents/{tspId}?applicationId=A1&confirm=true
 DELETE /admin/storage?confirm=true
 ```
 
-The catalog preview includes the decoded embedding list. Deleting an
+The sentence and tracer catalog previews include the decoded embedding list. Deleting an
 application or document also deletes catalog vectors that are no longer used by
 any occurrence.
+
+The tracer endpoint accepts a multipart CSV file in Swagger. Required headers
+may use snake case or camel case:
+
+```text
+tracer_id,sentence_content,analysis_group,is_non_matcher,is_form_language
+101,"This is a known tracer sentence.",Asylee,false,false
+102,"This is known form language.",Refugee,false,true
+```
+
+Extra CSV columns are ignored. `tracer_id` becomes the OpenSearch document
+`_id`. Re-uploading that ID replaces the existing document instead of creating
+a duplicate.
 
 ## Environment setup
 
@@ -291,22 +314,18 @@ Important values:
 ```text
 AWS_REGION=us-east-1
 OPENSEARCH_HOST=search-your-domain.us-east-1.es.amazonaws.com
-OPENSEARCH_SEMANTIC_MODEL_ID=<deployed OpenSearch model ID>
-OPENSEARCH_IVF_MODEL_ID=sentence-ivf-sq16-512-nlist16384-v1
 OPENSEARCH_IVF_NPROBES=128
-OPENSEARCH_INGEST_PIPELINE=sentence_bedrock_embedding_pipeline
-OPENSEARCH_CATALOG_INDEX=sentence_semantic_catalog-ivf-sq16-v1
+OPENSEARCH_OCCURRENCE_ALIAS=sentence_occurrences
 OPENSEARCH_CATALOG_ALIAS=sentence_semantic_catalog
+OPENSEARCH_TRACER_FORM_LANGUAGE_ALIAS=tracer_form_language_catalog
 VECTOR_DIMENSION=512
-INDEX_SHARDS=18
-INDEX_REPLICAS=1
 SEED_BATCH_SIZE=100
 SEED_WORKERS=4
 MATCH_THRESHOLD=90
 ```
 
-The deployed Titan model, ingest pipeline, trained IVF-SQ16 model, and catalog must
-all use dimension 512. A different dimension causes index creation or indexing
+The externally managed Titan model, ingest pipeline, trained IVF-SQ16 model,
+and catalogs must all use dimension 512. A different dimension causes indexing
 to fail.
 
 The final 100-million-vector resources, shard count, training values, cost, and
@@ -349,16 +368,7 @@ Run tests:
 make test
 ```
 
-## Reset warning
-
-Sending reset=true to the seed endpoint deletes and recreates the project
-indexes before loading the CSV. It also removes an old catalog currently behind
-the project alias. Sending reset=false keeps existing data and creates only
-missing catalog vectors.
-
-If the occurrence index was created when globalId used the keyword mapping,
-recreate it before loading numeric IDs. OpenSearch cannot change an existing
-field from keyword to long in place.
-
-The admin storage delete endpoint removes both indexes and aliases. It requires
-confirm=true.
+Index lifecycle changes belong in the infrastructure flow. If a mapping must
+change, create a new physical index and move the alias after the data is ready.
+The confirmed admin storage endpoint is intentionally destructive: it resolves
+the three configured aliases and deletes the physical indexes behind them.
