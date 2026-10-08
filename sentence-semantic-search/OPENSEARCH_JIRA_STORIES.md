@@ -1026,27 +1026,100 @@ existing case-similarity table for the Titan flow.
 ```gherkin
 Given the Flyway migration runs
 When the migration completes
-Then tsp.titan_matches contains global_id, tsp_id, matches, match_count, verbatim, and last_modified
-And global_id is the primary key
+Then tsp.titan_matches contains global_id, tsp_id, application_id, match_bucket_number, matches, match_count, verbatim, and last_modified
+And global_id and match_bucket_number are the composite primary key
+And each matching global_id selects one of 16 stable buckets
 And match_count and verbatim are stored generated columns
-And an index exists for tsp_id
+And indexes exist for tsp_id and application_id
 And tsp.similar_cases_emb is renamed to tsp.titan_similar_cases
 ```
 
 ```gherkin
 Given a source sentence and zero or more matching sentences
 When the bidirectional PostgreSQL function runs
-Then a missing source row is created even when the match list is empty
-And every missing target row is created
+Then targets from the same application_id as the source are ignored
+And no row is created when there are no cross-application matches
+And missing source and target bucket rows are created
 And source and target rows contain the reverse relationship
-And an existing row updates only matches and last_modified
+And source and target rows retain their correct tsp_id and application_id
+And an existing bucket merges matches without losing earlier matches
 And PostgreSQL recalculates match_count and verbatim without receiving either value
 ```
 
 ### Flyway SQL
 
 ```sql
-/* Return exact-match global IDs from the matches JSONB list. */
+/*
+ * Pick one bucket for a matching global ID.
+ *
+ * One sentence can have a very large number of matches. Saving all matches in
+ * one JSONB value would make updates slow. We split the matches into 16
+ * smaller rows called buckets. The buckets are numbered 0 through 15.
+ *
+ * The matching global ID decides which bucket is used:
+ *
+ *   target global ID 200 -> 200 % 16 -> bucket 8
+ *   target global ID 232 -> 232 % 16 -> bucket 8
+ *   target global ID 233 -> 233 % 16 -> bucket 9
+ *
+ * The same ID always goes to the same bucket. We never have to search all 16
+ * buckets to decide where a new match belongs.
+ *
+ * IMMUTABLE tells PostgreSQL that the answer never changes for the same ID.
+ */
+CREATE OR REPLACE FUNCTION tsp.titan_match_bucket(
+    matching_global_id INTEGER
+)
+RETURNS SMALLINT
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT mod(abs(matching_global_id::BIGINT), 16)::SMALLINT;
+$$;
+
+
+/*
+ * Count how many matches are saved in one bucket.
+ *
+ * Input:  {"200": 0.10, "232": 0.0}
+ * Output: 2
+ *
+ * PostgreSQL uses this function to fill match_count. Python does not send the
+ * count.
+ */
+CREATE OR REPLACE FUNCTION tsp.titan_match_object_size(
+    match_values JSONB
+)
+RETURNS INTEGER
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT count(*)::INTEGER
+    FROM jsonb_object_keys(match_values);
+$$;
+
+
+/*
+ * Make a list containing only exact-match global IDs.
+ *
+ * Distance 0.0 means exact match. A value larger than 0.0 means similar but
+ * not exact.
+ *
+ * Input:
+ *
+ *   {"200": 0.10, "232": 0.0, "248": 0.0}
+ *
+ * Output:
+ *
+ *   {232, 248}
+ *
+ * PostgreSQL uses this function to fill verbatim. Python does not send this
+ * list. If there is no exact match, the result is an empty list.
+ */
 CREATE OR REPLACE FUNCTION tsp.titan_verbatim_global_ids(
     match_values JSONB
 )
@@ -1061,66 +1134,57 @@ AS $$
         ARRAY[]::INTEGER[]
     )
     FROM (
-        SELECT DISTINCT
-            (match_item ->> 'global_id')::INTEGER AS global_id
-        FROM jsonb_array_elements(match_values) AS item(match_item)
-        WHERE (match_item ->> 'distance')::DOUBLE PRECISION = 0.0
+        SELECT match_key::INTEGER AS global_id
+        FROM jsonb_each(match_values) AS item(match_key, distance_value)
+        WHERE (distance_value #>> '{}')::DOUBLE PRECISION = 0.0
     ) AS exact_match;
 $$;
 
-/* Merge lists by global_id. The incoming object replaces the saved object. */
-CREATE OR REPLACE FUNCTION tsp.titan_merge_match_lists(
-    existing_matches JSONB,
-    incoming_matches JSONB
-)
-RETURNS JSONB
-LANGUAGE SQL
-IMMUTABLE
-STRICT
-PARALLEL SAFE
-AS $$
-    WITH combined_matches AS (
-        SELECT saved_item AS match_item, 0 AS incoming_priority
-        FROM jsonb_array_elements(existing_matches) AS saved(saved_item)
 
-        UNION ALL
-
-        SELECT incoming_item AS match_item, 1 AS incoming_priority
-        FROM jsonb_array_elements(incoming_matches)
-            AS incoming(incoming_item)
-    ),
-    latest_matches AS (
-        SELECT DISTINCT ON (
-            (match_item ->> 'global_id')::INTEGER
-        )
-            (match_item ->> 'global_id')::INTEGER AS match_global_id,
-            match_item
-        FROM combined_matches
-        ORDER BY
-            (match_item ->> 'global_id')::INTEGER,
-            incoming_priority DESC
-    )
-    SELECT COALESCE(
-        jsonb_agg(match_item ORDER BY match_global_id),
-        '[]'::JSONB
-    )
-    FROM latest_matches;
-$$;
-
+/*
+ * This table stores the sentence matches.
+ *
+ * One sentence can have up to 16 rows. Each row holds one part of its match
+ * list. The sentence that owns the match list is global_id.
+ *
+ * Example row:
+ *
+ *   global_id:            100
+ *   tsp_id:               10
+ *   application_id:       1
+ *   match_bucket_number:  8
+ *   matches:              {"200": 0.10, "232": 0.0}
+ *   match_count:          2             -- generated by PostgreSQL
+ *   verbatim:             {232}         -- generated by PostgreSQL
+ *
+ * The matches value stores {matching_global_id: distance}.
+ *
+ * Distance 0.0 is exact. Distance 0.10 means 90% similar.
+ *
+ * To get every match for global ID 100, read all rows where global_id = 100
+ * and combine their matches. Add their match_count values for the total.
+ */
 CREATE TABLE tsp.titan_matches (
-    global_id INTEGER PRIMARY KEY,
+    global_id INTEGER NOT NULL,
     tsp_id INTEGER NOT NULL,
-    matches JSONB NOT NULL DEFAULT '[]'::JSONB,
+    application_id INTEGER NOT NULL,
+    match_bucket_number SMALLINT NOT NULL,
+    matches JSONB NOT NULL DEFAULT '{}'::JSONB,
 
+    /* PostgreSQL updates this count whenever matches changes. */
     match_count INTEGER GENERATED ALWAYS AS (
-        jsonb_array_length(matches)
+        tsp.titan_match_object_size(matches)
     ) STORED NOT NULL,
 
+    /* PostgreSQL puts every distance 0.0 global ID in this list. */
     verbatim INTEGER[] GENERATED ALWAYS AS (
         tsp.titan_verbatim_global_ids(matches)
     ) STORED NOT NULL,
 
     last_modified TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    /* Makes global_id and bucket searches fast and prevents duplicate rows. */
+    PRIMARY KEY (global_id, match_bucket_number),
 
     CONSTRAINT fk_titan_matches_sentence_vector
         FOREIGN KEY (global_id)
@@ -1130,141 +1194,275 @@ CREATE TABLE tsp.titan_matches (
         FOREIGN KEY (tsp_id)
         REFERENCES tsp.text_similarity_input (tsp_id),
 
-    CONSTRAINT ck_titan_matches_json_array
-        CHECK (jsonb_typeof(matches) = 'array')
+    CONSTRAINT ck_titan_matches_bucket_number
+        CHECK (match_bucket_number BETWEEN 0 AND 15),
+
+    CONSTRAINT ck_titan_matches_json_object
+        CHECK (jsonb_typeof(matches) = 'object')
 );
 
-CREATE INDEX ix_titan_matches_tsp_id
-    ON tsp.titan_matches (tsp_id);
 
 /*
- * Create missing owners and save every relationship in both directions.
- * Existing rows keep their identity columns and update only the match list.
+ * Make document searches fast. This index helps these queries:
+ *
+ *   WHERE tsp_id = 10
+ *   WHERE tsp_id = 10 AND global_id = 100
+ *   WHERE tsp_id = 10 ORDER BY global_id
+ *
+ * Searching only by global_id uses the primary key above.
+ */
+CREATE INDEX ix_titan_matches_tsp_id
+    ON tsp.titan_matches (tsp_id, global_id);
+
+
+/*
+ * Make application searches fast. This index helps these queries:
+ *
+ *   WHERE application_id = 1
+ *   WHERE application_id = 1 AND global_id = 100
+ *
+ * The function also stores application_id on reverse rows, so every owner row
+ * can be traced back to its application without opening the matches JSONB.
+ */
+CREATE INDEX ix_titan_matches_application_id
+    ON tsp.titan_matches (application_id, global_id);
+
+
+/*
+ * Save each match in both directions.
+ *
+ * If sentence 100 matches sentence 200, both sentences must know about the
+ * match:
+ *
+ *   100 -> 200
+ *   200 -> 100
+ *
+ * This function saves both sides together. If anything fails, PostgreSQL
+ * rolls back both sides.
+ *
+ * Example source:
+ *
+ *   p_source_global_id      = 100
+ *   p_source_tsp_id         = 10
+ *   p_source_application_id = 1
+ *
+ * Example p_matches:
+ *
+ *   {
+ *     "200": {"tsp_id": 20, "application_id": 2, "distance": 0.10},
+ *     "232": {"tsp_id": 30, "application_id": 3, "distance": 0.0}
+ *   }
+ *
+ * Rows saved for the source:
+ *
+ *   100 -> 200 at distance 0.10
+ *   100 -> 232 at distance 0.0
+ *
+ * Rows saved for the matching sentences:
+ *
+ *   200 -> 100 at distance 0.10
+ *   232 -> 100 at distance 0.0
+ *
+ * Calling the function again does not make duplicate matches. If global ID
+ * 200 already exists, its distance is updated.
+ *
+ * The returned number is the number of matches received for the source. The
+ * reverse copies are not counted again.
  */
 CREATE OR REPLACE FUNCTION tsp.upsert_bidirectional_titan_matches(
     p_source_global_id INTEGER,
     p_source_tsp_id INTEGER,
-    p_source_a_number INTEGER,
+    p_source_application_id INTEGER,
     p_matches JSONB
 )
 RETURNS INTEGER
 LANGUAGE PLPGSQL
 AS $$
 DECLARE
-    normalized_matches JSONB;
+    eligible_targets JSONB;
     processed_match_count INTEGER;
-    locked_owner_id BIGINT;
-    source_match JSONB;
+    locked_row_id BIGINT;
 BEGIN
+    /*
+     * Remove matches that should not be saved.
+     *
+     * A sentence cannot match itself. Sentences from the same application are
+     * also removed. OpenSearch already does this, but PostgreSQL checks again
+     * to protect the saved data.
+     *
+     * If p_matches is NULL, use an empty object instead.
+     */
     SELECT COALESCE(
-        jsonb_agg(
+        jsonb_object_agg(
+            target.match_key,
             jsonb_build_object(
-                'global_id', unique_match.global_id,
-                'tsp_id', unique_match.tsp_id,
-                'a_number', unique_match.a_number,
-                'distance', unique_match.distance
+                'tsp_id',
+                (target.match_value ->> 'tsp_id')::INTEGER,
+                'application_id',
+                (target.match_value ->> 'application_id')::INTEGER,
+                'distance',
+                (target.match_value ->> 'distance')::DOUBLE PRECISION
             )
-            ORDER BY unique_match.global_id
         ),
-        '[]'::JSONB
+        '{}'::JSONB
     )
-    INTO normalized_matches
-    FROM (
-        SELECT DISTINCT ON (
-            (match_item ->> 'global_id')::INTEGER
-        )
-            (match_item ->> 'global_id')::INTEGER AS global_id,
-            (match_item ->> 'tsp_id')::INTEGER AS tsp_id,
-            (match_item ->> 'a_number')::INTEGER AS a_number,
-            (match_item ->> 'distance')::DOUBLE PRECISION AS distance
-        FROM jsonb_array_elements(
-            COALESCE(p_matches, '[]'::JSONB)
-        ) AS item(match_item)
-        WHERE (match_item ->> 'global_id')::INTEGER
-            <> p_source_global_id
-        ORDER BY (match_item ->> 'global_id')::INTEGER
-    ) AS unique_match;
+    INTO eligible_targets
+    FROM jsonb_each(COALESCE(p_matches, '{}'::JSONB))
+        AS target(match_key, match_value)
+    WHERE target.match_key::INTEGER <> p_source_global_id
+      AND (target.match_value ->> 'application_id')::INTEGER
+          <> p_source_application_id;
 
-    processed_match_count := jsonb_array_length(normalized_matches);
+    /* Count only the matches that are allowed to be saved. */
+    processed_match_count := tsp.titan_match_object_size(eligible_targets);
 
-    source_match := jsonb_build_object(
-        'global_id', p_source_global_id,
-        'tsp_id', p_source_tsp_id,
-        'a_number', p_source_a_number
-    );
+    /*
+     * No relationship means there is nothing to save.
+     *
+     * Example: if global ID 100 has no eligible match, return 0 without
+     * creating an empty bucket row. Rows exist only for real bidirectional
+     * relationships.
+     */
+    IF processed_match_count = 0 THEN
+        RETURN 0;
+    END IF;
 
-    /* Use stable transaction locks so concurrent workers cannot lose data. */
-    FOR locked_owner_id IN
-        SELECT DISTINCT owner_global_id::BIGINT
+    /*
+     * Protect the bucket rows while they are being updated.
+     *
+     * For 100 -> 200:
+     *
+     *   forward lock: owner 100, bucket 200 % 16 = 8
+     *   reverse lock: owner 200, bucket 100 % 16 = 4
+     *
+     * Two workers may update the same bucket at the same time. The lock makes
+     * one worker wait until the other worker finishes. This prevents one
+     * worker from removing the changes made by the other worker.
+     *
+     * The ORDER BY makes every worker lock rows in the same order. This helps
+     * prevent deadlocks. Reading is still allowed. PostgreSQL releases these
+     * locks when the transaction finishes or fails.
+     */
+    FOR locked_row_id IN
+        SELECT DISTINCT
+            hashtextextended(
+                concat_ws(
+                    ':',
+                    'titan_matches',
+                    affected.owner_global_id,
+                    affected.bucket_number
+                ),
+                0
+            ) AS lock_id
         FROM (
-            SELECT p_source_global_id AS owner_global_id
+            SELECT
+                p_source_global_id AS owner_global_id,
+                tsp.titan_match_bucket(target.match_key::INTEGER)
+                    AS bucket_number
+            FROM jsonb_each(eligible_targets)
+                AS target(match_key, match_value)
 
             UNION
 
-            SELECT (match_item ->> 'global_id')::INTEGER
-            FROM jsonb_array_elements(normalized_matches)
-                AS item(match_item)
-        ) AS owners
-        ORDER BY owner_global_id
+            SELECT
+                target.match_key::INTEGER AS owner_global_id,
+                tsp.titan_match_bucket(p_source_global_id) AS bucket_number
+            FROM jsonb_each(eligible_targets)
+                AS target(match_key, match_value)
+        ) AS affected
+        ORDER BY lock_id
     LOOP
-        PERFORM pg_advisory_xact_lock(locked_owner_id);
+        PERFORM pg_advisory_xact_lock(locked_row_id);
     END LOOP;
 
-    /* This insert also creates a source row whose match list is empty. */
+    /*
+     * Save the matches on the source sentence.
+     *
+     * Targets 200 and 232 both select bucket 8, so source 100 receives:
+     *
+     *   global_id: 100, bucket: 8, matches: {"200": 0.10, "232": 0.0}
+     *
+     * If bucket 8 does not exist, INSERT creates it. If it already exists,
+     * ON CONFLICT updates it. The || operator combines the old and new JSONB.
+     * A new global ID is added. An existing global ID gets the new distance.
+     */
     INSERT INTO tsp.titan_matches (
         global_id,
         tsp_id,
-        matches
-    )
-    VALUES (
-        p_source_global_id,
-        p_source_tsp_id,
-        normalized_matches
-    )
-    ON CONFLICT (global_id)
-    DO UPDATE SET
-        matches = tsp.titan_merge_match_lists(
-            titan_matches.matches,
-            EXCLUDED.matches
-        ),
-        last_modified = NOW();
-
-    INSERT INTO tsp.titan_matches (
-        global_id,
-        tsp_id,
+        application_id,
+        match_bucket_number,
         matches
     )
     SELECT
-        (match_item ->> 'global_id')::INTEGER,
-        (match_item ->> 'tsp_id')::INTEGER,
-        jsonb_build_array(
-            source_match || jsonb_build_object(
-                'distance',
-                (match_item ->> 'distance')::DOUBLE PRECISION
-            )
+        p_source_global_id,
+        p_source_tsp_id,
+        p_source_application_id,
+        tsp.titan_match_bucket(target.match_key::INTEGER),
+        jsonb_object_agg(
+            target.match_key,
+            target.match_value -> 'distance'
         )
-    FROM jsonb_array_elements(normalized_matches) AS item(match_item)
-    ORDER BY (match_item ->> 'global_id')::INTEGER
-    ON CONFLICT (global_id)
+    FROM jsonb_each(eligible_targets) AS target(match_key, match_value)
+    GROUP BY tsp.titan_match_bucket(target.match_key::INTEGER)
+    ORDER BY tsp.titan_match_bucket(target.match_key::INTEGER)
+    ON CONFLICT (global_id, match_bucket_number)
     DO UPDATE SET
-        matches = tsp.titan_merge_match_lists(
-            titan_matches.matches,
-            EXCLUDED.matches
-        ),
+        tsp_id = EXCLUDED.tsp_id,
+        application_id = EXCLUDED.application_id,
+        matches = titan_matches.matches || EXCLUDED.matches,
         last_modified = NOW();
 
+    /*
+     * Save the source ID on every matching sentence.
+     *
+     * Source 100 selects reverse bucket 4 because 100 % 16 = 4:
+     *
+     *   owner 200, bucket 4, matches: {"100": 0.10}
+     *   owner 232, bucket 4, matches: {"100": 0.0}
+     *
+     * This is the reverse side of the relationship. The target row is created
+     * when needed. If it already exists, the new source ID is merged into its
+     * saved matches.
+     */
+    INSERT INTO tsp.titan_matches (
+        global_id,
+        tsp_id,
+        application_id,
+        match_bucket_number,
+        matches
+    )
+    SELECT
+        target.match_key::INTEGER,
+        (target.match_value ->> 'tsp_id')::INTEGER,
+        (target.match_value ->> 'application_id')::INTEGER,
+        tsp.titan_match_bucket(p_source_global_id),
+        jsonb_build_object(
+            p_source_global_id::TEXT,
+            (target.match_value ->> 'distance')::DOUBLE PRECISION
+        )
+    FROM jsonb_each(eligible_targets) AS target(match_key, match_value)
+    ORDER BY target.match_key::INTEGER
+    ON CONFLICT (global_id, match_bucket_number)
+    DO UPDATE SET
+        tsp_id = EXCLUDED.tsp_id,
+        application_id = EXCLUDED.application_id,
+        matches = titan_matches.matches || EXCLUDED.matches,
+        last_modified = NOW();
+
+    /* Return the number of allowed source matches handled by this call. */
     RETURN processed_match_count;
 END;
 $$;
 
-COMMENT ON COLUMN tsp.titan_matches.match_count
-IS 'Stored count of objects in the matches JSONB list.';
 
-COMMENT ON COLUMN tsp.titan_matches.verbatim
-IS 'Stored global IDs whose saved match distance is exactly 0.0.';
-
-ALTER TABLE tsp.similar_cases_emb
-    RENAME TO titan_similar_cases;
+COMMENT ON FUNCTION tsp.upsert_bidirectional_titan_matches(
+    INTEGER,
+    INTEGER,
+    INTEGER,
+    JSONB
+)
+IS
+'Saves cross-application Titan matches in both directions using 16 buckets.';
 ```
 
 ## 20. Sentence Similarity | Classify tsp_id sentences with tracer workers

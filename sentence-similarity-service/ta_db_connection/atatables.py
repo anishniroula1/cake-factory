@@ -95,5 +95,5 @@ class TitanMatches(Base):
     )
     last_modified = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    tsp = relationship("TextSimilarityInput")
+    tsi = relationship("TextSimilarityInput")
     sen_vec = relationship("SentencesVector")

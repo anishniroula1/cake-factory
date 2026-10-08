@@ -27,6 +27,23 @@ class ExcludedTracerOpenSearch(OpenSearchFake):
         raise AssertionError("excluded sentence must not enter catalog search")
 
 
+class MissingCatalogRecordsOpenSearch(OpenSearchFake):
+    def catalog_records(self, catalog_alias, sentence_keys):
+        return {}
+
+    def target_occurrences(self, key_distances, analysis_group, source_application_id):
+        return [
+            {
+                "global_id": position,
+                "tsp_id": 20,
+                "application_id": 2,
+                "sentence_key": sentence_key,
+                "distance": distance,
+            }
+            for position, (sentence_key, distance) in enumerate(key_distances.items(), start=200)
+        ]
+
+
 @pytest.fixture(autouse=True)
 def use_fake_opensearch_queries(monkeypatch):
     """Route handler query functions through the small OpenSearch test fake."""
@@ -179,6 +196,19 @@ def test_saved_non_matcher_is_rechecked(service_config, sentence_row):
 
     assert classification["is_non_matcher"] is True
     assert len(opensearch.saved_classifications) == 1
+
+
+def test_all_missing_catalog_keys_are_reported(service_config, sentence_row):
+    opensearch = MissingCatalogRecordsOpenSearch(sentence_row.sentence_key)
+    handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), LoggerFake())
+    source = source_record(sentence_row.sentence_key)
+
+    with pytest.raises(PermanentDataError) as error:
+        handler.tracer_filtering_service.find_eligible_match_targets(
+            sentence_row, "catalog-asylee", {"KEY-B": 0.1, "KEY-C": 0.2}, source
+        )
+
+    assert str(error.value) == "catalog vectors are missing for sentence keys: KEY-B, KEY-C"
 
 
 def test_empty_document_is_rejected(service_config):

@@ -4,20 +4,6 @@ from similarity_completed.opensearch.tracer_filtering_service import TracerFilte
 
 
 @pytest.mark.parametrize(
-    ("match_found", "is_non_matcher", "is_form_language", "expected"),
-    [
-        (False, False, False, False),
-        (True, False, False, True),
-        (True, True, False, False),
-        (True, True, True, False),
-        (True, False, True, False),
-    ],
-)
-def test_is_tracer_is_derived_from_the_two_reference_flags(match_found, is_non_matcher, is_form_language, expected):
-    assert TracerFilteringService.derive_is_tracer(match_found, is_non_matcher, is_form_language) is expected
-
-
-@pytest.mark.parametrize(
     ("is_non_matcher", "is_tracer", "is_form_language", "expected"),
     [
         (False, False, False, False),

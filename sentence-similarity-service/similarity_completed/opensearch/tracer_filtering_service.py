@@ -8,7 +8,6 @@ from similarity_completed.opensearch.opensearch_store import (
     SentenceCatalogOpenSearchStore,
     TracerOpenSearchStore,
 )
-from similarity_completed.opensearch.utill.classification import derive_is_tracer
 from ta_db_connection.atatables import SentencesVector
 
 
@@ -26,19 +25,6 @@ class TracerFilteringService:
         self.occurrence_open_search_store = occurrence_open_search_store
         self.sentence_catalog_open_search_store = sentence_catalog_open_search_store
         self.tracer_open_search_store = tracer_open_search_store
-
-    @staticmethod
-    def derive_is_tracer(tracer_match_found: bool, is_non_matcher: bool, is_form_language: bool) -> bool:
-        """Decide whether a tracer-catalog result is a tracer sentence.
-
-        Input: match found with both saved flags false.
-        Output: True because the matching reference is a tracer sentence.
-
-        Input: no match found with both saved flags false.
-        Output: False because nothing matched in the tracer catalog.
-        """
-
-        return derive_is_tracer(tracer_match_found, is_non_matcher, is_form_language)
 
     @staticmethod
     def should_skip_sentence_catalog_search(classification: Classification) -> bool:
@@ -97,9 +83,11 @@ class TracerFilteringService:
         )
         records[source_record["sentence_key"]] = source_record
 
+        # Example: occurrence keys are {A, B, C}, but catalog records contain
+        # only {A, C}. The subtraction leaves missing_keys=[B].
         missing_keys = sorted(set(occurrences_by_key) - set(records))
         if missing_keys:
-            raise PermanentDataError(f"catalog vector is missing for sentence key {missing_keys[0]}")
+            raise PermanentDataError(f"catalog vectors are missing for sentence keys: {', '.join(missing_keys)}")
 
         targets: dict[str, MatchTarget] = {}
         for sentence_key, matching_occurrences in occurrences_by_key.items():
