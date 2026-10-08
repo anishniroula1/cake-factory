@@ -5,11 +5,7 @@ import uuid
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-from similarity_completed.opensearch.contracts import (
-    NextQueueMessage,
-    RawSqsMessage,
-    SqsMessage,
-)
+from similarity_completed.opensearch.contracts import NextQueueMessage, RawSqsMessage, SqsMessage
 
 
 class AwsSQS:
@@ -28,11 +24,7 @@ class AwsSQS:
         """Create the SQS wrapper shared by real-time and backfill pods."""
 
         self._logger = logger
-        self._sqs = sqs_client or boto3.client(
-            "sqs",
-            region_name=aws_region,
-            endpoint_url=aws_endpoint_url,
-        )
+        self._sqs = sqs_client or boto3.client("sqs", region_name=aws_region, endpoint_url=aws_endpoint_url)
         self._queue_url = queue_url
         self._max_number_of_messages = max_number_of_messages
         self._wait_time = wait_time
@@ -68,10 +60,7 @@ class AwsSQS:
                 body = json.loads(body)
             if not isinstance(body, dict):
                 raise TypeError("SQS body must be a JSON object")
-            receive_count = message.get("Attributes", {}).get(
-                "ApproximateReceiveCount",
-                "0",
-            )
+            receive_count = message.get("Attributes", {}).get("ApproximateReceiveCount", "0")
             return {
                 **body,
                 "MessageId": message.get("MessageId"),
@@ -79,9 +68,7 @@ class AwsSQS:
                 "message_receive_count": int(receive_count),
             }
         except (TypeError, ValueError, json.JSONDecodeError) as error:
-            self._logger.error(
-                "Received an invalid SQS JSON body: " f"{str(error)[:500]}"
-            )
+            self._logger.error(f"Received an invalid SQS JSON body: {str(error)[:500]}")
             return {}
 
     def listen_sqs_message(self) -> list[SqsMessage]:
@@ -98,15 +85,10 @@ class AwsSQS:
         """Delete one source message after all processing succeeds."""
 
         try:
-            self._sqs.delete_message(
-                QueueUrl=self._queue_url,
-                ReceiptHandle=message["ReceiptHandle"],
-            )
+            self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=message["ReceiptHandle"])
             return True
         except (BotoCoreError, ClientError, KeyError) as error:
-            self._logger.error(
-                "Failed to delete the completed SQS message: " f"{str(error)[:500]}"
-            )
+            self._logger.error(f"Failed to delete the completed SQS message: {str(error)[:500]}")
             return False
 
     def send_sqs_message(
@@ -119,20 +101,14 @@ class AwsSQS:
     ) -> bool:
         """Send one next-step message and retry when requested."""
 
-        body = (
-            message_body if isinstance(message_body, str) else json.dumps(message_body)
-        )
+        body = message_body if isinstance(message_body, str) else json.dumps(message_body)
         for attempt in range(retries + 1):
             try:
-                parameters = {
-                    "QueueUrl": send_queue_url,
-                    "MessageBody": body,
-                }
+                parameters = {"QueueUrl": send_queue_url, "MessageBody": body}
                 if is_fifo:
                     parameters["MessageGroupId"] = uuid.uuid4().hex
                     parameters["MessageDeduplicationId"] = uuid.uuid5(
-                        uuid.NAMESPACE_URL,
-                        f"{send_queue_url}:{body}",
+                        uuid.NAMESPACE_URL, f"{send_queue_url}:{body}"
                     ).hex
                 response = self._sqs.send_message(**parameters)
                 status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")

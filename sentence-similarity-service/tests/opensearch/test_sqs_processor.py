@@ -25,13 +25,7 @@ def test_invalid_or_failed_messages_are_not_deleted():
     failed = Dependencies(Handler(fails=True))
 
     SqsProcessor(invalid)._process_message({"MessageId": "missing"})
-    SqsProcessor(failed)._process_message(
-        {
-            "tsp_id": 10,
-            "MessageId": "failed",
-            "ReceiptHandle": "receipt",
-        }
-    )
+    SqsProcessor(failed)._process_message({"tsp_id": 10, "MessageId": "failed", "ReceiptHandle": "receipt"})
 
     assert invalid.aws_sqs.deleted == []
     assert failed.aws_sqs.deleted == []
@@ -42,13 +36,7 @@ def test_delete_failure_is_logged_after_success():
     dependencies.aws_sqs.delete_messages = lambda message: False
     processor = SqsProcessor(dependencies)
 
-    processor._process_message(
-        {
-            "tsp_id": 10,
-            "MessageId": "message",
-            "ReceiptHandle": "receipt",
-        }
-    )
+    processor._process_message({"tsp_id": 10, "MessageId": "message", "ReceiptHandle": "receipt"})
 
     assert dependencies.sentence_similarity_handler.processed == [10]
     assert any(level == "warning" for level, message in dependencies.logger.messages)

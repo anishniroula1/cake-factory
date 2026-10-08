@@ -1,8 +1,6 @@
 from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.contracts import Classification
-from similarity_completed.opensearch.tracer_filtering_service import (
-    TracerFilteringService,
-)
+from similarity_completed.opensearch.utill.classification import derive_is_tracer
 from similarity_completed.opensearch.utill.constants import VECTOR_FIELD
 from similarity_completed.opensearch.utill.score import minimum_opensearch_score
 from similarity_completed.opensearch.utill.vector import validate_vector
@@ -19,11 +17,7 @@ class TracerOpenSearchStore:
         self.config = config
         self.client = client
 
-    def classify_sentence_by_vector(
-        self,
-        vector: list[float],
-        analysis_group: str,
-    ) -> Classification:
+    def classify_sentence_by_vector(self, vector: list[float], analysis_group: str) -> Classification:
         """Classify one sentence using matching tracer references.
 
         Input: analysis_group=Asylee and vector=[512 Titan values]
@@ -36,23 +30,16 @@ class TracerOpenSearchStore:
             body={
                 "size": TRACER_RESULT_SIZE,
                 "track_total_hits": False,
-                "_source": [
-                    "isNonMatcher",
-                    "isFormLanguage",
-                ],
+                "_source": ["isNonMatcher", "isFormLanguage"],
                 "query": {
                     "bool": {
-                        "filter": [
-                            {"term": {"analysisGroup": analysis_group}},
-                        ],
+                        "filter": [{"term": {"analysisGroup": analysis_group}}],
                         "must": [
                             {
                                 "knn": {
                                     VECTOR_FIELD: {
                                         "vector": vector,
-                                        "min_score": minimum_opensearch_score(
-                                            self.config.tracer_threshold
-                                        ),
+                                        "min_score": minimum_opensearch_score(self.config.tracer_threshold),
                                     }
                                 }
                             }
@@ -63,27 +50,17 @@ class TracerOpenSearchStore:
         )
         hits = response["hits"]["hits"]
         if not hits:
-            return {
-                "is_non_matcher": False,
-                "is_tracer": False,
-                "is_form_language": False,
-            }
+            return {"is_non_matcher": False, "is_tracer": False, "is_form_language": False}
 
         # Every hit contributes isNonMatcher and isFormLanguage. The tracer
         # table has no isTracer field, so the filtering helper derives it from
         # those two flags.
-        is_non_matcher = any(
-            bool(hit.get("_source", {}).get("isNonMatcher")) for hit in hits
-        )
-        is_form_language = any(
-            bool(hit.get("_source", {}).get("isFormLanguage")) for hit in hits
-        )
+        is_non_matcher = any(bool(hit.get("_source", {}).get("isNonMatcher")) for hit in hits)
+        is_form_language = any(bool(hit.get("_source", {}).get("isFormLanguage")) for hit in hits)
         return {
             "is_non_matcher": is_non_matcher,
-            "is_tracer": TracerFilteringService.derive_is_tracer(
-                tracer_match_found=True,
-                is_non_matcher=is_non_matcher,
-                is_form_language=is_form_language,
+            "is_tracer": derive_is_tracer(
+                tracer_match_found=True, is_non_matcher=is_non_matcher, is_form_language=is_form_language
             ),
             "is_form_language": is_form_language,
         }

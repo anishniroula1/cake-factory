@@ -11,10 +11,7 @@ def run_opensearch_flow(
 ) -> None:
     """Build one dependency container and start the SQS processor."""
 
-    service_dependencies = dependencies or Dependencies(
-        custom_logger,
-        database_connection,
-    )
+    service_dependencies = dependencies or Dependencies(custom_logger, database_connection)
     processor = SqsProcessor(service_dependencies)
 
     try:

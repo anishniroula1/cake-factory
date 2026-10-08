@@ -22,16 +22,11 @@ def decode_vector(encoded_vector: str, vector_dimension: int) -> list[float]:
     try:
         vector_bytes = base64.b64decode(encoded_vector, validate=True)
     except (binascii.Error, ValueError) as error:
-        raise PermanentDataError(
-            "OpenSearch returned an invalid catalog vector"
-        ) from error
+        raise PermanentDataError("OpenSearch returned an invalid catalog vector") from error
     # Titan returns float32 values, so a 512-dimension vector needs 2,048 bytes.
     expected_bytes = vector_dimension * 4
     if len(vector_bytes) != expected_bytes:
-        raise PermanentDataError(
-            f"catalog vector has {len(vector_bytes)} bytes; "
-            f"expected {expected_bytes}"
-        )
+        raise PermanentDataError(f"catalog vector has {len(vector_bytes)} bytes; expected {expected_bytes}")
     return list(struct.unpack(f"<{vector_dimension}f", vector_bytes))
 
 
@@ -46,6 +41,4 @@ def validate_vector(vector: list[float], vector_dimension: int) -> None:
     """
 
     if len(vector) != vector_dimension:
-        raise PermanentDataError(
-            f"vector has {len(vector)} values; expected {vector_dimension}"
-        )
+        raise PermanentDataError(f"vector has {len(vector)} values; expected {vector_dimension}")

@@ -22,14 +22,7 @@ class ExecuteResult:
 
 
 class SessionFake:
-    def __init__(
-        self,
-        *,
-        rows=None,
-        scalar_value=0,
-        execute_value=0,
-        execute_rows=None,
-    ):
+    def __init__(self, *, rows=None, scalar_value=0, execute_value=0, execute_rows=None):
         self.rows = rows or []
         self.scalar_value = scalar_value
         self.execute_value = execute_value
@@ -116,46 +109,21 @@ class OpenSearchFake:
         return f"catalog-{analysis_group.casefold()}"
 
     def catalog_records(self, catalog_alias, sentence_keys):
-        classification = {
-            "is_non_matcher": self.non_matcher,
-            "is_tracer": False,
-            "is_form_language": False,
-        }
+        classification = {"is_non_matcher": self.non_matcher, "is_tracer": False, "is_form_language": False}
         return {
-            key: {
-                "sentence_key": key,
-                "vector": [0.1, 0.2],
-                "classification": classification,
-            }
-            for key in sentence_keys
+            key: {"sentence_key": key, "vector": [0.1, 0.2], "classification": classification} for key in sentence_keys
         }
 
     def tracer_classification(self, vector, analysis_group):
-        return {
-            "is_non_matcher": self.non_matcher,
-            "is_tracer": False,
-            "is_form_language": False,
-        }
+        return {"is_non_matcher": self.non_matcher, "is_tracer": False, "is_form_language": False}
 
-    def save_catalog_classification(
-        self,
-        catalog_alias,
-        sentence_key,
-        classification,
-    ):
-        self.saved_classifications.append(
-            (catalog_alias, sentence_key, classification)
-        )
+    def save_catalog_classification(self, catalog_alias, sentence_key, classification):
+        self.saved_classifications.append((catalog_alias, sentence_key, classification))
 
     def catalog_matches(self, catalog_alias, source_key, vector):
         return {source_key: 0.0}
 
-    def target_occurrences(
-        self,
-        key_distances,
-        analysis_group,
-        source_application_id,
-    ):
+    def target_occurrences(self, key_distances, analysis_group, source_application_id):
         return [
             {
                 "global_id": 200,

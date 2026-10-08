@@ -36,11 +36,7 @@ class Dependencies:
 
 
 def test_main_processes_one_message_deletes_it_and_closes():
-    message = {
-        "tsp_id": "TSP-10",
-        "MessageId": "message-1",
-        "ReceiptHandle": "receipt-1",
-    }
+    message = {"tsp_id": "TSP-10", "MessageId": "message-1", "ReceiptHandle": "receipt-1"}
     queue = OneMessageSqs([message])
     handler = Handler()
     dependencies = Dependencies(queue, handler)

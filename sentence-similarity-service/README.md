@@ -19,7 +19,7 @@ Receive one SQS message with tsp_id
     -> Verify target classifications before saving either direction
     -> Save bidirectional global_id matches in tsp.titan_matches
     -> Repeat until every sentence is complete
-    -> Send tsp_id to API Transform
+    -> Send tsp_id to the next service queue
     -> Delete the source SQS message
 ```
 
@@ -85,8 +85,7 @@ OpenSearch access is also separated by index under
 ## Configuration
 
 Copy `.env.example` and provide the Vault file, OpenSearch host and role,
-occurrence and group catalog aliases, tracer alias, source queue, and API
-Transform queue.
+receive queue, next-service queue, and optional local AWS endpoint.
 
 Processing constants are kept in
 `similarity_completed/opensearch/config.py`:
@@ -97,6 +96,10 @@ Workers: 30
 Titan vector: 512 dimensions
 Retry wait: 5 seconds
 Match write batch: 500 occurrences
+Occurrence alias: sentence_occurrences
+Asylee catalog alias: sentence_semantic_catalog_asylee
+Refugee catalog alias: sentence_semantic_catalog_refugee
+Tracer alias: tracer_form_language_catalog
 ```
 
 ## Run

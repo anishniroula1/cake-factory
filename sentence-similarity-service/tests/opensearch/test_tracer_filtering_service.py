@@ -1,8 +1,6 @@
 import pytest
 
-from similarity_completed.opensearch.tracer_filtering_service import (
-    TracerFilteringService,
-)
+from similarity_completed.opensearch.tracer_filtering_service import TracerFilteringService
 
 
 @pytest.mark.parametrize(
@@ -15,20 +13,8 @@ from similarity_completed.opensearch.tracer_filtering_service import (
         (True, False, True, False),
     ],
 )
-def test_is_tracer_is_derived_from_the_two_reference_flags(
-    match_found,
-    is_non_matcher,
-    is_form_language,
-    expected,
-):
-    assert (
-        TracerFilteringService.derive_is_tracer(
-            match_found,
-            is_non_matcher,
-            is_form_language,
-        )
-        is expected
-    )
+def test_is_tracer_is_derived_from_the_two_reference_flags(match_found, is_non_matcher, is_form_language, expected):
+    assert TracerFilteringService.derive_is_tracer(match_found, is_non_matcher, is_form_language) is expected
 
 
 @pytest.mark.parametrize(
@@ -42,18 +28,8 @@ def test_is_tracer_is_derived_from_the_two_reference_flags(
     ],
 )
 def test_every_tracer_catalog_classification_skips_sentence_matching(
-    is_non_matcher,
-    is_tracer,
-    is_form_language,
-    expected,
+    is_non_matcher, is_tracer, is_form_language, expected
 ):
-    classification = {
-        "is_non_matcher": is_non_matcher,
-        "is_tracer": is_tracer,
-        "is_form_language": is_form_language,
-    }
+    classification = {"is_non_matcher": is_non_matcher, "is_tracer": is_tracer, "is_form_language": is_form_language}
 
-    assert (
-        TracerFilteringService.should_skip_sentence_catalog_search(classification)
-        is expected
-    )
+    assert TracerFilteringService.should_skip_sentence_catalog_search(classification) is expected

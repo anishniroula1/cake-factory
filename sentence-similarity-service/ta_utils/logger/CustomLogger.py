@@ -5,10 +5,7 @@ class CustomLogger:
     def __init__(self, name: str) -> None:
         """Create the default logger until the team logger is supplied."""
 
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        )
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
         self.logger = logging.getLogger(name)
 
     def debug(self, message: str) -> None:

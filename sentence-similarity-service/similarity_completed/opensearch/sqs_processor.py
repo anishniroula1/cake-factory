@@ -24,9 +24,7 @@ class SqsProcessor:
             self.dependencies.logger.info("Starting an SQS document message.")
             self.dependencies.sentence_similarity_handler.process(tsp_id)
         except PermanentMessageError as error:
-            self.dependencies.logger.error(
-                f"Invalid Sentence Similarity message: {str(error)[:500]}"
-            )
+            self.dependencies.logger.error(f"Invalid Sentence Similarity message: {str(error)[:500]}")
             return
         except Exception as error:  # noqa: BLE001
             self.dependencies.logger.error(
@@ -36,13 +34,9 @@ class SqsProcessor:
             return
 
         if not self.dependencies.aws_sqs.delete_messages(message):
-            self.dependencies.logger.warning(
-                "Processing completed, but the source SQS message was not deleted."
-            )
+            self.dependencies.logger.warning("Processing completed, but the source SQS message was not deleted.")
             return
-        self.dependencies.logger.info(
-            "Sentence Similarity completed and deleted the source SQS message."
-        )
+        self.dependencies.logger.info("Sentence Similarity completed and deleted the source SQS message.")
 
     def _read_tsp_id(self, message: SqsMessage) -> TspId:
         """Return tsp_id exactly as supplied, including a string value."""

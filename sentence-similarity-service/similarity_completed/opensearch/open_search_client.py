@@ -1,9 +1,5 @@
 import boto3
-from opensearchpy import (
-    AWSV4SignerAuth,
-    OpenSearch,
-    RequestsHttpConnection,
-)
+from opensearchpy import AWSV4SignerAuth, OpenSearch, RequestsHttpConnection
 
 from similarity_completed.opensearch.config import Config
 
@@ -21,18 +17,9 @@ class OpenSearchClient:
         credentials = session.get_credentials()
         if credentials is None:
             raise RuntimeError("AWS credentials are required")
-        auth = AWSV4SignerAuth(
-            credentials,
-            self.config.aws_region,
-            self.config.opensearch_service,
-        )
+        auth = AWSV4SignerAuth(credentials, self.config.aws_region, self.config.opensearch_service)
         return OpenSearch(
-            hosts=[
-                {
-                    "host": self.config.opensearch_host,
-                    "port": self.config.opensearch_port,
-                }
-            ],
+            hosts=[{"host": self.config.opensearch_host, "port": self.config.opensearch_port}],
             http_auth=auth,
             use_ssl=True,
             verify_certs=True,
@@ -52,8 +39,7 @@ class OpenSearchClient:
         if not self.config.opensearch_iam_access_role:
             return base_session
         response = base_session.client("sts").assume_role(
-            RoleArn=self.config.opensearch_iam_access_role,
-            RoleSessionName="sentenceSimilarity",
+            RoleArn=self.config.opensearch_iam_access_role, RoleSessionName="sentenceSimilarity"
         )
         credentials = response["Credentials"]
         return boto3.Session(

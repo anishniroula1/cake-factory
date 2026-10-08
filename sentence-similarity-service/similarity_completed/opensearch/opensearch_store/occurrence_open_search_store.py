@@ -10,10 +10,7 @@ class OccurrenceOpenSearchStore:
         self.client = client
 
     def search_matching_occurrences_outside_application(
-        self,
-        key_distances: dict[str, float],
-        analysis_group: str,
-        source_application_id: int,
+        self, key_distances: dict[str, float], analysis_group: str, source_application_id: int
     ) -> list[TargetOccurrence]:
         """Find matching occurrences outside the source application.
 
@@ -32,20 +29,13 @@ class OccurrenceOpenSearchStore:
             key_batch = sentence_keys[offset : offset + batch_size]
             occurrences.extend(
                 self._search_matching_occurrences_for_key_batch(
-                    key_batch,
-                    key_distances,
-                    analysis_group,
-                    source_application_id,
+                    key_batch, key_distances, analysis_group, source_application_id
                 )
             )
         return occurrences
 
     def _search_matching_occurrences_for_key_batch(
-        self,
-        sentence_keys: list[str],
-        key_distances: dict[str, float],
-        analysis_group: str,
-        source_application_id: int,
+        self, sentence_keys: list[str], key_distances: dict[str, float], analysis_group: str, source_application_id: int
     ) -> list[TargetOccurrence]:
         """Read all occurrence pages for one sentence-key batch."""
 
@@ -58,21 +48,14 @@ class OccurrenceOpenSearchStore:
             body = {
                 "size": self.config.opensearch_terms_batch_size,
                 "track_total_hits": False,
-                "_source": [
-                    "globalId",
-                    "tspId",
-                    "applicationId",
-                    "sentenceKey",
-                ],
+                "_source": ["globalId", "tspId", "applicationId", "sentenceKey"],
                 "query": {
                     "bool": {
                         "filter": [
                             {"terms": {"sentenceKey": sentence_keys}},
                             {"term": {"analysisGroup": analysis_group}},
                         ],
-                        "must_not": [
-                            {"term": {"applicationId": source_application_id}},
-                        ],
+                        "must_not": [{"term": {"applicationId": source_application_id}}],
                     }
                 },
                 # globalId is unique, so the last value is a stable next-page
@@ -82,10 +65,7 @@ class OccurrenceOpenSearchStore:
             if search_after is not None:
                 body["search_after"] = search_after
 
-            response = self.client.search(
-                index=self.config.occurrence_alias,
-                body=body,
-            )
+            response = self.client.search(index=self.config.occurrence_alias, body=body)
             hits = response["hits"]["hits"]
             if not hits:
                 return occurrences

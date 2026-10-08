@@ -10,11 +10,7 @@ from ta_db_connection.atatables import SentencesVector, TextSimilarityInput
 
 
 class SentenceVectorDBStore:
-    def __init__(
-        self,
-        config: Config,
-        session_factory: Callable[[], Session],
-    ) -> None:
+    def __init__(self, config: Config, session_factory: Callable[[], Session]) -> None:
         """Keep database operations for the sentences_vector table."""
 
         self.config = config
@@ -28,18 +24,10 @@ class SentenceVectorDBStore:
         """
 
         with self.session_factory() as session:
-            statement = (
-                select(func.count())
-                .select_from(SentencesVector)
-                .where(SentencesVector.tsp_id == tsp_id)
-            )
+            statement = select(func.count()).select_from(SentencesVector).where(SentencesVector.tsp_id == tsp_id)
             return int(session.scalar(statement) or 0)
 
-    def load_sentence_batch_by_tsp_id(
-        self,
-        tsp_id: TspId,
-        after_global_id: int,
-    ) -> list[SentencesVector]:
+    def load_sentence_batch_by_tsp_id(self, tsp_id: TspId, after_global_id: int) -> list[SentencesVector]:
         """Load the next sentence batch and its shared document values.
 
         Input: tsp_id=100 and after_global_id=500
@@ -50,31 +38,20 @@ class SentenceVectorDBStore:
             statement = (
                 select(SentencesVector)
                 .options(
-                    load_only(
-                        SentencesVector.global_id,
-                        SentencesVector.tsp_id,
-                        SentencesVector.sentence_key,
-                    ),
+                    load_only(SentencesVector.global_id, SentencesVector.tsp_id, SentencesVector.sentence_key),
                     joinedload(SentencesVector.tsp).load_only(
                         TextSimilarityInput.tsp_id,
                         TextSimilarityInput.application_id,
                         TextSimilarityInput.analysis_group,
                     ),
                 )
-                .where(
-                    SentencesVector.tsp_id == tsp_id,
-                    SentencesVector.global_id > after_global_id,
-                )
+                .where(SentencesVector.tsp_id == tsp_id, SentencesVector.global_id > after_global_id)
                 .order_by(SentencesVector.global_id)
                 .limit(self.config.source_sentence_batch_size)
             )
             return list(session.scalars(statement))
 
-    def update_classification_by_global_ids(
-        self,
-        global_ids: list[int],
-        classification: Classification,
-    ) -> None:
+    def update_classification_by_global_ids(self, global_ids: list[int], classification: Classification) -> None:
         """Save one tracer decision to the matching sentence rows.
 
         Input: global_ids=[100, 200] and one tracer classification.

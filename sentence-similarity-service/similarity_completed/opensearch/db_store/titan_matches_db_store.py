@@ -23,21 +23,13 @@ SAVE_MATCHES = text(
 
 
 class TitanMatchesDBStore:
-    def __init__(
-        self,
-        config: Config,
-        session_factory: Callable[[], Session],
-    ) -> None:
+    def __init__(self, config: Config, session_factory: Callable[[], Session]) -> None:
         """Keep database operations for the titan_matches table."""
 
         self.config = config
         self.session_factory = session_factory
 
-    def save_bidirectional_matches(
-        self,
-        source: SentencesVector,
-        matches: dict[str, MatchTarget],
-    ) -> int:
+    def save_bidirectional_matches(self, source: SentencesVector, matches: dict[str, MatchTarget]) -> int:
         """Save compact bidirectional matches through the bucket function.
 
         Input: source global_id=100 and matches={200: {distance: 0.08}}.
@@ -50,16 +42,8 @@ class TitanMatchesDBStore:
 
         items = list(matches.items())
         match_batches = [
-            dict(
-                items[
-                    offset : offset + self.config.titan_match_write_batch_size
-                ]
-            )
-            for offset in range(
-                0,
-                len(items),
-                self.config.titan_match_write_batch_size,
-            )
+            dict(items[offset : offset + self.config.titan_match_write_batch_size])
+            for offset in range(0, len(items), self.config.titan_match_write_batch_size)
         ]
         saved = 0
         for match_batch in match_batches:

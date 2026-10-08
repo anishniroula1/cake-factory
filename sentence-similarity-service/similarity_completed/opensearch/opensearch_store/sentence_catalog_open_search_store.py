@@ -4,10 +4,7 @@ from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.contracts import CatalogRecord, Classification
 from similarity_completed.opensearch.utill.classification import saved_classification
 from similarity_completed.opensearch.utill.constants import VECTOR_FIELD
-from similarity_completed.opensearch.utill.score import (
-    cosine_distance,
-    minimum_opensearch_score,
-)
+from similarity_completed.opensearch.utill.score import cosine_distance, minimum_opensearch_score
 from similarity_completed.opensearch.utill.vector import decode_vector, validate_vector
 
 
@@ -18,11 +15,7 @@ class SentenceCatalogOpenSearchStore:
         self.config = config
         self.client = client
 
-    def load_records_by_sentence_keys(
-        self,
-        catalog_alias: str,
-        sentence_keys: list[str],
-    ) -> dict[str, CatalogRecord]:
+    def load_records_by_sentence_keys(self, catalog_alias: str, sentence_keys: list[str]) -> dict[str, CatalogRecord]:
         """Load vectors and saved flags for requested sentence keys.
 
         Input: catalog_alias=sentence_semantic_catalog_asylee and
@@ -49,15 +42,8 @@ class SentenceCatalogOpenSearchStore:
                 body={
                     "size": len(key_batch),
                     "track_total_hits": False,
-                    "_source": [
-                        "sentenceKey",
-                        "isNonMatcher",
-                        "isTracer",
-                        "isFormLanguage",
-                    ],
-                    "docvalue_fields": [
-                        {"field": VECTOR_FIELD, "format": "binary"},
-                    ],
+                    "_source": ["sentenceKey", "isNonMatcher", "isTracer", "isFormLanguage"],
+                    "docvalue_fields": [{"field": VECTOR_FIELD, "format": "binary"}],
                     "query": {"ids": {"values": key_batch}},
                 },
             )
@@ -69,19 +55,13 @@ class SentenceCatalogOpenSearchStore:
                 sentence_key = source["sentenceKey"]
                 records[sentence_key] = {
                     "sentence_key": sentence_key,
-                    "vector": decode_vector(
-                        vector_values[0],
-                        self.config.vector_dimension,
-                    ),
+                    "vector": decode_vector(vector_values[0], self.config.vector_dimension),
                     "classification": saved_classification(source),
                 }
         return records
 
     def search_semantic_matches_by_vector(
-        self,
-        catalog_alias: str,
-        source_key: str,
-        vector: list[float],
+        self, catalog_alias: str, source_key: str, vector: list[float]
     ) -> dict[str, float]:
         """Find every sentence key meeting the similarity threshold.
 
@@ -95,20 +75,13 @@ class SentenceCatalogOpenSearchStore:
         matches = {source_key: 0.0}
         after_key = None
         while True:
-            match_batch, after_key = self._search_semantic_match_batch(
-                catalog_alias,
-                vector,
-                after_key,
-            )
+            match_batch, after_key = self._search_semantic_match_batch(catalog_alias, vector, after_key)
             matches.update(match_batch)
             if after_key is None:
                 return matches
 
     def update_classification_by_sentence_key(
-        self,
-        catalog_alias: str,
-        sentence_key: str,
-        classification: Classification,
+        self, catalog_alias: str, sentence_key: str, classification: Classification
     ) -> None:
         """Save reusable classification flags on one catalog document.
 
@@ -130,10 +103,7 @@ class SentenceCatalogOpenSearchStore:
         )
 
     def _search_semantic_match_batch(
-        self,
-        catalog_alias: str,
-        vector: list[float],
-        after_key: dict | None,
+        self, catalog_alias: str, vector: list[float], after_key: dict | None
     ) -> tuple[dict[str, float], dict | None]:
         """Read one page of unique matching keys and its next-page token."""
 
@@ -153,26 +123,15 @@ class SentenceCatalogOpenSearchStore:
                     "knn": {
                         VECTOR_FIELD: {
                             "vector": vector,
-                            "min_score": minimum_opensearch_score(
-                                self.config.match_threshold
-                            ),
-                            "method_parameters": {
-                                "nprobes": self.config.ivf_nprobes,
-                            },
+                            "min_score": minimum_opensearch_score(self.config.match_threshold),
+                            "method_parameters": {"nprobes": self.config.ivf_nprobes},
                         }
                     }
                 },
                 "aggs": {
                     "matches": {
                         "composite": composite,
-                        "aggs": {
-                            "sample": {
-                                "top_hits": {
-                                    "size": 1,
-                                    "_source": ["sentenceKey"],
-                                }
-                            }
-                        },
+                        "aggs": {"sample": {"top_hits": {"size": 1, "_source": ["sentenceKey"]}}},
                     }
                 },
             },
