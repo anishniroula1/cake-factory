@@ -102,8 +102,6 @@ def test_catalog_records_load_vectors_and_optional_classification(service_config
 
     assert records[sentence_key]["vector"] == pytest.approx([0.25, 0.75])
     assert records[sentence_key]["classification"]["is_non_matcher"] is False
-    assert records[sentence_key]["classification"]["closest_non_matcher"] is None
-    assert records[sentence_key]["classification"]["closest_nn_score"] is None
     assert store.load_records_by_sentence_keys("catalog-asylee", []) == {}
 
 
@@ -116,7 +114,6 @@ def test_tracer_classification_and_catalog_update(service_config):
                         {
                             "_score": 0.98,
                             "_source": {
-                                "tracerId": 101,
                                 "isNonMatcher": True,
                                 "isFormLanguage": False,
                             },
@@ -124,7 +121,6 @@ def test_tracer_classification_and_catalog_update(service_config):
                         {
                             "_score": 0.95,
                             "_source": {
-                                "tracerId": 202,
                                 "isNonMatcher": True,
                                 "isFormLanguage": True,
                             },
@@ -152,14 +148,10 @@ def test_tracer_classification_and_catalog_update(service_config):
 
     assert classification == {
         "is_non_matcher": True,
-        "closest_non_matcher": 101,
-        "closest_nn_score": pytest.approx(0.96),
         "is_tracer": False,
         "is_form_language": True,
     }
     assert client.updates[0]["body"]["doc"]["isNonMatcher"] is True
-    assert "closestNonMatcher" not in client.updates[0]["body"]["doc"]
-    assert "closestNnScore" not in client.updates[0]["body"]["doc"]
     filters = client.searches[0]["body"]["query"]["bool"]["filter"]
     assert client.searches[0]["body"]["size"] == 10_000
     assert "isTracer" not in client.searches[0]["body"]["_source"]
@@ -174,8 +166,6 @@ def test_empty_tracer_result_allows_matching(service_config):
         "Asylee",
     ) == {
         "is_non_matcher": False,
-        "closest_non_matcher": None,
-        "closest_nn_score": None,
         "is_tracer": False,
         "is_form_language": False,
     }
@@ -190,7 +180,6 @@ def test_unflagged_tracer_reference_is_derived_as_tracer(service_config):
                         {
                             "_score": 0.97,
                             "_source": {
-                                "tracerId": 303,
                                 "isNonMatcher": False,
                                 "isFormLanguage": False,
                             },
@@ -205,8 +194,6 @@ def test_unflagged_tracer_reference_is_derived_as_tracer(service_config):
         "Refugee",
     ) == {
         "is_non_matcher": False,
-        "closest_non_matcher": 303,
-        "closest_nn_score": pytest.approx(0.94),
         "is_tracer": True,
         "is_form_language": False,
     }

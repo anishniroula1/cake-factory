@@ -118,8 +118,6 @@ class OpenSearchFake:
     def catalog_records(self, catalog_alias, sentence_keys):
         classification = {
             "is_non_matcher": self.non_matcher,
-            "closest_non_matcher": 501 if self.non_matcher else None,
-            "closest_nn_score": 0.95 if self.non_matcher else None,
             "is_tracer": False,
             "is_form_language": False,
         }
@@ -135,8 +133,6 @@ class OpenSearchFake:
     def tracer_classification(self, vector, analysis_group):
         return {
             "is_non_matcher": self.non_matcher,
-            "closest_non_matcher": 501 if self.non_matcher else None,
-            "closest_nn_score": 0.95 if self.non_matcher else None,
             "is_tracer": False,
             "is_form_language": False,
         }

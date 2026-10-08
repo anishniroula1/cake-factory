@@ -80,7 +80,7 @@ class SentencesVector(Base):
         default=False,
     )
     closest_non_matcher: Mapped[int | None] = mapped_column(Integer)
-    closest_nn_score: Mapped[float | None] = mapped_column(Float)
+    closest_nm_score: Mapped[float | None] = mapped_column(Float)
     is_form_language: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

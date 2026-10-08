@@ -103,8 +103,8 @@ class TracerFilteringService:
         """Reuse an allowed decision or search and save a tracer decision."""
 
         saved = record["classification"]
-        # A saved excluded sentence is searched again so sentences_vector gets
-        # the closest tracer ID and score. Allowed sentences can be reused.
+        # A saved excluded sentence is searched again because only the three
+        # catalog flags are reusable. Allowed sentences can be reused.
         if saved is not None and not self.should_skip_sentence_catalog_search(saved):
             return saved
 

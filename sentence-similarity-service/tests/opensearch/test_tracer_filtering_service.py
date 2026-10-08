@@ -49,8 +49,6 @@ def test_every_tracer_catalog_classification_skips_sentence_matching(
 ):
     classification = {
         "is_non_matcher": is_non_matcher,
-        "closest_non_matcher": None,
-        "closest_nn_score": None,
         "is_tracer": is_tracer,
         "is_form_language": is_form_language,
     }

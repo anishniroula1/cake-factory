@@ -94,10 +94,6 @@ class SentenceVectorDBStore:
                     .where(SentencesVector.global_id.in_(id_batch))
                     .values(
                         is_non_matcher=classification["is_non_matcher"],
-                        closest_non_matcher=classification[
-                            "closest_non_matcher"
-                        ],
-                        closest_nn_score=classification["closest_nn_score"],
                         is_tracer=classification["is_tracer"],
                         is_form_language=classification["is_form_language"],
                         last_modified=current_time,

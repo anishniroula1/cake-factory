@@ -28,8 +28,6 @@ class NextQueueMessage(TypedDict):
 
 class Classification(TypedDict):
     is_non_matcher: bool
-    closest_non_matcher: int | None
-    closest_nn_score: float | None
     is_tracer: bool
     is_form_language: bool
 

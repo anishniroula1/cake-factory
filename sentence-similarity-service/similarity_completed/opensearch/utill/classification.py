@@ -9,8 +9,7 @@ def saved_classification(source: dict) -> Classification | None:
         {isNonMatcher: True, isTracer: True, isFormLanguage: False}
 
     Output:
-        The same flags using Python names. Closest ID and score are None
-        because those values exist only in sentences_vector.
+        The same flags using Python names.
 
     Output is None when any flag is missing. That tells Sentence Similarity to
     run the tracer search and complete the classification first.
@@ -21,9 +20,6 @@ def saved_classification(source: dict) -> Classification | None:
         return None
     return {
         "is_non_matcher": bool(source["isNonMatcher"]),
-        # Closest-match details belong to sentences_vector, not this catalog.
-        "closest_non_matcher": None,
-        "closest_nn_score": None,
         "is_tracer": bool(source["isTracer"]),
         "is_form_language": bool(source["isFormLanguage"]),
     }

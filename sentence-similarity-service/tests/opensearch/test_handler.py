@@ -103,8 +103,6 @@ def test_complete_document_flow_saves_bucket_matches_and_publishes(
 ):
     allowed = {
         "is_non_matcher": False,
-        "closest_non_matcher": None,
-        "closest_nn_score": None,
         "is_tracer": False,
         "is_form_language": False,
     }
@@ -203,15 +201,11 @@ def test_non_matcher_skips_catalog_search_without_creating_match_row(
     [
         {
             "is_non_matcher": False,
-            "closest_non_matcher": 501,
-            "closest_nn_score": 0.95,
             "is_tracer": True,
             "is_form_language": False,
         },
         {
             "is_non_matcher": False,
-            "closest_non_matcher": 502,
-            "closest_nn_score": 0.94,
             "is_tracer": False,
             "is_form_language": True,
         },
@@ -273,7 +267,7 @@ def test_missing_classification_is_calculated_and_saved(
     assert len(opensearch.saved_classifications) == 1
 
 
-def test_saved_non_matcher_is_rechecked_for_reference_id_and_score(
+def test_saved_non_matcher_is_rechecked(
     service_config,
     sentence_row,
 ):
@@ -289,8 +283,6 @@ def test_saved_non_matcher_is_rechecked_for_reference_id_and_score(
         sentence_row.sentence_key,
         {
             "is_non_matcher": True,
-            "closest_non_matcher": None,
-            "closest_nn_score": None,
             "is_tracer": False,
             "is_form_language": False,
         },
@@ -302,8 +294,7 @@ def test_saved_non_matcher_is_rechecked_for_reference_id_and_score(
         "Asylee",
     )
 
-    assert classification["closest_non_matcher"] == 501
-    assert classification["closest_nn_score"] == pytest.approx(0.95)
+    assert classification["is_non_matcher"] is True
     assert len(opensearch.saved_classifications) == 1
 
 
