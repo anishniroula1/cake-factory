@@ -19,7 +19,7 @@ def test_non_matcher_skips_catalog_search_without_creating_match_row(service_con
     handler = SentenceSimilarityHandler(service_config, sessions, opensearch, SqsFake(), LoggerFake())
     record = source_record(sentence_row.sentence_key, classification)
 
-    result = handler._process_sentence(sentence_row, "catalog-asylee", record)
+    result = handler._process_sentence(sentence_row, "catalog-asylee", record, 1, 1)
 
     assert result == {"is_non_matcher": True, "saved_relationships": 0}
     assert classification_update.execute.call_count == 1
@@ -40,7 +40,7 @@ def test_tracer_and_form_language_skip_catalog_search(service_config, sentence_r
     opensearch, router = opensearch_mock(sentence_row.sentence_key, tracer_result=classification)
     handler = SentenceSimilarityHandler(service_config, sessions, opensearch, SqsFake(), LoggerFake())
 
-    result = handler._process_sentence(sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key))
+    result = handler._process_sentence(sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key), 1, 1)
 
     assert result == {"is_non_matcher": True, "saved_relationships": 0}
     assert router.semantic_search_count == 0
@@ -53,7 +53,9 @@ def test_missing_classification_is_calculated_and_saved(service_config, sentence
     handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), LoggerFake())
     record = source_record(sentence_row.sentence_key)
 
-    classification = handler.tracer_filtering_service.get_sentence_classification("catalog-asylee", record, "Asylee")
+    classification = handler.tracer_filtering_service.get_sentence_classification(
+        "catalog-asylee", record, "Asylee", sentence_row.global_id
+    )
 
     assert classification["is_non_matcher"] is False
     assert record["classification"] == classification
@@ -66,7 +68,9 @@ def test_saved_non_matcher_is_rechecked(service_config, sentence_row):
     handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), LoggerFake())
     record = source_record(sentence_row.sentence_key, non_matcher)
 
-    classification = handler.tracer_filtering_service.get_sentence_classification("catalog-asylee", record, "Asylee")
+    classification = handler.tracer_filtering_service.get_sentence_classification(
+        "catalog-asylee", record, "Asylee", sentence_row.global_id
+    )
 
     assert classification["is_non_matcher"] is True
     assert len(router.saved_classifications) == 1

@@ -15,10 +15,12 @@ def test_retry_returns_after_temporary_failure(monkeypatch):
         return value
 
     monkeypatch.setattr("similarity_completed.opensearch.retry.time.sleep", lambda value: None)
-    result = retry_operation("work", operation, "done", wait_seconds=5, custom_logger=LoggerFake())
+    logger = LoggerFake()
+    result = retry_operation("work", operation, "done", wait_seconds=5, custom_logger=logger)
 
     assert result == "done"
     assert len(attempts) == 2
+    assert any(level == "info" and "succeeded on attempt 2" in message for level, message in logger.messages)
 
 
 def test_retry_stops_at_limit_and_rejects_bad_limit(monkeypatch):

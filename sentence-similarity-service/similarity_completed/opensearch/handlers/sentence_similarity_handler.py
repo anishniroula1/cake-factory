@@ -100,16 +100,24 @@ class SentenceSimilarityHandler:
                     wait_seconds=self.config.retry_seconds,
                     custom_logger=self.logger,
                 )
-                missing_source_keys = [row.sentence_key for row in rows if row.sentence_key not in source_records]
-                if missing_source_keys:
-                    self.logger.error(
-                        f"Source catalog vectors are missing for sentence keys: {', '.join(missing_source_keys)}."
+                missing_sources = [row for row in rows if row.sentence_key not in source_records]
+                if missing_sources:
+                    missing_details = ", ".join(
+                        f"global_id={row.global_id}, sentence_key={row.sentence_key}" for row in missing_sources
                     )
+                    self.logger.error(f"Source catalog vectors are missing for these sentences: {missing_details}.")
                     return None
 
                 jobs = [
-                    executor.submit(self._process_sentence, row, catalog_alias, source_records[row.sentence_key])
-                    for row in rows
+                    executor.submit(
+                        self._process_sentence,
+                        row,
+                        catalog_alias,
+                        source_records[row.sentence_key],
+                        processed + position,
+                        total,
+                    )
+                    for position, row in enumerate(rows, start=1)
                 ]
                 self.logger.info(f"Processing source sentence batch {batch_number} with {len(rows)} sentence(s).")
                 for job in jobs:
@@ -144,17 +152,26 @@ class SentenceSimilarityHandler:
         }
 
     def _process_sentence(
-        self, source: SentencesVector, catalog_alias: str, source_record: CatalogRecord
+        self,
+        source: SentencesVector,
+        catalog_alias: str,
+        source_record: CatalogRecord,
+        sentence_number: int,
+        total_sentences: int,
     ) -> SentenceResult | None:
         """Classify one source, find eligible occurrences, and save matches."""
 
+        self.logger.info(
+            f"Processing source sentence {sentence_number} of {total_sentences}; global_id={source.global_id}."
+        )
         classification = self.tracer_filtering_service.classify_and_update_source(source, catalog_alias, source_record)
 
         if self.tracer_filtering_service.should_skip_sentence_catalog_search(classification):
+            self._log_completed_source_sentence(source.global_id, sentence_number, total_sentences)
             return {"is_non_matcher": True, "saved_relationships": 0}
 
         key_distances = retry_operation(
-            f"Search sentence catalog for source global ID {source.global_id}",
+            f"Search sentence catalog for source global_id={source.global_id}",
             self.sentence_catalog_open_search_store.search_semantic_matches_by_vector,
             catalog_alias,
             source.sentence_key,
@@ -170,7 +187,13 @@ class SentenceSimilarityHandler:
             return None
 
         saved = self.titan_matches_db_store.save_bidirectional_matches(source, targets)
+        self._log_completed_source_sentence(source.global_id, sentence_number, total_sentences)
         return {"is_non_matcher": False, "saved_relationships": saved}
+
+    def _log_completed_source_sentence(self, global_id: int, sentence_number: int, total_sentences: int) -> None:
+        """Log which source sentence finished and the document progress."""
+
+        self.logger.info(f"Completed source sentence {sentence_number} of {total_sentences}; global_id={global_id}.")
 
     def _wait_for_searchable_occurrences(self, tsp_id: TspId) -> bool:
         """Return whether occurrence rows are searchable after one optional wait."""

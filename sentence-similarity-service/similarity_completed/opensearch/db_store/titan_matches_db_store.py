@@ -51,7 +51,7 @@ class TitanMatchesDBStore:
         saved = 0
         for batch_number, match_batch in enumerate(match_batches, start=1):
             saved += retry_operation(
-                f"Save Titan match batch {batch_number} for source global ID {source.global_id}",
+                f"Save Titan match batch {batch_number} for source global_id={source.global_id}",
                 self._save_match_batch,
                 source,
                 match_batch,

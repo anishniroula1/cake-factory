@@ -27,7 +27,10 @@ def retry_operation[Result](
 
     for attempt in range(1, max_attempts + 1):
         try:
-            return operation(*arguments)
+            result = operation(*arguments)
+            if attempt > 1:
+                custom_logger.info(f"{label} succeeded on attempt {attempt} after {attempt - 1} failed attempt(s).")
+            return result
         except PermanentDataError:
             raise
         except RETRYABLE_ERRORS as error:
