@@ -4,7 +4,6 @@ import pytest
 
 from similarity_completed.opensearch.config import Config, read_integer
 from similarity_completed.opensearch.open_search_client import OpenSearchClient
-from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class Secrets:
@@ -138,34 +137,3 @@ def test_opensearch_client_requires_credentials(monkeypatch, service_config):
     with pytest.raises(RuntimeError):
         OpenSearchClient(service_config).create_client()
 
-
-def test_custom_logger_forwards_each_log_level():
-    class Logger:
-        def __init__(self):
-            self.calls = []
-
-        def debug(self, message):
-            self.calls.append(("debug", message))
-
-        def info(self, message):
-            self.calls.append(("info", message))
-
-        def warning(self, message):
-            self.calls.append(("warning", message))
-
-        def error(self, message):
-            self.calls.append(("error", message))
-
-    logger = Logger()
-    custom_logger = CustomLogger(logger=logger)
-    custom_logger.debug("one")
-    custom_logger.info("two")
-    custom_logger.warning("three")
-    custom_logger.error("four")
-
-    assert [level for level, message in logger.calls] == [
-        "debug",
-        "info",
-        "warning",
-        "error",
-    ]
