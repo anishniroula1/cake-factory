@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from opensearchpy import OpenSearch
 from sqlalchemy.orm import Session
 
-from similarity_completed.opensearch.AwsSQS import AwsSQS
 from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.contracts import (
     CatalogRecord,
@@ -12,16 +11,20 @@ from similarity_completed.opensearch.contracts import (
     SentenceResult,
     TspId,
 )
-from similarity_completed.opensearch.custom_logger import CustomLogger
-from similarity_completed.opensearch.db_store import (
+from similarity_completed.opensearch.db_store.sentence_vector_db_store import (
     SentenceVectorDBStore,
+)
+from similarity_completed.opensearch.db_store.titan_matches_db_store import (
     TitanMatchesDBStore,
 )
 from similarity_completed.opensearch.errors import PermanentDataError
-from similarity_completed.opensearch.models import SentencesVector
-from similarity_completed.opensearch.opensearch_store import (
+from similarity_completed.opensearch.opensearch_store.occurrence_open_search_store import (
     OccurrenceOpenSearchStore,
+)
+from similarity_completed.opensearch.opensearch_store.sentence_catalog_open_search_store import (
     SentenceCatalogOpenSearchStore,
+)
+from similarity_completed.opensearch.opensearch_store.tracer_open_search_store import (
     TracerOpenSearchStore,
 )
 from similarity_completed.opensearch.retry import retry_operation
@@ -29,6 +32,9 @@ from similarity_completed.opensearch.tracer_filtering_service import (
     TracerFilteringService,
 )
 from similarity_completed.opensearch.utill.catalog import select_catalog_alias
+from ta_db_connection.atables import SentencesVector
+from ta_utils.aws.sqs.AwsSQS import AwsSQS
+from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class SentenceSimilarityHandler:

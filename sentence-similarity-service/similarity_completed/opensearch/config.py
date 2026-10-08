@@ -4,7 +4,7 @@ from typing import Self
 
 from dotenv import load_dotenv
 
-from similarity_completed.opensearch.VaultSecrets import VaultSecrets
+from ta_utils.vault.VaultSecrets import VaultSecrets
 
 load_dotenv()
 

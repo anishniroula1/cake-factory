@@ -1,7 +1,7 @@
-from similarity_completed.opensearch.custom_logger import CustomLogger
-from similarity_completed.opensearch.DatabaseConnection import DatabaseConnection
 from similarity_completed.opensearch.dependencies import Dependencies
 from similarity_completed.opensearch.sqs_processor import SqsProcessor
+from ta_db_connection.database_connection import DatabaseConnection
+from ta_utils.logger.CustomLogger import CustomLogger
 
 
 def run_opensearch_flow(

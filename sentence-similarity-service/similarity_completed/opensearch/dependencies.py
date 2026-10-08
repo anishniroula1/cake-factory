@@ -1,13 +1,13 @@
 from sqlalchemy.orm import sessionmaker
 
-from similarity_completed.opensearch.AwsSQS import AwsSQS
 from similarity_completed.opensearch.config import Config
-from similarity_completed.opensearch.custom_logger import CustomLogger
-from similarity_completed.opensearch.DatabaseConnection import DatabaseConnection
 from similarity_completed.opensearch.handlers.sentence_similarity_handler import (
     SentenceSimilarityHandler,
 )
 from similarity_completed.opensearch.open_search_client import OpenSearchClient
+from ta_db_connection.database_connection import DatabaseConnection
+from ta_utils.aws.sqs.AwsSQS import AwsSQS
+from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class Dependencies:

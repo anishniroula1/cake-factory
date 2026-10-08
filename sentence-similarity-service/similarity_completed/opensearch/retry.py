@@ -2,11 +2,11 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from similarity_completed.opensearch.custom_logger import CustomLogger
 from similarity_completed.opensearch.errors import (
     PermanentDataError,
     PermanentMessageError,
 )
+from ta_utils.logger.CustomLogger import CustomLogger
 
 
 def retry_operation[Result](

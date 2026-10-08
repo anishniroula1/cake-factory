@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from similarity_completed.opensearch.config import Config
-from similarity_completed.opensearch.models import SentencesVector, TextSimilarityInput
+from ta_db_connection.atables import SentencesVector, TextSimilarityInput
 
 
 @pytest.fixture

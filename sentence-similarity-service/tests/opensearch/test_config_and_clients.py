@@ -3,8 +3,8 @@ from dataclasses import replace
 import pytest
 
 from similarity_completed.opensearch.config import Config, read_integer
-from similarity_completed.opensearch.custom_logger import CustomLogger
 from similarity_completed.opensearch.open_search_client import OpenSearchClient
+from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class Secrets:

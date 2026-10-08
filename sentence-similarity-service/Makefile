@@ -11,7 +11,7 @@ setup:
 	uv sync --extra dev
 
 test: setup
-	uv run ruff check similarity_completed tests generate_project.py decode_project.py
+	uv run ruff check similarity_completed ta_db_connection ta_utils tests generate_project.py decode_project.py
 	uv run pytest -q
 
 dev:

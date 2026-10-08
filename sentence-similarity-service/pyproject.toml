@@ -25,27 +25,18 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["similarity_completed*"]
+include = ["similarity_completed*", "ta_db_connection*", "ta_utils*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "--cov=similarity_completed.opensearch --cov-report=term-missing --cov-fail-under=95"
 
-[tool.coverage.run]
-omit = [
-  "similarity_completed/opensearch/AwsSQS.py",
-  "similarity_completed/opensearch/DatabaseConnection.py",
-  "similarity_completed/opensearch/VaultSecrets.py",
-  "similarity_completed/opensearch/database.py",
-  "similarity_completed/opensearch/sqs_listener.py",
-]
-
 [tool.ruff]
 line-length = 88
 target-version = "py312"
 
 [tool.ruff.lint.per-file-ignores]
-"similarity_completed/opensearch/AwsSQS.py" = ["N999"]
-"similarity_completed/opensearch/DatabaseConnection.py" = ["N999"]
-"similarity_completed/opensearch/VaultSecrets.py" = ["N999"]
+"ta_utils/aws/sqs/AwsSQS.py" = ["N999"]
+"ta_utils/logger/CustomLogger.py" = ["N999"]
+"ta_utils/vault/VaultSecrets.py" = ["N999"]

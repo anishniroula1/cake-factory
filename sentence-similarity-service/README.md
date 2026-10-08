@@ -69,6 +69,11 @@ The handler only controls the order of database and OpenSearch operations.
 `TracerFilteringService` owns tracer decisions, source classification, target
 classification, and removal of ineligible matches.
 
+The local `ta_utils` and `ta_db_connection` folders copy the import paths used
+by the team libraries. They let this standalone project run by itself. When
+the code is moved into the main service, delete those two local folders and
+the same imports will use the installed libraries.
+
 OpenSearch access is also separated by index under
 `similarity_completed/opensearch/opensearch_store`:
 

@@ -10,13 +10,19 @@ from similarity_completed.opensearch.contracts import (
     TargetOccurrence,
 )
 from similarity_completed.opensearch.errors import PermanentDataError
-from similarity_completed.opensearch.models import SentencesVector
+from ta_db_connection.atables import SentencesVector
 
 if TYPE_CHECKING:
-    from similarity_completed.opensearch.db_store import SentenceVectorDBStore
-    from similarity_completed.opensearch.opensearch_store import (
+    from similarity_completed.opensearch.db_store.sentence_vector_db_store import (
+        SentenceVectorDBStore,
+    )
+    from similarity_completed.opensearch.opensearch_store.occurrence_open_search_store import (
         OccurrenceOpenSearchStore,
+    )
+    from similarity_completed.opensearch.opensearch_store.sentence_catalog_open_search_store import (
         SentenceCatalogOpenSearchStore,
+    )
+    from similarity_completed.opensearch.opensearch_store.tracer_open_search_store import (
         TracerOpenSearchStore,
     )
 
