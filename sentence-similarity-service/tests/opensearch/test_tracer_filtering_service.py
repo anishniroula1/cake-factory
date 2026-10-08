@@ -1,8 +1,7 @@
 import pytest
 
-from similarity_completed.opensearch.utill.filtering import (
-    derive_is_tracer,
-    should_skip_sentence_catalog_search,
+from similarity_completed.opensearch.tracer_filtering_service import (
+    TracerFilteringService,
 )
 
 
@@ -23,7 +22,7 @@ def test_is_tracer_is_derived_from_the_two_reference_flags(
     expected,
 ):
     assert (
-        derive_is_tracer(
+        TracerFilteringService.derive_is_tracer(
             match_found,
             is_non_matcher,
             is_form_language,
@@ -56,4 +55,7 @@ def test_every_tracer_catalog_classification_skips_sentence_matching(
         "is_form_language": is_form_language,
     }
 
-    assert should_skip_sentence_catalog_search(classification) is expected
+    assert (
+        TracerFilteringService.should_skip_sentence_catalog_search(classification)
+        is expected
+    )

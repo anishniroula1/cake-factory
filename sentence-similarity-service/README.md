@@ -55,23 +55,26 @@ PostgreSQL creates the reverse relationship in the same transaction. It also
 calculates `match_count` and `verbatim`. Smaller bucket rows reduce the
 amount of JSONB rewritten and reduce row-lock contention between workers.
 
-The Flyway-ready SQL is in `sql/002_titan_match_buckets.sql`.
+The table and bidirectional upsert function are managed by the shared Flyway
+migration.
 
 Database access is separated by table under
 `similarity_completed/opensearch/db_store`:
 
-- `SentencesVectorStore` loads sentence batches by `tsp_id` and updates
+- `SentenceVectorDBStore` loads sentence batches by `tsp_id` and updates
   classifications by `global_id`.
-- `TitanMatchesStore` saves bidirectional matches through the bucket function.
+- `TitanMatchesDBStore` saves bidirectional matches through the bucket function.
 
 The handler only controls the order of database and OpenSearch operations.
+`TracerFilteringService` owns tracer decisions, source classification, target
+classification, and removal of ineligible matches.
 
 OpenSearch access is also separated by index under
 `similarity_completed/opensearch/opensearch_store`:
 
-- `OccurrenceStore` finds matching occurrences outside the source application.
-- `TracerStore` classifies a sentence using its vector.
-- `SentenceCatalogStore` loads records by sentence key, searches semantic
+- `OccurrenceOpenSearchStore` finds matching occurrences outside the source application.
+- `TracerOpenSearchStore` classifies a sentence using its vector.
+- `SentenceCatalogOpenSearchStore` loads records by sentence key, searches semantic
   matches by vector, and updates reusable classification flags by sentence key.
 
 ## Configuration

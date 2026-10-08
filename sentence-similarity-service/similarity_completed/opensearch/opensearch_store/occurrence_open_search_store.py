@@ -2,7 +2,7 @@ from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.contracts import TargetOccurrence
 
 
-class OccurrenceStore:
+class OccurrenceOpenSearchStore:
     def __init__(self, config: Config, client) -> None:
         """Keep OpenSearch operations for the sentence occurrence index."""
 

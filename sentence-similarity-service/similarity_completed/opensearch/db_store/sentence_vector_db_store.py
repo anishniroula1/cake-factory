@@ -9,7 +9,7 @@ from similarity_completed.opensearch.contracts import Classification, TspId
 from similarity_completed.opensearch.models import SentencesVector, TextSimilarityInput
 
 
-class SentencesVectorStore:
+class SentenceVectorDBStore:
     def __init__(
         self,
         config: Config,

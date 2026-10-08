@@ -22,7 +22,7 @@ SAVE_MATCHES = text(
 ).bindparams(bindparam("matches", type_=JSONB))
 
 
-class TitanMatchesStore:
+class TitanMatchesDBStore:
     def __init__(
         self,
         config: Config,

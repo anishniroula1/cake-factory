@@ -116,6 +116,11 @@ class TitanMatches(Base):
             name="ck_titan_matches_json_object",
         ),
         Index("ix_titan_matches_tsp_id", "tsp_id", "global_id"),
+        Index(
+            "ix_titan_matches_application_id",
+            "application_id",
+            "global_id",
+        ),
         {"extend_existing": True, "schema": "tsp"},
     )
 
@@ -133,6 +138,7 @@ class TitanMatches(Base):
         ForeignKey("tsp.text_similarity_input.tsp_id"),
         nullable=False,
     )
+    application_id = Column(Integer, nullable=False)
     matches = Column(
         JSONB,
         nullable=False,

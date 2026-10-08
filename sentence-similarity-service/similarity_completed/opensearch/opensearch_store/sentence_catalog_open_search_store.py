@@ -11,7 +11,7 @@ from similarity_completed.opensearch.utill.score import (
 from similarity_completed.opensearch.utill.vector import decode_vector, validate_vector
 
 
-class SentenceCatalogStore:
+class SentenceCatalogOpenSearchStore:
     def __init__(self, config: Config, client) -> None:
         """Keep OpenSearch operations for an Asylee or Refugee catalog."""
 

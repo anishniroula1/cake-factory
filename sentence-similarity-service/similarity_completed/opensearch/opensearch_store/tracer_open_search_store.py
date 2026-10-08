@@ -1,8 +1,10 @@
 from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.contracts import Classification
 from similarity_completed.opensearch.errors import PermanentDataError
+from similarity_completed.opensearch.tracer_filtering_service import (
+    TracerFilteringService,
+)
 from similarity_completed.opensearch.utill.constants import VECTOR_FIELD
-from similarity_completed.opensearch.utill.filtering import derive_is_tracer
 from similarity_completed.opensearch.utill.score import (
     cosine_similarity,
     minimum_opensearch_score,
@@ -14,7 +16,7 @@ from similarity_completed.opensearch.utill.vector import validate_vector
 TRACER_RESULT_SIZE = 10_000
 
 
-class TracerStore:
+class TracerOpenSearchStore:
     def __init__(self, config: Config, client) -> None:
         """Keep OpenSearch operations for the tracer/form-language catalog."""
 
@@ -98,7 +100,7 @@ class TracerStore:
             "is_non_matcher": is_non_matcher,
             "closest_non_matcher": closest_non_matcher,
             "closest_nn_score": closest_nn_score,
-            "is_tracer": derive_is_tracer(
+            "is_tracer": TracerFilteringService.derive_is_tracer(
                 tracer_match_found=True,
                 is_non_matcher=is_non_matcher,
                 is_form_language=is_form_language,

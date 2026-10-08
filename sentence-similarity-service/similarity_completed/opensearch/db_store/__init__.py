@@ -1,8 +1,8 @@
-from similarity_completed.opensearch.db_store.sentences_vector_store import (
-    SentencesVectorStore,
+from similarity_completed.opensearch.db_store.sentence_vector_db_store import (
+    SentenceVectorDBStore,
 )
-from similarity_completed.opensearch.db_store.titan_matches_store import (
-    TitanMatchesStore,
+from similarity_completed.opensearch.db_store.titan_matches_db_store import (
+    TitanMatchesDBStore,
 )
 
-__all__ = ["SentencesVectorStore", "TitanMatchesStore"]
+__all__ = ["SentenceVectorDBStore", "TitanMatchesDBStore"]

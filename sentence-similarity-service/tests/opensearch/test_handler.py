@@ -71,27 +71,27 @@ def use_fake_opensearch_queries(monkeypatch):
 
     monkeypatch.setattr(handler_module, "select_catalog_alias", select_alias)
     monkeypatch.setattr(
-        handler_module.SentenceCatalogStore,
+        handler_module.SentenceCatalogOpenSearchStore,
         "load_records_by_sentence_keys",
         load_records_by_sentence_keys,
     )
     monkeypatch.setattr(
-        handler_module.TracerStore,
+        handler_module.TracerOpenSearchStore,
         "classify_sentence_by_vector",
         classify_sentence_by_vector,
     )
     monkeypatch.setattr(
-        handler_module.SentenceCatalogStore,
+        handler_module.SentenceCatalogOpenSearchStore,
         "update_classification_by_sentence_key",
         update_classification_by_sentence_key,
     )
     monkeypatch.setattr(
-        handler_module.SentenceCatalogStore,
+        handler_module.SentenceCatalogOpenSearchStore,
         "search_semantic_matches_by_vector",
         search_semantic_matches_by_vector,
     )
     monkeypatch.setattr(
-        handler_module.OccurrenceStore,
+        handler_module.OccurrenceOpenSearchStore,
         "search_matching_occurrences_outside_application",
         search_matching_occurrences_outside_application,
     )
@@ -263,7 +263,7 @@ def test_missing_classification_is_calculated_and_saved(
     )
     record = source_record(sentence_row.sentence_key)
 
-    classification = handler._classify_sentence(
+    classification = handler.tracer_filtering_service.get_sentence_classification(
         "catalog-asylee",
         record,
         "Asylee",
@@ -297,7 +297,7 @@ def test_saved_non_matcher_is_rechecked_for_reference_id_and_score(
         },
     )
 
-    classification = handler._classify_sentence(
+    classification = handler.tracer_filtering_service.get_sentence_classification(
         "catalog-asylee",
         record,
         "Asylee",
@@ -331,7 +331,7 @@ def test_sentence_count_uses_only_sentences_vector_tsp_id(service_config):
         LoggerFake(),
     )
 
-    assert handler.sentences_vector_store.count_sentences_by_tsp_id(10) == 25
+    assert handler.sentence_vector_db_store.count_sentences_by_tsp_id(10) == 25
     sql = str(count_session.scalar_statements[0])
     assert "JOIN" not in sql.upper()
     assert "is_current" not in sql

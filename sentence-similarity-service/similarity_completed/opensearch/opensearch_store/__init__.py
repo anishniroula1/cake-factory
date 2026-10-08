@@ -1,13 +1,15 @@
-from similarity_completed.opensearch.opensearch_store.occurrence_store import (
-    OccurrenceStore,
+from similarity_completed.opensearch.opensearch_store.occurrence_open_search_store import (
+    OccurrenceOpenSearchStore,
 )
-from similarity_completed.opensearch.opensearch_store.sentence_catalog_store import (
-    SentenceCatalogStore,
+from similarity_completed.opensearch.opensearch_store.sentence_catalog_open_search_store import (
+    SentenceCatalogOpenSearchStore,
 )
-from similarity_completed.opensearch.opensearch_store.tracer_store import TracerStore
+from similarity_completed.opensearch.opensearch_store.tracer_open_search_store import (
+    TracerOpenSearchStore,
+)
 
 __all__ = [
-    "OccurrenceStore",
-    "SentenceCatalogStore",
-    "TracerStore",
+    "OccurrenceOpenSearchStore",
+    "SentenceCatalogOpenSearchStore",
+    "TracerOpenSearchStore",
 ]
