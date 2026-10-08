@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, joinedload, load_only
 
 from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.contracts import Classification, TspId
-from ta_db_connection.atables import SentencesVector, TextSimilarityInput
+from ta_db_connection.atatables import SentencesVector, TextSimilarityInput
 
 
 class SentenceVectorDBStore:

@@ -32,7 +32,7 @@ from similarity_completed.opensearch.tracer_filtering_service import (
     TracerFilteringService,
 )
 from similarity_completed.opensearch.utill.catalog import select_catalog_alias
-from ta_db_connection.atables import SentencesVector
+from ta_db_connection.atatables import SentencesVector
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
 

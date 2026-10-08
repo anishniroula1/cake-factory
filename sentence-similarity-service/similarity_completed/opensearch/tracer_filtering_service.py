@@ -10,7 +10,7 @@ from similarity_completed.opensearch.contracts import (
     TargetOccurrence,
 )
 from similarity_completed.opensearch.errors import PermanentDataError
-from ta_db_connection.atables import SentencesVector
+from ta_db_connection.atatables import SentencesVector
 
 if TYPE_CHECKING:
     from similarity_completed.opensearch.db_store.sentence_vector_db_store import (

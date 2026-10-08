@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.contracts import MatchTarget
-from ta_db_connection.atables import SentencesVector
+from ta_db_connection.atatables import SentencesVector
 
 # PostgreSQL selects one of 16 buckets, creates reverse owner rows, and writes
 # both relationship directions inside the same transaction.
