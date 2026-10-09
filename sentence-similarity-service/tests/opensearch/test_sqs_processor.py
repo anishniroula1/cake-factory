@@ -41,4 +41,5 @@ def test_delete_failure_is_logged_after_success():
     processor._process_message({"tsp_id": 10, "MessageId": "message", "ReceiptHandle": "receipt"})
 
     assert dependencies.sentence_similarity_handler.processed == [10]
+    assert dependencies.logger.generic_messages == ["tsp_id=10"]
     assert any(level == "error" for level, message in dependencies.logger.messages)

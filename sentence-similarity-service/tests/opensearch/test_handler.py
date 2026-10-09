@@ -22,7 +22,7 @@ def test_non_matcher_skips_catalog_search_without_creating_match_row(service_con
 
     result = handler._process_sentence(sentence_row, "catalog-asylee", record)
 
-    assert result == {"is_non_matcher": True, "saved_relationships": 0}
+    assert result == {**classification, "saved_relationships": 0}
     assert classification_update.execute.call_count == 1
     classification_update.begin.assert_called_once_with()
     lock_statement = str(classification_update.scalars.call_args.args[0].compile(dialect=postgresql.dialect()))
@@ -46,7 +46,7 @@ def test_tracer_and_form_language_skip_catalog_search(service_config, sentence_r
 
     result = handler._process_sentence(sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key))
 
-    assert result == {"is_non_matcher": True, "saved_relationships": 0}
+    assert result == {**classification, "saved_relationships": 0}
     assert router.semantic_search_count == 0
     opensearch.update.assert_called_once()
     assert sessions.sessions == []

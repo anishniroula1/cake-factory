@@ -19,3 +19,6 @@ class CustomLogger:
 
     def error(self, message: str) -> None:
         self.logger.error(message)
+
+    def set_generic_message(self, message: str | None) -> None:
+        """Set shared log context when the team logger is available."""

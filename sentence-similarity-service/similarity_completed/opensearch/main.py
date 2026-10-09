@@ -17,6 +17,7 @@ def run_opensearch_flow(
     try:
         processor.run()
     finally:
+        service_dependencies.logger.set_generic_message(None)
         service_dependencies.close()
 
 

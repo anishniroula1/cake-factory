@@ -54,6 +54,8 @@ class MatchTarget(TypedDict):
 
 class SentenceResult(TypedDict):
     is_non_matcher: bool
+    is_tracer: bool
+    is_form_language: bool
     saved_relationships: int
 
 
@@ -62,6 +64,9 @@ class ProcessResult(TypedDict):
     source_count: int
     processed_count: int
     non_matcher_count: int
+    tracer_count: int
+    form_language_count: int
+    matched_sentence_count: int
     saved_relationship_count: int
 
 

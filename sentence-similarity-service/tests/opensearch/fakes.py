@@ -40,6 +40,7 @@ class SessionSequence:
 class LoggerFake:
     def __init__(self):
         self.messages = []
+        self.generic_messages = []
 
     def debug(self, message):
         self.messages.append(("debug", message))
@@ -52,6 +53,9 @@ class LoggerFake:
 
     def error(self, message):
         self.messages.append(("error", message))
+
+    def set_generic_message(self, message):
+        self.generic_messages.append(message)
 
 
 class SqsFake:

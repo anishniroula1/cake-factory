@@ -71,6 +71,9 @@ class SentenceSimilarityHandler:
 
         processed = 0
         non_matchers = 0
+        tracers = 0
+        form_languages = 0
+        matched_sentences = 0
         saved_relationships = 0
         after_global_id = 0
         batch_number = 0
@@ -124,6 +127,9 @@ class SentenceSimilarityHandler:
                         return None
                     processed += 1
                     non_matchers += int(result["is_non_matcher"])
+                    tracers += int(result["is_tracer"])
+                    form_languages += int(result["is_form_language"])
+                    matched_sentences += int(result["saved_relationships"] > 0)
                     saved_relationships += result["saved_relationships"]
 
                 after_global_id = ending_global_id
@@ -140,15 +146,18 @@ class SentenceSimilarityHandler:
             custom_logger=self.logger,
         )
         self.logger.info(
-            f"Sentence Similarity completed {processed} sentence(s), including "
-            f"{non_matchers} non-matcher(s) and {saved_relationships} saved "
-            "relationships."
+            f"Sentence Similarity completed {processed} sentence(s): {matched_sentences} sentence(s) had matches, "
+            f"{saved_relationships} relationship(s) were saved, {tracers} tracer classification(s), "
+            f"{form_languages} form-language classification(s), and {non_matchers} non-matcher classification(s)."
         )
         return {
             "tsp_id": tsp_id,
             "source_count": total,
             "processed_count": processed,
             "non_matcher_count": non_matchers,
+            "tracer_count": tracers,
+            "form_language_count": form_languages,
+            "matched_sentence_count": matched_sentences,
             "saved_relationship_count": saved_relationships,
         }
 
@@ -166,7 +175,12 @@ class SentenceSimilarityHandler:
                 f"is_tracer={classification['is_tracer']}, "
                 f"is_form_language={classification['is_form_language']}."
             )
-            return {"is_non_matcher": True, "saved_relationships": 0}
+            return {
+                "is_non_matcher": classification["is_non_matcher"],
+                "is_tracer": classification["is_tracer"],
+                "is_form_language": classification["is_form_language"],
+                "saved_relationships": 0,
+            }
 
         key_distances = retry_operation(
             f"Search sentence catalog for source global_id={source.global_id}",
@@ -185,7 +199,12 @@ class SentenceSimilarityHandler:
             return None
 
         saved = self.titan_matches_db_store.save_bidirectional_matches(source, targets)
-        return {"is_non_matcher": False, "saved_relationships": saved}
+        return {
+            "is_non_matcher": classification["is_non_matcher"],
+            "is_tracer": classification["is_tracer"],
+            "is_form_language": classification["is_form_language"],
+            "saved_relationships": saved,
+        }
 
     def _wait_for_searchable_occurrences(self, tsp_id: TspId) -> bool:
         """Return whether occurrence rows are searchable after one optional wait."""

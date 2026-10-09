@@ -24,6 +24,7 @@ class SqsProcessor:
             if tsp_id is None:
                 self._leave_message_for_sqs("The SQS message is missing the required tsp_id.")
                 return
+            self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}")
             self.dependencies.logger.info("Starting an SQS document message.")
             result = self.dependencies.sentence_similarity_handler.process(tsp_id)
             if result is None:
