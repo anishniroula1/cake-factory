@@ -41,6 +41,11 @@ class Dependencies:
     def _create_database_connection(self) -> DatabaseConnection:
         """Create the database connection from Vault-backed configuration."""
 
+        credential_arguments = (
+            {"use_dynamic_credential": False}
+            if self.config.environment == "local"
+            else {"dynamic_credentials_file": self.config.dynamic_credential_file}
+        )
         return DatabaseConnection(
             pg_db_user=self.config.pg_db_user,
             pg_db_password=self.config.pg_db_password,
@@ -49,6 +54,6 @@ class Dependencies:
             pg_db_port=self.config.pg_db_port,
             pool_size=self.config.database_pool_size,
             max_overflow=self.config.database_max_overflow,
-            dynamic_credentials_file=(self.config.dynamic_credential_file or None),
             application_name="sentence_similarity",
+            **credential_arguments,
         )

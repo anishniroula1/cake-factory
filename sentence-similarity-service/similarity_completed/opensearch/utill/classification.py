@@ -2,12 +2,6 @@ from similarity_completed.opensearch.contracts import Classification
 from similarity_completed.opensearch.utill.constants import CLASSIFICATION_FIELDS
 
 
-def derive_is_tracer(tracer_match_found: bool, is_non_matcher: bool, is_form_language: bool) -> bool:
-    """Return true when a matched reference is only a tracer sentence."""
-
-    return tracer_match_found and not is_non_matcher and not is_form_language
-
-
 def saved_classification(source: dict) -> Classification | None:
     """Read the three reusable flags from a sentence catalog document.
 

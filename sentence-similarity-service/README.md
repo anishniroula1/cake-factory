@@ -24,17 +24,19 @@ Receive one SQS message with tsp_id
 ```
 
 The tracer table and tracer index do not contain `is_tracer`. Sentence
-Similarity derives it after a tracer-catalog hit:
+Similarity reads the top-K tracer results, keeps only results at or above 70%,
+and combines the result types:
 
 ```text
-is_non_matcher=false and is_form_language=false -> is_tracer=true
-is_non_matcher=true                              -> skip sentence matching
-is_form_language=true                            -> skip sentence matching
-no tracer-catalog hit                            -> search sentence catalog
+one result with both flags false -> is_tracer=true
+any result with is_non_matcher   -> is_non_matcher=true
+any result with is_form_language -> is_form_language=true
+no result at or above 70%        -> search sentence catalog
 ```
 
-Every tracer-catalog hit skips the normal sentence-catalog search. The search
-continues only when the tracer catalog returns no result.
+The three flags are independent. They can all be true when different qualifying
+tracer results represent all three types. Any true flag skips the normal
+sentence-catalog search.
 
 ## Titan match buckets
 

@@ -12,27 +12,35 @@ load_dotenv()
 
 # These values are the same in every environment. Keep them here instead of
 # adding environment variables that every deployment would set to the same value.
+
+# Database
 DATABASE_POOL_SIZE = 30
-DATABASE_MAX_OVERFLOW = 10
+DATABASE_MAX_OVERFLOW = 10  # Temporary connections allowed when the pool is busy.
+TITAN_MATCH_WRITE_BATCH_SIZE = 500
+DATABASE_CLASSIFICATION_BATCH_SIZE = 1000
+
+# OpenSearch
 OPENSEARCH_PORT = 443
-OPENSEARCH_SERVICE = "es"
-OCCURRENCE_ALIAS = "sentence_occurrences"
+OPENSEARCH_SERVICE = "es"  # AWS service name used to sign OpenSearch requests.
+SENTENCE_OCCURRENCE_ALIAS = "sentence_occurrences"
 ASYLEE_CATALOG_ALIAS = "sentence_semantic_catalog_asylee"
 REFUGEE_CATALOG_ALIAS = "sentence_semantic_catalog_refugee"
 TRACER_ALIAS = "tracer_form_language_catalog"
-SOURCE_SENTENCE_BATCH_SIZE = 30
-THREAD_WORKER_COUNT = 30
-TITAN_MATCH_WRITE_BATCH_SIZE = 500  # Matches sent to PostgreSQL per function call.
-OPENSEARCH_TERMS_BATCH_SIZE = 1_000  # Keys or hits handled per search request.
-DATABASE_CLASSIFICATION_BATCH_SIZE = 1_000  # Sentence rows updated per SQL call.
-RETRY_SECONDS = 5
-OCCURRENCE_READINESS_WAIT_SECONDS = 30
+OPENSEARCH_TERMS_BATCH_SIZE = 1000  # Keys or hits handled per OpenSearch page.
 VECTOR_DIMENSION = 512
-MATCH_THRESHOLD = 76
-TRACER_THRESHOLD = 70
-IVF_NPROBES = 64
+MATCH_THRESHOLD = 76  # Minimum sentence-catalog similarity percentage.
+TRACER_THRESHOLD = 70  # Minimum tracer-catalog classification percentage.
+IVF_NPROBES = 64  # IVF clusters searched by each sentence-catalog query.
+
+# Processing
+SOURCE_SENTENCE_BATCH_SIZE = 30  # Source sentences loaded from PostgreSQL per page.
+THREAD_WORKER_COUNT = 30  # Source sentences processed at the same time.
+RETRY_SECONDS = 5  # Seconds to wait before retrying a failed operation.
+OCCURRENCE_READINESS_WAIT_SECONDS = 30  # One-time wait for newly indexed occurrences.
+
+# SQS
 SQS_WAIT_SECONDS = 10
-SQS_VISIBILITY_SECONDS = 7_200
+SQS_VISIBILITY_SECONDS = 7200  # Two-hour message visibility timeout.
 
 
 def _aws_hostname(value: str) -> str:
@@ -57,6 +65,7 @@ class Config:
     database_pool_size: int
     database_max_overflow: int
     dynamic_credential_file: str
+    environment: str
 
     # OpenSearch
     aws_region: str
@@ -103,6 +112,7 @@ class Config:
             database_pool_size=DATABASE_POOL_SIZE,
             database_max_overflow=DATABASE_MAX_OVERFLOW,
             dynamic_credential_file=os.getenv("VAULT_YAML_PATH", "").strip(),
+            environment=(os.getenv("ENVIRONMENT", "local").strip().lower() or "local"),
             # OpenSearch resources
             aws_region=os.getenv("AWS_DEFAULT_REGION", "us-east-1").strip(),
             aws_local_endpoint_url=os.getenv("AWS_LOCAL_ENDPOINT_URL", "").strip(),
@@ -110,7 +120,7 @@ class Config:
             opensearch_host=_aws_hostname(os.getenv("OPENSEARCH_HOST", "").strip()),
             opensearch_port=OPENSEARCH_PORT,
             opensearch_service=OPENSEARCH_SERVICE,
-            occurrence_alias=OCCURRENCE_ALIAS,
+            occurrence_alias=SENTENCE_OCCURRENCE_ALIAS,
             asylee_catalog_alias=ASYLEE_CATALOG_ALIAS,
             refugee_catalog_alias=REFUGEE_CATALOG_ALIAS,
             tracer_alias=TRACER_ALIAS,
@@ -147,6 +157,8 @@ class Config:
             raise ValueError("pgDatabase is required in Vault")
         if not self.pg_db_port:
             raise ValueError("pgPort is required in Vault")
+        if self.environment != "local" and not self.dynamic_credential_file:
+            raise ValueError("VAULT_YAML_PATH is required outside the local environment")
         if self.opensearch_iam_access_role and not self.opensearch_iam_access_role.startswith("arn:"):
             raise ValueError("OPENSEARCH_IAM_ACCESS_ROLE must be an ARN")
         if not self.opensearch_host:

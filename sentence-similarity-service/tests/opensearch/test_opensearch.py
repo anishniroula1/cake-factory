@@ -87,6 +87,8 @@ def test_tracer_classification_and_catalog_update(service_config):
                     "hits": [
                         {"_score": 0.98, "_source": {"isNonMatcher": True, "isFormLanguage": False}},
                         {"_score": 0.95, "_source": {"isNonMatcher": True, "isFormLanguage": True}},
+                        {"_score": 0.90, "_source": {"isNonMatcher": False, "isFormLanguage": False}},
+                        {"_score": 0.84, "_source": {"isNonMatcher": False, "isFormLanguage": True}},
                     ]
                 }
             }
@@ -97,10 +99,13 @@ def test_tracer_classification_and_catalog_update(service_config):
         "catalog-asylee", "a" * 64, classification
     )
 
-    assert classification == {"is_non_matcher": True, "is_tracer": False, "is_form_language": True}
+    assert classification == {"is_non_matcher": True, "is_tracer": True, "is_form_language": True}
     assert client.updates[0]["body"]["doc"]["isNonMatcher"] is True
     filters = client.searches[0]["body"]["query"]["bool"]["filter"]
-    assert client.searches[0]["body"]["size"] == 10_000
+    assert client.searches[0]["body"]["size"] == 100
+    knn = client.searches[0]["body"]["query"]["bool"]["must"][0]["knn"]["sentenceContentVector"]
+    assert knn["k"] == 100
+    assert "min_score" not in knn
     assert "isTracer" not in client.searches[0]["body"]["_source"]
     assert {"term": {"analysisGroup": "Asylee"}} in filters
     assert {"term": {"isNonMatcher": True}} not in filters

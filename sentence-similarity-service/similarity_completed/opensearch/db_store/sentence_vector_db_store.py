@@ -1,5 +1,4 @@
 from collections.abc import Callable
-from datetime import UTC, datetime
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, joinedload, load_only
@@ -61,7 +60,6 @@ class SentenceVectorDBStore:
         if not global_ids:
             return
 
-        current_time = datetime.now(UTC)
         batch_size = self.config.database_classification_batch_size
         for offset in range(0, len(global_ids), batch_size):
             id_batch = global_ids[offset : offset + batch_size]
@@ -73,7 +71,7 @@ class SentenceVectorDBStore:
                         is_non_matcher=classification["is_non_matcher"],
                         is_tracer=classification["is_tracer"],
                         is_form_language=classification["is_form_language"],
-                        last_modified=current_time,
+                        last_modified=func.now(),
                     )
                 )
                 session.execute(statement)

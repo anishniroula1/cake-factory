@@ -1,13 +1,12 @@
 from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.contracts import Classification
-from similarity_completed.opensearch.utill.classification import derive_is_tracer
 from similarity_completed.opensearch.utill.constants import VECTOR_FIELD
-from similarity_completed.opensearch.utill.score import minimum_opensearch_score
+from similarity_completed.opensearch.utill.score import cosine_similarity
 from similarity_completed.opensearch.utill.vector import validate_vector
 
-# The tracer catalog currently has about 4,000 rows. This size returns every
-# reference meeting the threshold without needing another result page.
-TRACER_RESULT_SIZE = 10_000
+# Search the 100 closest tracer references. Only results meeting the configured
+# 70% similarity threshold contribute to the sentence classification.
+TRACER_TOP_K = 100
 
 
 class TracerOpenSearchStore:
@@ -21,46 +20,39 @@ class TracerOpenSearchStore:
         """Classify one sentence using matching tracer references.
 
         Input: analysis_group=Asylee and vector=[512 Titan values]
-        Output: the closest reference and the combined classification flags.
+        Output: flags combined from every top-K result meeting the configured
+        70% similarity threshold. Different hits can make all flags true.
         """
 
         validate_vector(vector, self.config.vector_dimension)
         response = self.client.search(
             index=self.config.tracer_alias,
             body={
-                "size": TRACER_RESULT_SIZE,
+                "size": TRACER_TOP_K,
                 "track_total_hits": False,
                 "_source": ["isNonMatcher", "isFormLanguage"],
                 "query": {
                     "bool": {
                         "filter": [{"term": {"analysisGroup": analysis_group}}],
-                        "must": [
-                            {
-                                "knn": {
-                                    VECTOR_FIELD: {
-                                        "vector": vector,
-                                        "min_score": minimum_opensearch_score(self.config.tracer_threshold),
-                                    }
-                                }
-                            }
-                        ],
+                        "must": [{"knn": {VECTOR_FIELD: {"vector": vector, "k": TRACER_TOP_K}}}],
                     }
                 },
             },
         )
-        hits = response["hits"]["hits"]
-        if not hits:
+        minimum_similarity = self.config.tracer_threshold / 100.0
+        qualifying_hits = [
+            hit for hit in response["hits"]["hits"] if cosine_similarity(float(hit["_score"])) >= minimum_similarity
+        ]
+        if not qualifying_hits:
             return {"is_non_matcher": False, "is_tracer": False, "is_form_language": False}
 
-        # Every hit contributes isNonMatcher and isFormLanguage. The tracer
-        # table has no isTracer field, so the filtering helper derives it from
-        # those two flags.
-        is_non_matcher = any(bool(hit.get("_source", {}).get("isNonMatcher")) for hit in hits)
-        is_form_language = any(bool(hit.get("_source", {}).get("isFormLanguage")) for hit in hits)
-        return {
-            "is_non_matcher": is_non_matcher,
-            "is_tracer": derive_is_tracer(
-                tracer_match_found=True, is_non_matcher=is_non_matcher, is_form_language=is_form_language
-            ),
-            "is_form_language": is_form_language,
-        }
+        # Each qualifying result contributes its own type. For example, one
+        # hit can be a tracer, a second can be a non-matcher, and a third can
+        # be form language. In that case all three returned flags are true.
+        sources = [hit.get("_source", {}) for hit in qualifying_hits]
+        is_non_matcher = any(bool(source.get("isNonMatcher")) for source in sources)
+        is_form_language = any(bool(source.get("isFormLanguage")) for source in sources)
+        is_tracer = any(
+            not bool(source.get("isNonMatcher")) and not bool(source.get("isFormLanguage")) for source in sources
+        )
+        return {"is_non_matcher": is_non_matcher, "is_tracer": is_tracer, "is_form_language": is_form_language}

@@ -17,7 +17,7 @@ class AwsSQS:
         max_number_of_messages: int = 1,
         wait_time: int = 20,
         logger=None,
-        visibility_timeout: int = 7_200,
+        visibility_timeout: int = 7200,
     ) -> None:
         """Create the SQS wrapper shared by real-time and backfill pods."""
 

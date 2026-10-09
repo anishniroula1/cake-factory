@@ -43,6 +43,7 @@ class MissingCredentialsSession:
 
 
 def required_environment(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "local")
     monkeypatch.setenv("OPENSEARCH_HOST", "https://search.example.com/")
     monkeypatch.setenv("AWS_LOCAL_ENDPOINT_URL", "http://localhost:4566")
     monkeypatch.setenv("AWS_RECEIVE_SQS_ENDPOINT", "source.fifo")
@@ -63,6 +64,7 @@ def test_config_reads_service_defaults(monkeypatch):
     assert config.vector_dimension == 512
     assert config.database_pool_size == 30
     assert config.database_max_overflow == 10
+    assert config.environment == "local"
     assert config.opensearch_host == "search.example.com"
     assert config.occurrence_alias == "sentence_occurrences"
     assert config.asylee_catalog_alias == "sentence_semantic_catalog_asylee"
@@ -74,7 +76,7 @@ def test_config_reads_service_defaults(monkeypatch):
     assert config.match_threshold == 76
     assert config.tracer_threshold == 70
     assert config.ivf_nprobes == 64
-    assert config.sqs_visibility_seconds == 7_200
+    assert config.sqs_visibility_seconds == 7200
 
     invalid_values = [
         replace(config, pg_db_user=""),
@@ -82,6 +84,7 @@ def test_config_reads_service_defaults(monkeypatch):
         replace(config, pg_db_host=""),
         replace(config, pg_db_database=""),
         replace(config, pg_db_port=0),
+        replace(config, environment="int", dynamic_credential_file=""),
         replace(config, opensearch_iam_access_role="not-an-arn"),
         replace(config, opensearch_host=""),
         replace(config, receive_sqs_endpoint=""),

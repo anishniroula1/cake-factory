@@ -17,6 +17,7 @@ def service_config():
         database_pool_size=30,
         database_max_overflow=10,
         dynamic_credential_file="",
+        environment="local",
         aws_region="us-east-1",
         aws_local_endpoint_url="",
         opensearch_iam_access_role="",
@@ -34,12 +35,12 @@ def service_config():
         receive_sqs_endpoint="source.fifo",
         sent_sqs_endpoint="next.fifo",
         sqs_wait_seconds=10,
-        sqs_visibility_seconds=7_200,
+        sqs_visibility_seconds=7200,
         source_sentence_batch_size=30,
         thread_worker_count=1,
         titan_match_write_batch_size=500,
-        opensearch_terms_batch_size=1_000,
-        database_classification_batch_size=1_000,
+        opensearch_terms_batch_size=1000,
+        database_classification_batch_size=1000,
         retry_seconds=0,
     )
 

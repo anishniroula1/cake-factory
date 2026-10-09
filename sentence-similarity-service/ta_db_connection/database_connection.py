@@ -11,11 +11,13 @@ class DatabaseConnection:
         pg_db_port: int = 5432,
         pool_size: int = 30,
         max_overflow: int = 10,
+        use_dynamic_credential: bool = True,
         dynamic_credentials_file: str | None = None,
         application_name: str = "sentence_similarity",
     ) -> None:
         """Create the PostgreSQL connection pool used by sentence workers."""
 
+        self.use_dynamic_credential = use_dynamic_credential
         self.dynamic_credentials_file = dynamic_credentials_file
         connection_string = URL.create(
             "postgresql+psycopg",
@@ -29,7 +31,7 @@ class DatabaseConnection:
             connection_string,
             pool_size=pool_size,
             pool_pre_ping=True,
-            pool_recycle=1_800,
+            pool_recycle=1800,
             max_overflow=max_overflow,
             future=True,
             connect_args={"application_name": application_name},
