@@ -59,8 +59,8 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
         logger=custom_logger,
         visibility_timeout=0,
     )
-    source_update = session_mock()
-    target_update = session_mock()
+    source_update = session_mock(rows=[100])
+    target_update = session_mock(rows=[200])
     match_write = session_mock(execute_value=1)
     sessions = SessionSequence(
         [
@@ -87,8 +87,8 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
     next_message = sqs_client.receive_message(QueueUrl=next_queue_url, WaitTimeSeconds=0)["Messages"][0]
     assert json.loads(next_message["Body"]) == {"tsp_id": 10}
 
-    source_update.commit.assert_called_once_with()
-    target_update.commit.assert_called_once_with()
+    source_update.begin.assert_called_once_with()
+    target_update.begin.assert_called_once_with()
     match_write.commit.assert_called_once_with()
     parameters = match_write.execute.call_args.args[1]
     assert parameters["source_global_id"] == 100

@@ -11,7 +11,7 @@ def source_record(sentence_key, classification=None):
 
 def test_non_matcher_skips_catalog_search_without_creating_match_row(service_config, sentence_row):
     classification = {"is_non_matcher": True, "is_tracer": False, "is_form_language": False}
-    classification_update = session_mock()
+    classification_update = session_mock(rows=[sentence_row.global_id])
     sessions = SessionSequence([classification_update])
     opensearch, router = opensearch_mock(
         sentence_row.sentence_key, saved_classification=classification, tracer_result=classification
@@ -19,11 +19,14 @@ def test_non_matcher_skips_catalog_search_without_creating_match_row(service_con
     handler = SentenceSimilarityHandler(service_config, sessions, opensearch, SqsFake(), LoggerFake())
     record = source_record(sentence_row.sentence_key, classification)
 
-    result = handler._process_sentence(sentence_row, "catalog-asylee", record, 1, 1)
+    result = handler._process_sentence(sentence_row, "catalog-asylee", record)
 
     assert result == {"is_non_matcher": True, "saved_relationships": 0}
     assert classification_update.execute.call_count == 1
-    classification_update.commit.assert_called_once_with()
+    classification_update.begin.assert_called_once_with()
+    lock_statement = str(classification_update.scalars.call_args.args[0])
+    assert "ORDER BY" in lock_statement
+    assert "FOR UPDATE" in lock_statement
     assert router.semantic_search_count == 0
     assert sessions.sessions == []
 
@@ -36,11 +39,11 @@ def test_non_matcher_skips_catalog_search_without_creating_match_row(service_con
     ],
 )
 def test_tracer_and_form_language_skip_catalog_search(service_config, sentence_row, classification):
-    sessions = SessionSequence([session_mock()])
+    sessions = SessionSequence([session_mock(rows=[sentence_row.global_id])])
     opensearch, router = opensearch_mock(sentence_row.sentence_key, tracer_result=classification)
     handler = SentenceSimilarityHandler(service_config, sessions, opensearch, SqsFake(), LoggerFake())
 
-    result = handler._process_sentence(sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key), 1, 1)
+    result = handler._process_sentence(sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key))
 
     assert result == {"is_non_matcher": True, "saved_relationships": 0}
     assert router.semantic_search_count == 0

@@ -109,17 +109,15 @@ class SentenceSimilarityHandler:
                     return None
 
                 jobs = [
-                    executor.submit(
-                        self._process_sentence,
-                        row,
-                        catalog_alias,
-                        source_records[row.sentence_key],
-                        processed + position,
-                        total,
-                    )
-                    for position, row in enumerate(rows, start=1)
+                    executor.submit(self._process_sentence, row, catalog_alias, source_records[row.sentence_key])
+                    for row in rows
                 ]
-                self.logger.info(f"Processing source sentence batch {batch_number} with {len(rows)} sentence(s).")
+                starting_global_id = rows[0].global_id
+                ending_global_id = rows[-1].global_id
+                self.logger.info(
+                    f"Processing source sentence batch {batch_number} with {len(rows)} sentence(s); "
+                    f"starting_global_id={starting_global_id}, ending_global_id={ending_global_id}."
+                )
                 for job in jobs:
                     result = job.result()
                     if result is None:
@@ -128,8 +126,11 @@ class SentenceSimilarityHandler:
                     non_matchers += int(result["is_non_matcher"])
                     saved_relationships += result["saved_relationships"]
 
-                after_global_id = rows[-1].global_id
-                self.logger.info(f"Completed source sentence batch {batch_number} with {len(rows)} sentence(s).")
+                after_global_id = ending_global_id
+                self.logger.info(
+                    f"Completed source sentence batch {batch_number} with {len(rows)} sentence(s); "
+                    f"starting_global_id={starting_global_id}, ending_global_id={ending_global_id}."
+                )
 
         retry_operation(
             "Send completed document to the next queue",
@@ -152,22 +153,19 @@ class SentenceSimilarityHandler:
         }
 
     def _process_sentence(
-        self,
-        source: SentencesVector,
-        catalog_alias: str,
-        source_record: CatalogRecord,
-        sentence_number: int,
-        total_sentences: int,
+        self, source: SentencesVector, catalog_alias: str, source_record: CatalogRecord
     ) -> SentenceResult | None:
         """Classify one source, find eligible occurrences, and save matches."""
 
-        self.logger.info(
-            f"Processing source sentence {sentence_number} of {total_sentences}; global_id={source.global_id}."
-        )
         classification = self.tracer_filtering_service.classify_and_update_source(source, catalog_alias, source_record)
 
         if self.tracer_filtering_service.should_skip_sentence_catalog_search(classification):
-            self._log_completed_source_sentence(source.global_id, sentence_number, total_sentences)
+            self.logger.info(
+                f"Skipping sentence-catalog matching for global_id={source.global_id}; "
+                f"is_non_matcher={classification['is_non_matcher']}, "
+                f"is_tracer={classification['is_tracer']}, "
+                f"is_form_language={classification['is_form_language']}."
+            )
             return {"is_non_matcher": True, "saved_relationships": 0}
 
         key_distances = retry_operation(
@@ -187,13 +185,7 @@ class SentenceSimilarityHandler:
             return None
 
         saved = self.titan_matches_db_store.save_bidirectional_matches(source, targets)
-        self._log_completed_source_sentence(source.global_id, sentence_number, total_sentences)
         return {"is_non_matcher": False, "saved_relationships": saved}
-
-    def _log_completed_source_sentence(self, global_id: int, sentence_number: int, total_sentences: int) -> None:
-        """Log which source sentence finished and the document progress."""
-
-        self.logger.info(f"Completed source sentence {sentence_number} of {total_sentences}; global_id={global_id}.")
 
     def _wait_for_searchable_occurrences(self, tsp_id: TspId) -> bool:
         """Return whether occurrence rows are searchable after one optional wait."""

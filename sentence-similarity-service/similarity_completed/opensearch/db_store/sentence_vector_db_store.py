@@ -60,13 +60,27 @@ class SentenceVectorDBStore:
         if not global_ids:
             return
 
+        # Every worker locks the same rows from the smallest global_id to the
+        # largest. This prevents workers from waiting on each other in a cycle.
+        ordered_global_ids = sorted(set(global_ids))
         batch_size = self.config.database_classification_batch_size
-        for offset in range(0, len(global_ids), batch_size):
-            id_batch = global_ids[offset : offset + batch_size]
-            with self.session_factory() as session:
+        for offset in range(0, len(ordered_global_ids), batch_size):
+            id_batch = ordered_global_ids[offset : offset + batch_size]
+            with self.session_factory() as session, session.begin():
+                locked_global_ids = list(
+                    session.scalars(
+                        select(SentencesVector.global_id)
+                        .where(SentencesVector.global_id.in_(id_batch))
+                        .order_by(SentencesVector.global_id)
+                        .with_for_update()
+                    )
+                )
+                if not locked_global_ids:
+                    continue
+
                 statement = (
                     update(SentencesVector)
-                    .where(SentencesVector.global_id.in_(id_batch))
+                    .where(SentencesVector.global_id.in_(locked_global_ids))
                     .values(
                         is_non_matcher=classification["is_non_matcher"],
                         is_tracer=classification["is_tracer"],
@@ -75,4 +89,3 @@ class SentenceVectorDBStore:
                     )
                 )
                 session.execute(statement)
-                session.commit()
