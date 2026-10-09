@@ -1,4 +1,5 @@
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from similarity_completed.opensearch.handlers import sentence_similarity_handler as handler_module
 from similarity_completed.opensearch.handlers.sentence_similarity_handler import SentenceSimilarityHandler
@@ -24,9 +25,9 @@ def test_non_matcher_skips_catalog_search_without_creating_match_row(service_con
     assert result == {"is_non_matcher": True, "saved_relationships": 0}
     assert classification_update.execute.call_count == 1
     classification_update.begin.assert_called_once_with()
-    lock_statement = str(classification_update.scalars.call_args.args[0])
+    lock_statement = str(classification_update.scalars.call_args.args[0].compile(dialect=postgresql.dialect()))
     assert "ORDER BY" in lock_statement
-    assert "FOR UPDATE" in lock_statement
+    assert "FOR NO KEY UPDATE" in lock_statement
     assert router.semantic_search_count == 0
     assert sessions.sessions == []
 

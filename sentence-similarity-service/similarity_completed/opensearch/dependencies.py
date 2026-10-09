@@ -42,7 +42,7 @@ class Dependencies:
         """Create the database connection from Vault-backed configuration."""
 
         credential_arguments = (
-            {"use_dynamic_credential": False}
+            {"use_dynamic_credentials": False}
             if self.config.environment == "local"
             else {"dynamic_credentials_file": self.config.dynamic_credential_file}
         )

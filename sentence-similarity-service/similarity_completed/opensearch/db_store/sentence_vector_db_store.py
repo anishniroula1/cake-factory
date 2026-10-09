@@ -61,7 +61,8 @@ class SentenceVectorDBStore:
             return
 
         # Every worker locks the same rows from the smallest global_id to the
-        # largest. This prevents workers from waiting on each other in a cycle.
+        # largest. FOR NO KEY UPDATE keeps classification writers ordered but
+        # stays compatible with foreign-key checks made by titan_matches.
         ordered_global_ids = sorted(set(global_ids))
         batch_size = self.config.database_classification_batch_size
         for offset in range(0, len(ordered_global_ids), batch_size):
@@ -72,7 +73,7 @@ class SentenceVectorDBStore:
                         select(SentencesVector.global_id)
                         .where(SentencesVector.global_id.in_(id_batch))
                         .order_by(SentencesVector.global_id)
-                        .with_for_update()
+                        .with_for_update(key_share=True)
                     )
                 )
                 if not locked_global_ids:

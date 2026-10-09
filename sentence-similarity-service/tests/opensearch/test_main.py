@@ -46,8 +46,7 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
     sqs_client = boto3.client("sqs", region_name="us-east-1")
     source_queue_url = sqs_client.create_queue(QueueName="sentence-similarity-local")["QueueUrl"]
     next_queue_url = sqs_client.create_queue(
-        QueueName="sentence-transform-local.fifo",
-        Attributes={"FifoQueue": "true", "ContentBasedDeduplication": "true"},
+        QueueName="sentence-transform-local.fifo", Attributes={"FifoQueue": "true", "ContentBasedDeduplication": "true"}
     )["QueueUrl"]
     sqs_client.send_message(QueueUrl=source_queue_url, MessageBody=json.dumps({"tsp_id": 10}))
 
