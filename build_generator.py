@@ -2,17 +2,17 @@
 
 Run this file from the workspace root and pass the project folder:
 
-    uv run python build_generator.py sentence-similarity-service
+    python3 build_generator.py sentence-similarity-service
 
 An absolute path also works:
 
-    uv run python build_generator.py /path/to/my-project
+    python3 build_generator.py /path/to/my-project
 
 The command creates or replaces generate_project.py inside the selected
 project. Copy that generated file anywhere and run it to recreate the project:
 
-    uv run python generate_project.py
-    uv run python generate_project.py /optional/destination
+    python3 generate_project.py
+    python3 generate_project.py /optional/destination
 
 The real .env file is never included. When .env.example exists, its safe
 contents become .env in the recreated project.
@@ -34,7 +34,9 @@ EXCLUDED_NAMES = {
     ".venv",
     "__pycache__",
     "build_generator.py",
+    "build_word_generator.py",
     "generate_project.py",
+    "generate_word_project.py",
 }
 
 
@@ -58,7 +60,9 @@ def read_project_files(project_root: Path) -> dict[str, str]:
         try:
             files[relative_path.as_posix()] = path.read_text(encoding="utf-8")
         except UnicodeDecodeError as error:
-            raise ValueError(f"{relative_path} is not a text file and cannot be embedded") from error
+            raise ValueError(
+                f"{relative_path} is not a text file and cannot be embedded"
+            ) from error
 
     env_example = project_root / ".env.example"
     if env_example.exists():
@@ -77,7 +81,9 @@ def build_generator(project_root: Path) -> Path:
     project_json = json.dumps(project_files, sort_keys=True, separators=(",", ":"))
     compressed = zlib.compress(project_json.encode("utf-8"), level=9)
     encoded = base64.b64encode(compressed).decode("ascii")
-    encoded_parts = "".join(f"    {part!r}\n" for part in textwrap.wrap(encoded, width=100))
+    encoded_parts = "".join(
+        f"    {part!r}\n" for part in textwrap.wrap(encoded, width=100)
+    )
 
     generator_code = f'''import base64
 import json
@@ -134,7 +140,7 @@ def main() -> None:
     """Validate the requested folder and build its generator."""
 
     if len(sys.argv) != 2:
-        raise SystemExit("Usage: uv run python build_generator.py PROJECT_FOLDER")
+        raise SystemExit("Usage: python3 build_generator.py PROJECT_FOLDER")
 
     project_root = Path(sys.argv[1]).expanduser().resolve()
     if not project_root.is_dir():
