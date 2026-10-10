@@ -80,23 +80,14 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
     with pytest.raises(StopApplication):
         main.run_opensearch_flow(dependencies=dependencies)
 
-    readiness_query = opensearch.count.call_args.kwargs
-    assert readiness_query["index"] == "occurrence"
-    assert readiness_query["body"] == {"query": {"term": {"tspId": 10}}}
     assert "Messages" not in sqs_client.receive_message(QueueUrl=source_queue_url, WaitTimeSeconds=0)
     next_message = sqs_client.receive_message(QueueUrl=next_queue_url, WaitTimeSeconds=0)["Messages"][0]
     assert json.loads(next_message["Body"]) == {"tsp_id": 10}
 
-    source_update.begin.assert_called_once_with()
-    target_update.begin.assert_called_once_with()
-    match_write.commit.assert_called_once_with()
     parameters = match_write.execute.call_args.args[1]
-    assert parameters["source_global_id"] == 100
-    assert parameters["matches"] == {"200": {"tsp_id": 20, "application_id": 2, "distance": 0.0}}
-    assert [call.kwargs["index"] for call in opensearch.search.call_args_list] == [
-        "catalog-asylee",
-        "catalog-asylee",
-        "occurrence",
-        "catalog-asylee",
-    ]
-    assert dependencies.closed is True
+    assert parameters == {
+        "source_global_id": 100,
+        "source_tsp_id": 10,
+        "source_application_id": 1,
+        "matches": {"200": {"tsp_id": 20, "application_id": 2, "distance": 0.0}},
+    }

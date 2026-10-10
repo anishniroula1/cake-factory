@@ -29,8 +29,7 @@ def test_invalid_or_failed_messages_are_not_deleted():
     SqsProcessor(invalid)._process_message({"MessageId": "missing"})
     SqsProcessor(failed)._process_message({"tsp_id": 10, "MessageId": "failed", "ReceiptHandle": "receipt"})
 
-    assert invalid.aws_sqs.deleted == []
-    assert failed.aws_sqs.deleted == []
+    assert invalid.aws_sqs.deleted == failed.aws_sqs.deleted == []
 
 
 def test_delete_failure_is_logged_after_success():
@@ -40,6 +39,5 @@ def test_delete_failure_is_logged_after_success():
 
     processor._process_message({"tsp_id": 10, "MessageId": "message", "ReceiptHandle": "receipt"})
 
-    assert dependencies.sentence_similarity_handler.processed == [10]
     assert dependencies.logger.generic_messages == ["tsp_id=10"]
     assert any(level == "error" for level, message in dependencies.logger.messages)

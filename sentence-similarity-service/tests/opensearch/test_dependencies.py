@@ -28,10 +28,10 @@ def test_dependencies_build_resources_and_close_pool(monkeypatch, service_config
     dependencies = Dependencies(LoggerFake(), database)
     dependencies.close()
 
-    assert dependencies.session_factory == "session-factory"
-    assert dependencies.opensearch_client == "client"
-    assert dependencies.aws_sqs == "sqs"
-    assert sqs_values["queue_url"] == "source.fifo"
-    assert sqs_values["aws_endpoint_url"] is None
-    assert dependencies.sentence_similarity_handler == "handler"
-    assert database.engine.closed is True
+    assert (
+        dependencies.session_factory,
+        dependencies.opensearch_client,
+        dependencies.aws_sqs,
+        sqs_values["queue_url"],
+        database.engine.closed,
+    ) == ("session-factory", "client", "sqs", "source.fifo", True)

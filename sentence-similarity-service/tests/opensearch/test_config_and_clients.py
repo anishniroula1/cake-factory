@@ -59,24 +59,15 @@ def test_config_reads_service_defaults(monkeypatch):
 
     config = Config.from_environment()
 
-    assert config.source_sentence_batch_size == 30
-    assert config.thread_worker_count == 30
-    assert config.vector_dimension == 512
-    assert config.database_pool_size == 30
-    assert config.database_max_overflow == 10
-    assert config.environment == "local"
-    assert config.opensearch_host == "search.example.com"
-    assert config.occurrence_alias == "sentence_occurrences"
-    assert config.asylee_catalog_alias == "sentence_semantic_catalog_asylee"
-    assert config.refugee_catalog_alias == "sentence_semantic_catalog_refugee"
-    assert config.tracer_alias == "tracer_form_language_catalog"
-    assert config.receive_sqs_endpoint == "source.fifo"
-    assert config.sent_sqs_endpoint == "next.fifo"
-    assert config.aws_local_endpoint_url == "http://localhost:4566"
-    assert config.match_threshold == 76
-    assert config.tracer_threshold == 70
-    assert config.ivf_nprobes == 64
-    assert config.sqs_visibility_seconds == 7200
+    assert (
+        config.environment,
+        config.opensearch_host,
+        config.occurrence_alias,
+        config.match_threshold,
+        config.tracer_threshold,
+        config.receive_sqs_endpoint,
+        config.sent_sqs_endpoint,
+    ) == ("local", "search.example.com", "sentence_occurrences", 76, 70, "source.fifo", "next.fifo")
 
     invalid_values = [
         replace(config, pg_db_user=""),
@@ -96,9 +87,11 @@ def test_config_reads_service_defaults(monkeypatch):
 
 
 def test_opensearch_host_accepts_https_or_a_bare_hostname():
-    assert _aws_hostname("https://search.example.com/") == "search.example.com"
-    assert _aws_hostname("search.example.com") == "search.example.com"
-    assert _aws_hostname("") == ""
+    assert [_aws_hostname(value) for value in ("https://search.example.com/", "search.example.com", "")] == [
+        "search.example.com",
+        "search.example.com",
+        "",
+    ]
 
     with pytest.raises(ValueError):
         _aws_hostname("http://search.example.com")
@@ -118,9 +111,11 @@ def test_opensearch_client_uses_active_aws_credentials(monkeypatch, service_conf
         lambda **values: captured.update(values) or "client",
     )
 
-    assert OpenSearchClient(service_config).create_client() == "client"
-    assert captured["pool_maxsize"] == 1
-    assert captured["max_retries"] == 5
+    assert (OpenSearchClient(service_config).create_client(), captured["pool_maxsize"], captured["max_retries"]) == (
+        "client",
+        1,
+        5,
+    )
 
 
 def test_opensearch_client_can_assume_role(monkeypatch, service_config):

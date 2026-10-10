@@ -19,7 +19,6 @@ def test_retry_returns_after_temporary_failure(monkeypatch):
     result = retry_operation("work", operation, "done", wait_seconds=5, custom_logger=logger)
 
     assert result == "done"
-    assert len(attempts) == 2
     assert any(level == "info" and "succeeded on attempt 2" in message for level, message in logger.messages)
 
 

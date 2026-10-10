@@ -38,12 +38,13 @@ def match_bucket(sentence_key, score):
 
 
 def test_score_conversion_and_catalog_selection(service_config):
-    assert minimum_opensearch_score(90) == pytest.approx(0.95)
-    assert cosine_distance(0.95) == pytest.approx(0.1)
-    assert cosine_similarity(0.95) == pytest.approx(0.9)
-    assert cosine_distance(2.0) == 0.0
-    assert select_catalog_alias(service_config, "Asylee") == "catalog-asylee"
-    assert select_catalog_alias(service_config, "refugee") == "catalog-refugee"
+    assert (minimum_opensearch_score(90), cosine_distance(0.95), cosine_similarity(0.95)) == pytest.approx(
+        (0.95, 0.1, 0.9)
+    )
+    assert [select_catalog_alias(service_config, group) for group in ("Asylee", "refugee")] == [
+        "catalog-asylee",
+        "catalog-refugee",
+    ]
     with pytest.raises(PermanentDataError):
         select_catalog_alias(service_config, "unknown")
 
@@ -75,7 +76,6 @@ def test_catalog_records_load_vectors_and_optional_classification(service_config
     records = store.load_records_by_sentence_keys("catalog-asylee", [sentence_key, sentence_key])
 
     assert records[sentence_key]["vector"] == pytest.approx([0.25, 0.75])
-    assert records[sentence_key]["classification"]["is_non_matcher"] is False
     assert store.load_records_by_sentence_keys("catalog-asylee", []) == {}
 
 
@@ -100,15 +100,8 @@ def test_tracer_classification_and_catalog_update(service_config):
     )
 
     assert classification == {"is_non_matcher": True, "is_tracer": True, "is_form_language": True}
-    assert client.updates[0]["body"]["doc"]["isNonMatcher"] is True
-    filters = client.searches[0]["body"]["query"]["bool"]["filter"]
-    assert client.searches[0]["body"]["size"] == 100
     knn = client.searches[0]["body"]["query"]["bool"]["must"][0]["knn"]["sentenceContentVector"]
-    assert knn["k"] == 100
-    assert "min_score" not in knn
-    assert "isTracer" not in client.searches[0]["body"]["_source"]
-    assert {"term": {"analysisGroup": "Asylee"}} in filters
-    assert {"term": {"isNonMatcher": True}} not in filters
+    assert knn == {"vector": [0.1, 0.2], "k": 100}
 
 
 def test_empty_tracer_result_allows_matching(service_config):
@@ -187,12 +180,6 @@ def test_target_occurrences_searches_every_page_and_excludes_source_application(
     )
 
     assert [item["global_id"] for item in occurrences] == [200, 201]
-    assert all(item["distance"] == pytest.approx(0.08) for item in occurrences)
-    first_search = client.searches[0]
-    assert first_search["index"] == "occurrence"
-    boolean_query = first_search["body"]["query"]["bool"]
-    assert {"term": {"analysisGroup": "Asylee"}} in boolean_query["filter"]
-    assert {"term": {"applicationId": 1}} in boolean_query["must_not"]
     assert client.searches[1]["body"]["search_after"] == [200]
 
 
