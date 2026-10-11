@@ -1,0 +1,118 @@
+from collections.abc import Callable
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from case_similarity_service.opensearch.config import Config
+from case_similarity_service.opensearch.contracts import CaseSummary, DocumentContext, TspId
+from case_similarity_service.opensearch.errors import PermanentDataError
+from ta_utils.logger.CustomLogger import CustomLogger
+
+# Load the case information connected to the tsp_id from the SQS message.
+# Example: tsp_id 10 can return application_id 100, a_number 900001, and analysis_group Asylee.
+LOAD_DOCUMENT = text(
+    """
+    SELECT tsp_id, application_id, a_number, analysis_group
+    FROM tsp.text_similarity_input
+    WHERE tsp_id = :tsp_id
+    """
+)
+
+# This database function rebuilds the case summary for the source application
+# and every application connected to it through Titan sentence matches.
+#
+# Example: application 100 matches applications 200 and 300. The function
+# refreshes the summary rows for 100, 200, and 300 in one database transaction.
+REFRESH_CASE_SUMMARIES = text(
+    """
+    SELECT
+        refreshed_application_id AS application_id,
+        refreshed_similar_application_ids AS similar_application_ids,
+        refreshed_similar_case_ids AS similar_case_ids,
+        refreshed_similar_case_count AS similar_case_count,
+        refreshed_tah_case_ids AS tah_case_ids,
+        refreshed_tah_case_count AS tah_case_count,
+        refreshed_is_tah AS is_tah
+    FROM tsp.refresh_titan_similar_cases(
+        :source_application_id,
+        :analysis_group,
+        :similar_case_threshold,
+        :tah_case_threshold
+    )
+    """
+)
+
+
+class CaseSimilarityDBStore:
+    def __init__(self, config: Config, session_factory: Callable[[], Session], custom_logger: CustomLogger) -> None:
+        """Keep all database work for reading a document and rebuilding case summaries."""
+
+        self.config = config
+        self.session_factory = session_factory
+        self.logger = custom_logger
+
+    def load_document_context(self, tsp_id: TspId) -> DocumentContext:
+        """Load the case information needed to process one document.
+
+        Input: tsp_id=100.
+        Output: DocumentContext(tsp_id=100, application_id=20, a_number=900001,
+        analysis_group="Asylee").
+
+        A missing row is a permanent data problem because the service cannot
+        determine which application owns the document.
+        """
+
+        with self.session_factory() as session:
+            # one_or_none() makes an unexpected duplicate fail instead of silently
+            # selecting the wrong application.
+            row = session.execute(LOAD_DOCUMENT, {"tsp_id": tsp_id}).mappings().one_or_none()
+        if row is None:
+            raise PermanentDataError(f"No text_similarity_input row exists for tsp_id={tsp_id}")
+
+        # Convert database values into the small object used by the handler.
+        return DocumentContext(
+            tsp_id=row["tsp_id"],
+            application_id=int(row["application_id"]),
+            a_number=int(row["a_number"]),
+            analysis_group=str(row["analysis_group"]),
+        )
+
+    def refresh_case_summaries(self, source_application_id: int, analysis_group: str) -> list[CaseSummary]:
+        """Rebuild case summaries affected by one source application.
+
+        Input: source application 100 in Asylee.
+        Output: a list containing the refreshed summary for application 100 and
+        every application connected to it.
+
+        The configured thresholds decide each list. With thresholds 2 and 3,
+        an application with one matching sentence is only similar_application_ids,
+        two matches also puts it in similar_case_ids, and three matches also puts
+        it in tah_case_ids.
+        """
+
+        with self.session_factory() as session:
+            # PostgreSQL handles the relationship counting, ordered locks, and
+            # upserts. It returns the final rows after the generated columns run.
+            rows = session.execute(
+                REFRESH_CASE_SUMMARIES,
+                {
+                    "source_application_id": source_application_id,
+                    "analysis_group": analysis_group,
+                    "similar_case_threshold": self.config.min_similar_case_count,
+                    "tah_case_threshold": self.config.min_tah_case_count,
+                },
+            ).mappings().all()
+            session.commit()
+
+        # JSONB arrays come back as normal Python lists. Convert every ID to int
+        # so callers always receive the same type.
+        return [
+            CaseSummary(
+                application_id=int(row["application_id"]),
+                analysis_group=analysis_group,
+                similar_application_ids=[int(value) for value in row["similar_application_ids"]],
+                similar_case_ids=[int(value) for value in row["similar_case_ids"]],
+                tah_case_ids=[int(value) for value in row["tah_case_ids"]],
+            )
+            for row in rows
+        ]
