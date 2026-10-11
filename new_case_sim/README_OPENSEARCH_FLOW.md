@@ -1,5 +1,9 @@
 # Titan Case Similarity service
 
+For the complete statement-by-statement flow, transaction boundaries, failure
+behavior, performance notes, and operational queries, read
+`CASE_SIMILARITY_COMPLETE_FLOW.md`.
+
 ## Purpose
 
 This application turns sentence-level Titan matches into case-level results.

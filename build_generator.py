@@ -96,6 +96,7 @@ ENCODING_WORDS = (
 WORDS_PER_LINE = 20
 
 EXCLUDED_NAMES = {
+    ".coverage",
     ".git",
     ".idea",
     ".mypy_cache",
@@ -108,6 +109,15 @@ EXCLUDED_NAMES = {
     "generate_project.py",
     "generate_word_project.py",
 }
+
+
+def is_excluded(relative_path: Path) -> bool:
+    """Return true for caches and generated build metadata."""
+
+    return any(
+        part in EXCLUDED_NAMES or part.endswith(".egg-info")
+        for part in relative_path.parts
+    )
 
 
 def encode_as_words(data: bytes) -> list[str]:
@@ -145,7 +155,7 @@ def read_project_files(project_root: Path) -> dict[str, str]:
             continue
 
         relative_path = path.relative_to(project_root)
-        if any(part in EXCLUDED_NAMES for part in relative_path.parts):
+        if is_excluded(relative_path):
             continue
 
         # Never place real environment credentials inside the generated file.
