@@ -108,9 +108,9 @@ The service starts with the source `application_id` and finds two target sets:
 2. Targets stored in the source application's previous
    `tsp.titan_similar_cases` summary.
 
-Current targets must be rebuilt because their counts may have increased or
-changed. Previous targets must also be rebuilt because a relationship may have
-disappeared. Without the previous list, stale case matches could remain saved.
+Current targets need the source application added to the correct lists. Previous
+targets are included so the source application can be removed when a relationship
+disappears. Their relationships to every other application stay unchanged.
 
 The incoming SQS message does not provide affected application IDs. The
 database is the source of truth for this list.
@@ -130,10 +130,9 @@ chance of a deadlock when two document messages affect the same cases.
 The locks last until the transaction commits or rolls back. Reads can continue,
 but another writer using the same locking rule waits.
 
-### Step 5: Count sentence relationships by case
+### Step 5: Count the source application's sentence relationships
 
-For each affected application, the service reads that application's rows from
-`tsp.titan_matches`.
+The service reads `tsp.titan_matches` rows only for the source application.
 
 Each row owns one source `global_id`. Its `matches` JSONB object uses matching
 target `global_id` values as keys. The query expands those keys and connects
@@ -197,10 +196,14 @@ is_tah = tah_case_count > 0
 The IDs in these lists are real `application_id` values. They are not sentence
 `global_id` values, document `tsp_id` values, or `a_number` values.
 
-### Step 7: Save complete summaries
+### Step 7: Rebuild the source and patch its targets
 
-The PostgreSQL function upserts one complete row into
-`tsp.titan_similar_cases` for every affected application. The service supplies:
+The PostgreSQL function fully replaces the source application's three lists.
+For each connected target, it only adds or removes the source application from
+that target's lists. It does not read and rebuild all Titan matches owned by the
+target application.
+
+The saved columns are:
 
 - `application_id`
 - `analysis_group`
@@ -215,11 +218,12 @@ values during the upsert. `last_modified` is also set by PostgreSQL.
 All three lists contain real `application_id` values. The new flow does not
 create a separate generated application identity.
 
-The whole list is replaced on every rebuild. If an application no longer has
-matches, empty lists and zero counts are saved so old relationships are
-removed. All affected summaries commit in one transaction.
+For the source, all three lists are replaced. If the source no longer has
+matches, empty lists and zero counts are saved. For targets, existing
+relationships to other applications are preserved. All changes commit in one
+transaction.
 
-The full replacement table and refresh function are in
+The summary table and source-refresh function are in
 `TITAN_SIMILAR_CASES.sql`.
 
 ### Step 8: Publish live TAH changes when enabled
@@ -276,7 +280,8 @@ For historical ingestion, use:
 SEND_TAH_KAFKA_EVENTS=false
 ```
 
-The service still rebuilds `tsp.titan_similar_cases`, but it does not:
+The service still rebuilds the source row and patches connected rows in
+`tsp.titan_similar_cases`, but it does not:
 
 - create a Kafka producer connection
 - read `validation.kafka_ta_hit_lookup`
@@ -351,9 +356,9 @@ to SQS.
 | Case identity | Mainly `a_number` | Real `application_id` |
 | Application lookup | Can use `ApplicationIdLookup` | Not used |
 | Transform logic | Pandas DataFrames and Python collections | PostgreSQL counting and small Python result mapping |
-| Reverse updates | Separate insert/update handling | Rebuilds all current and previous affected applications |
+| Reverse updates | Separate insert/update handling | Rebuilds the source and patches only its membership on targets |
 | Saved table | Existing similar-case tables | `tsp.titan_similar_cases` |
-| Update style | Can append or merge saved values | Replaces the complete summary |
+| Update style | Can append or merge saved values | Replaces the source summary and patches target lists |
 | Concurrency | Multiple batch paths | Ordered advisory and row locks |
 | Kafka | Standard flow publishes; Titan branch skips | Environment toggle controls live versus historical |
 | Kafka producer | Custom producer class | Direct `confluent_kafka.Producer` |

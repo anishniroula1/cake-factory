@@ -36,8 +36,8 @@ Call refresh_titan_similar_cases
         | read titan_matches for the full application
         | find current and previously connected applications
         | lock affected application summaries in sorted order
-        | count unique sentence occurrence pairs
-        | rebuild all affected case summaries
+        | count source application's unique sentence pairs
+        | rebuild source summary and patch reverse target links
         v
 Commit titan_similar_cases
         |
@@ -232,7 +232,7 @@ tsp.refresh_titan_similar_cases(
 )
 ```
 
-Before rebuilding summaries, the function makes one sorted list of affected
+Before updating summaries, the function makes one sorted list of affected
 applications from three sources.
 
 ### 9.1 The source application
@@ -284,9 +284,8 @@ previous targets = [300, 400]
 affected = [100, 200, 300, 400]
 ```
 
-Application 400 must be rebuilt even though it is no longer a current match.
-Otherwise, application 400 could keep a stale relationship back to application
-100.
+Application 400 is included so application 100 can be removed from its lists.
+Its relationships to every other application are left unchanged.
 
 `UNION` removes duplicate application IDs, and `ARRAY_AGG ... ORDER BY` returns
 them in numeric order.
@@ -356,10 +355,10 @@ The current SQL checks `analysis_group`; it does not check `is_current` in this
 step. The design assumes the application identity and group in
 `text_similarity_input` are valid for this flow.
 
-## 12. Build unique sentence pairs
+## 12. Build the source application's unique sentence pairs
 
-For every affected application, the function reads its `titan_matches` bucket
-rows and expands the JSONB keys.
+The function reads `titan_matches` bucket rows only for the source application
+and expands their JSONB keys.
 
 It produces rows shaped like:
 
@@ -420,7 +419,8 @@ MIN_SIMILAR_CASE_COUNT = 2
 MIN_TAH_CASE_COUNT = 3
 ```
 
-The function builds three lists for each affected application.
+The function builds three complete lists for the source application. It then
+uses the same thresholds to add or remove the source ID on each target row.
 
 ### `similar_application_ids`
 
@@ -478,8 +478,8 @@ tah_case_count = length(tah_case_ids)
 is_tah = tah_case_count > 0
 ```
 
-The function performs a full replacement, not an append. This is important for
-removing old results.
+The function fully replaces the source lists. For a target row, it changes only
+the source application's membership and preserves every other saved ID.
 
 Example:
 
@@ -514,14 +514,13 @@ the relationship:
 ```
 
 Sentence Similarity first guarantees bidirectional rows in `titan_matches`.
-Case Similarity then includes both current target applications and previous
-targets in the affected list and rebuilds every affected summary.
+Case Similarity fully rebuilds application 100. It then adds application 100 to
+application 200's correct lists without reading or rebuilding all relationships
+owned by application 200.
 
-Because application 200 owns reverse sentence relationships back to 100, its
-rebuild produces the reverse case result.
-
-The same rule removes relationships in both directions. Previous targets are
-rebuilt even when the source no longer has a current relationship with them.
+The same rule removes relationships in both directions. A previous target is
+included so application 100 can be removed from that target's lists when the
+relationship no longer exists.
 
 ## 17. What happens with 76 documents or 10,000 sentences
 
@@ -539,7 +538,7 @@ sizes are:
 - number of non-empty bucket rows;
 - number of JSONB target keys;
 - number of unique source/target occurrence pairs; and
-- number of affected applications that must be rebuilt and locked.
+- number of target application rows that must be patched and locked.
 
 For an application with 10,000 sentences, this may still be a large PostgreSQL
 operation. It remains preferable to repeating 10,000 OpenSearch vector searches
@@ -588,7 +587,7 @@ non-matcher sentences before saving relationships.
 
 More detail is available in `HIGH_MATCH_SENTENCE_BEHAVIOR.md`.
 
-## 19. Return the rebuilt summaries to Python
+## 19. Return the updated summaries to Python
 
 After the upsert, the database function returns every affected row ordered by
 `application_id`.
@@ -622,7 +621,7 @@ Use:
 SEND_TAH_KAFKA_EVENTS=false
 ```
 
-The service still rebuilds every case summary. It does not create a Kafka
+The service still rebuilds the source summary and patches its targets. It does not create a Kafka
 producer, query Kafka delivery history, publish TAH events, or require Kafka
 credentials.
 
@@ -863,10 +862,10 @@ Kafka topic              = rfs.ata.text_analytics.hit
    containing data.
 4. The current function has no 500-match sentence exclusion.
 5. Counting is based on unique occurrence pairs, not unique sentence keys.
-6. The summary transaction may lock many affected applications. The locks are
-   ordered, but a large connected case can still take time.
-7. The SQL target-owner CTE should be performance-tested with production-sized
-   data because it creates distinct global-ID/application-ID mappings.
+6. The summary transaction may lock many connected applications. The locks are
+   ordered, but a source with a very large target list can still take time.
+7. The SQL target-owner lookup starts with the source application's target global
+   IDs. It does not create a mapping for every global ID in `titan_matches`.
 8. The service assumes the sentence relationship table is already
    bidirectional and complete enough to resolve target ownership.
 

@@ -48,18 +48,18 @@ CREATE INDEX ix_titan_similar_cases2_analysis_group
     ON tsp.titan_similar_cases2 (analysis_group, application_id);
 
 /*
- * Rebuild the summary for one source application and its connected applications.
+ * Refresh one source application and mirror only that relationship on its targets.
  *
- * Example: application 100 currently matches 200 and previously matched 300.
- * The function refreshes 100, 200, and 300. Application 300 is included so
- * its old relationship with 100 can be removed.
+ * Example: application 10 matches applications 20, 30, and 40.
  *
- * The function does this:
- *   1. Finds the applications that need an update.
- *   2. Locks them in number order so two workers do not update them together.
- *   3. Counts matching sentence pairs between the applications.
- *   4. Replaces the three saved lists with the newest lists.
- *   5. Returns the updated rows to the Python service.
+ *   Application 10 is rebuilt from all Titan matches owned by application 10.
+ *   Application 20 only adds or removes application 10 from its saved lists.
+ *   Application 30 only adds or removes application 10 from its saved lists.
+ *   Application 40 only adds or removes application 10 from its saved lists.
+ *
+ * The function does not read every Titan match owned by applications 20, 30,
+ * and 40. Their other saved relationships stay unchanged. This follows the old
+ * Case Similarity behavior and avoids rebuilding a large connected network.
  *
  * This function does not commit. The Python service commits the transaction.
  */
@@ -85,7 +85,7 @@ DECLARE
     affected_application_id INTEGER;
 BEGIN
     /*
-     * Make one list of every application that needs a new summary.
+     * Make one list containing the source and every target row that needs a patch.
      *
      * Example:
      *   Source application: 100
@@ -107,18 +107,17 @@ BEGIN
         UNION
 
         -- Add applications that currently match the source application.
-        SELECT target_owner.application_id
+        SELECT DISTINCT target_owner.application_id
         FROM tsp.titan_matches AS source_match
         -- Example: {"5001": 0.10, "5002": 0.20} becomes global IDs 5001 and 5002.
         CROSS JOIN LATERAL jsonb_object_keys(source_match.matches) AS target(target_global_id)
-        JOIN (
-            -- One sentence can have several bucket rows. Keep one application
-            -- owner for each global ID.
-            SELECT DISTINCT global_id, application_id
-            FROM tsp.titan_matches
-        ) AS target_owner
-            -- The JSON key is text. Convert it to a number and find its application.
+        -- global_id is the first part of the Titan match primary key, so this
+        -- lookup reads only the target rows instead of scanning the whole table.
+        JOIN tsp.titan_matches AS target_owner
             ON target_owner.global_id = target.target_global_id::INTEGER
+        JOIN tsp.text_similarity_input AS target_input
+            ON target_input.application_id = target_owner.application_id
+           AND target_input.analysis_group = p_analysis_group
         -- Read matches only from the source application.
         WHERE source_match.application_id = p_source_application_id
           -- Do not add the source application as its own match.
@@ -160,62 +159,55 @@ BEGIN
     ORDER BY summary.application_id
     FOR UPDATE;
 
-    WITH affected AS (
-        /* Change [100, 200] into two rows so the next queries can use the IDs. */
-        SELECT UNNEST(affected_application_ids) AS application_id
-    ),
-    eligible_applications AS (
-        /* Use only applications from the requested group, such as Asylee. */
-        SELECT DISTINCT input.application_id
-        FROM tsp.text_similarity_input AS input
-        WHERE input.analysis_group = p_analysis_group
-    ),
-    target_owners AS (
-        /* Connect each target global ID to the application that owns it. */
-        SELECT DISTINCT match_owner.global_id, match_owner.application_id
-        FROM tsp.titan_matches AS match_owner
-        JOIN eligible_applications AS eligible
-            ON eligible.application_id = match_owner.application_id
-    ),
-    sentence_pairs AS (
+    WITH source_sentence_pairs AS (
         /*
-         * Make one row for each unique matching sentence pair.
+         * Read only sentence pairs owned by the source application.
          *
          * Example: source global ID 10 matches target global IDs 50 and 60.
          * This creates (10, 50) and (10, 60). DISTINCT removes the same pair
          * if it appears again in another bucket row.
          */
         SELECT DISTINCT
-            affected.application_id AS source_application_id,
             source_match.global_id AS source_global_id,
             target.target_global_id::INTEGER AS target_global_id
-        FROM affected
-        JOIN tsp.titan_matches AS source_match
-            ON source_match.application_id = affected.application_id
+        FROM tsp.titan_matches AS source_match
         CROSS JOIN LATERAL jsonb_object_keys(source_match.matches) AS target(target_global_id)
+        WHERE source_match.application_id = p_source_application_id
     ),
-    application_match_counts AS (
+    target_owners AS (
         /*
-         * Count how many sentence pairs connect each pair of applications.
+         * Find the application that owns each target sentence.
+         *
+         * The join starts with the small source_sentence_pairs result. It does
+         * not build an owner list for every global ID in Titan matches.
+         */
+        SELECT DISTINCT target_match.global_id, target_match.application_id
+        FROM source_sentence_pairs AS sentence_pair
+        JOIN tsp.titan_matches AS target_match
+            ON target_match.global_id = sentence_pair.target_global_id
+        JOIN tsp.text_similarity_input AS target_input
+            ON target_input.application_id = target_match.application_id
+           AND target_input.analysis_group = p_analysis_group
+        WHERE target_match.application_id <> p_source_application_id
+    ),
+    source_match_counts AS (
+        /*
+         * Count how many sentence pairs connect the source to each target.
          *
          * Example: application 100 has sentence pairs (10, 50), (11, 51), and
          * (12, 52) with application 200. Its count for application 200 is 3.
          */
         SELECT
-            sentence_pairs.source_application_id,
             target_owners.application_id AS target_application_id,
             COUNT(*)::INTEGER AS sentence_match_count
-        FROM sentence_pairs
+        FROM source_sentence_pairs AS sentence_pair
         JOIN target_owners
-            ON target_owners.global_id = sentence_pairs.target_global_id
-        WHERE target_owners.application_id <> sentence_pairs.source_application_id
-        GROUP BY
-            sentence_pairs.source_application_id,
-            target_owners.application_id
+            ON target_owners.global_id = sentence_pair.target_global_id
+        GROUP BY target_owners.application_id
     ),
-    rebuilt_summaries AS (
+    rebuilt_source_summary AS (
         /*
-         * Build the three new lists for every affected application.
+         * Fully rebuild only the source application's three lists.
          *
          * Example with limits 2 and 3:
          *   App 200 has 1 sentence match: add it only to similar_application_ids.
@@ -225,40 +217,147 @@ BEGIN
          * When an application has no matches, COALESCE saves [] instead of null.
          */
         SELECT
-            affected.application_id,
+            p_source_application_id AS application_id,
+            p_analysis_group AS analysis_group,
             COALESCE(
                 jsonb_agg(
-                    counts.target_application_id
-                    ORDER BY counts.target_application_id
+                    source_match_counts.target_application_id
+                    ORDER BY source_match_counts.target_application_id
                 ) FILTER (
-                    WHERE counts.sentence_match_count >= 1
+                    WHERE source_match_counts.sentence_match_count >= 1
                 ),
                 '[]'::JSONB
             ) AS similar_application_ids,
             COALESCE(
                 jsonb_agg(
-                    counts.target_application_id
-                    ORDER BY counts.target_application_id
+                    source_match_counts.target_application_id
+                    ORDER BY source_match_counts.target_application_id
                 ) FILTER (
-                    WHERE counts.sentence_match_count >= p_similar_case_threshold
+                    WHERE source_match_counts.sentence_match_count >= p_similar_case_threshold
                 ),
                 '[]'::JSONB
             ) AS similar_case_ids,
             COALESCE(
                 jsonb_agg(
-                    counts.target_application_id
-                    ORDER BY counts.target_application_id
+                    source_match_counts.target_application_id
+                    ORDER BY source_match_counts.target_application_id
                 ) FILTER (
-                    WHERE counts.sentence_match_count >= p_tah_case_threshold
+                    WHERE source_match_counts.sentence_match_count >= p_tah_case_threshold
                 ),
                 '[]'::JSONB
             ) AS tah_case_ids
-        FROM affected
-        LEFT JOIN application_match_counts AS counts
-            ON counts.source_application_id = affected.application_id
-        GROUP BY affected.application_id
+        FROM (SELECT 1) AS one_source
+        LEFT JOIN source_match_counts ON TRUE
+    ),
+    target_rows AS (
+        /*
+         * Load the existing target summaries and the source-to-target count.
+         *
+         * A target can be here because it matches now or because it matched
+         * before and application 10 must be removed from its old lists.
+         */
+        SELECT
+            affected.application_id,
+            existing.application_id IS NOT NULL AS summary_exists,
+            COALESCE(existing.similar_application_ids, '[]'::JSONB)
+                AS similar_application_ids,
+            COALESCE(existing.similar_case_ids, '[]'::JSONB)
+                AS similar_case_ids,
+            COALESCE(existing.tah_case_ids, '[]'::JSONB)
+                AS tah_case_ids,
+            source_match_counts.sentence_match_count
+        FROM UNNEST(affected_application_ids) AS affected(application_id)
+        LEFT JOIN tsp.titan_similar_cases2 AS existing
+            ON existing.application_id = affected.application_id
+        LEFT JOIN source_match_counts
+            ON source_match_counts.target_application_id = affected.application_id
+        WHERE affected.application_id <> p_source_application_id
+    ),
+    patched_target_summaries AS (
+        /*
+         * Change only the source application's membership in each target row.
+         *
+         * Example: app 20 already has [5, 8, 30]. When app 10 now has two
+         * sentence matches with app 20, the result is [5, 8, 10, 30]. The
+         * relationships to 5, 8, and 30 are not recalculated or removed.
+         * An invalid self-reference, such as app 20 containing 20, is removed.
+         */
+        SELECT
+            target_row.application_id,
+            p_analysis_group AS analysis_group,
+            COALESCE(
+                (
+                    SELECT jsonb_agg(candidate.application_id ORDER BY candidate.application_id)
+                    FROM (
+                        SELECT saved.application_id::INTEGER
+                        FROM jsonb_array_elements_text(
+                            target_row.similar_application_ids
+                        ) AS saved(application_id)
+                        WHERE saved.application_id::INTEGER <> p_source_application_id
+                          AND saved.application_id::INTEGER <> target_row.application_id
+
+                        UNION
+
+                        SELECT p_source_application_id
+                        WHERE target_row.sentence_match_count >= 1
+                    ) AS candidate
+                ),
+                '[]'::JSONB
+            ) AS similar_application_ids,
+            COALESCE(
+                (
+                    SELECT jsonb_agg(candidate.application_id ORDER BY candidate.application_id)
+                    FROM (
+                        SELECT saved.application_id::INTEGER
+                        FROM jsonb_array_elements_text(
+                            target_row.similar_case_ids
+                        ) AS saved(application_id)
+                        WHERE saved.application_id::INTEGER <> p_source_application_id
+                          AND saved.application_id::INTEGER <> target_row.application_id
+
+                        UNION
+
+                        SELECT p_source_application_id
+                        WHERE target_row.sentence_match_count >= p_similar_case_threshold
+                    ) AS candidate
+                ),
+                '[]'::JSONB
+            ) AS similar_case_ids,
+            COALESCE(
+                (
+                    SELECT jsonb_agg(candidate.application_id ORDER BY candidate.application_id)
+                    FROM (
+                        SELECT saved.application_id::INTEGER
+                        FROM jsonb_array_elements_text(
+                            target_row.tah_case_ids
+                        ) AS saved(application_id)
+                        WHERE saved.application_id::INTEGER <> p_source_application_id
+                          AND saved.application_id::INTEGER <> target_row.application_id
+
+                        UNION
+
+                        SELECT p_source_application_id
+                        WHERE target_row.sentence_match_count >= p_tah_case_threshold
+                    ) AS candidate
+                ),
+                '[]'::JSONB
+            ) AS tah_case_ids
+        FROM target_rows AS target_row
+        -- Do not create an empty row only because an old source list named it.
+        WHERE target_row.summary_exists
+           OR target_row.sentence_match_count IS NOT NULL
+    ),
+    summaries_to_save AS (
+        SELECT * FROM rebuilt_source_summary
+
+        UNION ALL
+
+        SELECT * FROM patched_target_summaries
     )
-    /* Save a new summary row or replace all lists in an existing summary row. */
+    /*
+     * Replace the source lists. For targets, these values already contain their
+     * old relationships plus or minus only the source application.
+     */
     INSERT INTO tsp.titan_similar_cases2 (
         application_id,
         analysis_group,
@@ -268,13 +367,13 @@ BEGIN
         last_modified
     )
     SELECT
-        rebuilt.application_id,
-        p_analysis_group,
-        rebuilt.similar_application_ids,
-        rebuilt.similar_case_ids,
-        rebuilt.tah_case_ids,
+        summary.application_id,
+        summary.analysis_group,
+        summary.similar_application_ids,
+        summary.similar_case_ids,
+        summary.tah_case_ids,
         NOW()
-    FROM rebuilt_summaries AS rebuilt
+    FROM summaries_to_save AS summary
     /* Use the primary-key column so this upsert does not depend on PostgreSQL's generated constraint name. */
     ON CONFLICT (application_id)
     DO UPDATE SET
@@ -301,4 +400,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION tsp.refresh_titan_similar_cases2(INTEGER, VARCHAR, INTEGER, INTEGER)
-IS 'Updates the case-match lists for one application and every application connected to it.';
+IS 'Rebuilds one source application and mirrors only that relationship on connected applications.';

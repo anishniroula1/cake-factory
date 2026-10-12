@@ -32,8 +32,9 @@ class CaseSimilarityHandler:
         Output: counts showing how many application summaries, similar cases,
         TAH cases, and Kafka events were handled.
 
-        The database function refreshes the source application and any connected
-        applications. Kafka receives only TAH values that are new or changed.
+        The database function rebuilds the source application. On connected
+        applications, it changes only the relationship back to the source.
+        Kafka receives only TAH values that are new or changed.
         """
 
         # First find the application and analysis group that own this document.
@@ -46,7 +47,7 @@ class CaseSimilarityHandler:
             custom_logger=self.logger,
         )
 
-        # Recalculate all case-level lists made from the Titan sentence matches.
+        # Rebuild the source lists and mirror this one relationship on targets.
         summaries = retry_operation(
             "Refresh Titan case summaries",
             self.case_similarity_db_store.refresh_case_summaries,
@@ -57,19 +58,19 @@ class CaseSimilarityHandler:
             custom_logger=self.logger,
         )
 
-        # The returned list contains the source application and every connected
-        # application changed by the bidirectional sentence relationships.
+        # The returned list contains the rebuilt source and target rows where
+        # only the source application's membership was changed.
         affected_ids = [summary.application_id for summary in summaries]
-        self.logger.info(f"Refreshed Titan case summaries for {len(affected_ids)} affected application(s).")
+        self.logger.info(f"Updated Titan case summaries for {len(affected_ids)} affected application(s).")
 
         # Use the source row for the counts returned by this message. Other rows
-        # belong to applications that were refreshed because they match the source.
+        # belong to applications where the source relationship was mirrored.
         source_summary = next(summary for summary in summaries if summary.application_id == context.application_id)
         kafka_event_count = self.kafka_processor.publish_changed_tah_events(affected_ids)
         self._send_next_message(tsp_id)
 
         self.logger.info(
-            f"Case Similarity completed {len(summaries)} application summary rebuild(s), "
+            f"Case Similarity completed {len(summaries)} application summary update(s), "
             f"{source_summary.similar_case_count} similar case(s), {source_summary.tah_case_count} TAH case(s), "
             f"and {kafka_event_count} Kafka event(s)."
         )

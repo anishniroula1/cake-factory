@@ -18,11 +18,12 @@ LOAD_DOCUMENT = text(
     """
 )
 
-# This database function rebuilds the case summary for the source application
-# and every application connected to it through Titan sentence matches.
+# This database function fully rebuilds the source application's summary.
+# Connected applications keep their existing summaries; the function only adds
+# or removes the source application from their three saved lists.
 #
 # Example: application 100 matches applications 200 and 300. The function
-# refreshes the summary rows for 100, 200, and 300 in one database transaction.
+# rebuilds 100, then mirrors only the relationship to 100 on rows 200 and 300.
 REFRESH_CASE_SUMMARIES = text(
     """
     SELECT
@@ -78,21 +79,23 @@ class CaseSimilarityDBStore:
         )
 
     def refresh_case_summaries(self, source_application_id: int, analysis_group: str) -> list[CaseSummary]:
-        """Rebuild case summaries affected by one source application.
+        """Rebuild the source summary and mirror its connected relationships.
 
         Input: source application 100 in Asylee.
-        Output: a list containing the refreshed summary for application 100 and
-        every application connected to it.
+        Output: application 100's rebuilt summary and the connected rows where
+        only application 100 was added, moved, or removed.
 
         The configured thresholds decide each list. With thresholds 2 and 3,
         an application with one matching sentence is only similar_application_ids,
         two matches also puts it in similar_case_ids, and three matches also puts
-        it in tah_case_ids.
+        it in tah_case_ids. The function does not read and rebuild all matches
+        owned by every connected application.
         """
 
         with self.session_factory() as session:
-            # PostgreSQL handles the relationship counting, ordered locks, and
-            # upserts. It returns the final rows after the generated columns run.
+            # PostgreSQL counts the source relationships, locks rows in order,
+            # and updates both directions. It returns the final rows after the
+            # generated columns calculate their counts and TAH values.
             rows = (
                 session.execute(
                     REFRESH_CASE_SUMMARIES,
