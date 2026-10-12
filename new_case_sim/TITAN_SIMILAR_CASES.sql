@@ -275,7 +275,8 @@ BEGIN
         rebuilt.tah_case_ids,
         NOW()
     FROM rebuilt_summaries AS rebuilt
-    ON CONFLICT ON CONSTRAINT titan_similar_cases_pkey
+    /* Use the primary-key column so this upsert does not depend on PostgreSQL's generated constraint name. */
+    ON CONFLICT (application_id)
     DO UPDATE SET
         analysis_group = EXCLUDED.analysis_group,
         similar_application_ids = EXCLUDED.similar_application_ids,
