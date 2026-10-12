@@ -22,6 +22,10 @@
  *   SAME APPLICATION IS EXCLUDED
  *       The source and target sentences belong to the same application.
  *
+ *   TITAN MATCH APPLICATION ID DOES NOT MATCH TEXT_SIMILARITY_INPUT
+ *       Titan matches exist for the application's tsp_id values, but their
+ *       saved application_id is different from text_similarity_input.
+ *
  *   NO TITAN MATCH ROWS / NO SAVED RELATIONSHIPS
  *       Sentence Similarity did not save a usable relationship for the source
  *       application.
@@ -32,7 +36,7 @@ WITH parameters AS (
         'Asylee'::VARCHAR(30) AS analysis_group
 ),
 source_stats AS (
-    /* Show whether the source application owns any Titan match data. */
+    /* Find rows using the application_id saved directly in titan_matches. */
     SELECT
         COUNT(source_match.global_id)::INTEGER AS source_bucket_rows,
         COALESCE(SUM(jsonb_object_length(source_match.matches)), 0)::INTEGER
@@ -40,6 +44,26 @@ source_stats AS (
     FROM parameters
     LEFT JOIN tsp.titan_matches AS source_match
         ON source_match.application_id = parameters.source_application_id
+),
+document_owner_stats AS (
+    /*
+     * Check the same application through tsp_id and text_similarity_input.
+     *
+     * Example: text_similarity_input says tsp_id 500 belongs to application 10,
+     * but its titan_matches row says application_id 20. source_stats returns 0,
+     * while this section finds the row and reports saved_application_ids={20}.
+     */
+    SELECT
+        COUNT(titan_match.global_id)::INTEGER AS rows_found_through_tsp_id,
+        ARRAY_REMOVE(
+            ARRAY_AGG(DISTINCT titan_match.application_id ORDER BY titan_match.application_id),
+            NULL
+        ) AS saved_application_ids
+    FROM parameters
+    LEFT JOIN tsp.text_similarity_input AS source_input
+        ON source_input.application_id = parameters.source_application_id
+    LEFT JOIN tsp.titan_matches AS titan_match
+        ON titan_match.tsp_id = source_input.tsp_id
 ),
 saved_pairs AS (
     /* Turn each source JSONB entry into one source-to-target sentence pair. */
@@ -88,7 +112,10 @@ diagnostic_rows AS (
         resolved_pairs.distance,
         CASE
             WHEN source_stats.source_bucket_rows = 0
-                THEN 'NO TITAN MATCH ROWS FOR SOURCE APPLICATION'
+                 AND document_owner_stats.rows_found_through_tsp_id > 0
+                THEN 'TITAN MATCH APPLICATION ID DOES NOT MATCH TEXT_SIMILARITY_INPUT'
+            WHEN source_stats.source_bucket_rows = 0
+                THEN 'NO TITAN MATCH ROWS FOR THIS APPLICATION OR ITS DOCUMENTS'
             WHEN source_stats.saved_relationship_count = 0
                 THEN 'NO SAVED RELATIONSHIPS FOR SOURCE APPLICATION'
             WHEN resolved_pairs.target_application_id IS NULL
@@ -103,6 +130,7 @@ diagnostic_rows AS (
         END AS diagnostic_status
     FROM parameters
     CROSS JOIN source_stats
+    CROSS JOIN document_owner_stats
     LEFT JOIN resolved_pairs ON TRUE
 )
 SELECT
@@ -110,6 +138,8 @@ SELECT
     parameters.analysis_group AS requested_analysis_group,
     source_stats.source_bucket_rows,
     source_stats.saved_relationship_count,
+    document_owner_stats.rows_found_through_tsp_id,
+    document_owner_stats.saved_application_ids,
     diagnostic_rows.source_global_id,
     diagnostic_rows.source_tsp_id,
     diagnostic_rows.target_global_id,
@@ -120,6 +150,7 @@ SELECT
     diagnostic_rows.diagnostic_status
 FROM parameters
 CROSS JOIN source_stats
+CROSS JOIN document_owner_stats
 CROSS JOIN diagnostic_rows
 ORDER BY
     diagnostic_rows.diagnostic_status,
