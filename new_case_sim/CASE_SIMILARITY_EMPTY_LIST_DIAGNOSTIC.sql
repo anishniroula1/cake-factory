@@ -39,7 +39,7 @@ source_stats AS (
     /* Find rows using the application_id saved directly in titan_matches. */
     SELECT
         COUNT(source_match.global_id)::INTEGER AS source_bucket_rows,
-        COALESCE(SUM(jsonb_object_length(source_match.matches)), 0)::INTEGER
+        COALESCE(SUM(tsp.titan_match_object_size(source_match.matches)), 0)::INTEGER
             AS saved_relationship_count
     FROM parameters
     LEFT JOIN tsp.titan_matches AS source_match
