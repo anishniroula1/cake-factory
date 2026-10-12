@@ -16,9 +16,11 @@ LOAD_CHANGED_TAH_EVENTS = text(
             input.application_id,
             input.a_number,
             input.analysis_group,
-            summary.is_tah
+            -- No summary row means the application currently has no match and
+            -- therefore has a false TAH value.
+            COALESCE(summary.is_tah, FALSE) AS is_tah
         FROM tsp.text_similarity_input AS input
-        JOIN tsp.titan_similar_cases AS summary
+        LEFT JOIN tsp.titan_similar_cases AS summary
             ON summary.application_id = input.application_id
         WHERE input.application_id = ANY(:application_ids)
     ),

@@ -24,6 +24,8 @@ LOAD_DOCUMENT = text(
 #
 # Example: application 100 matches applications 200 and 300. The function
 # rebuilds 100, then mirrors only the relationship to 100 on rows 200 and 300.
+# If 100 has no match, no summary row is saved and the function returns empty
+# lists so the service can still complete the document.
 REFRESH_CASE_SUMMARIES = text(
     """
     SELECT
@@ -88,8 +90,9 @@ class CaseSimilarityDBStore:
         The configured thresholds decide each list. With thresholds 2 and 3,
         an application with one matching sentence is only similar_application_ids,
         two matches also puts it in similar_case_ids, and three matches also puts
-        it in tah_case_ids. The function does not read and rebuild all matches
-        owned by every connected application.
+        it in tah_case_ids. An application with no match is returned with empty
+        values but is not stored in titan_similar_cases. The function does not
+        read and rebuild all matches owned by every connected application.
         """
 
         with self.session_factory() as session:

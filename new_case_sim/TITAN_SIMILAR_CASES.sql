@@ -12,6 +12,7 @@
  *   tah_case_ids            = [400] because it has at least 3 matches
  *
  * PostgreSQL counts the IDs in the lists and sets is_tah automatically.
+ * An application with no matches does not have a row in this table.
  */
 DROP TABLE IF EXISTS tsp.titan_similar_cases;
 
@@ -214,7 +215,9 @@ BEGIN
          *   App 300 has 2 sentence matches: also add it to similar_case_ids.
          *   App 400 has 3 sentence matches: also add it to tah_case_ids.
          *
-         * When an application has no matches, COALESCE saves [] instead of null.
+         * HAVING prevents an empty source row when no target application was
+         * found. The smaller case and TAH lists can still be empty because they
+         * require two and three matching sentence pairs.
          */
         SELECT
             p_source_application_id AS application_id,
@@ -246,8 +249,8 @@ BEGIN
                 ),
                 '[]'::JSONB
             ) AS tah_case_ids
-        FROM (SELECT 1) AS one_source
-        LEFT JOIN source_match_counts ON TRUE
+        FROM source_match_counts
+        HAVING COUNT(*) > 0
     ),
     target_rows AS (
         /*
@@ -353,6 +356,33 @@ BEGIN
         UNION ALL
 
         SELECT * FROM patched_target_summaries
+    ),
+    summaries_with_matches AS (
+        /*
+         * Keep a row only when at least one of its lists contains an application.
+         * similar_application_ids is normally the largest list. Checking all
+         * three also protects older rows whose lists may not be consistent.
+         */
+        SELECT *
+        FROM summaries_to_save
+        WHERE jsonb_array_length(similar_application_ids) > 0
+           OR jsonb_array_length(similar_case_ids) > 0
+           OR jsonb_array_length(tah_case_ids) > 0
+    ),
+    deleted_empty_summaries AS (
+        /*
+         * Remove an older row when its last relationship disappeared.
+         * Example: app 20 contained only app 10. If that relationship is gone,
+         * app 20 should have no summary row instead of three empty lists.
+         */
+        DELETE FROM tsp.titan_similar_cases AS existing
+        WHERE existing.application_id = ANY(affected_application_ids)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM summaries_with_matches AS saved
+              WHERE saved.application_id = existing.application_id
+          )
+        RETURNING existing.application_id
     )
     /*
      * Replace the source lists. For targets, these values already contain their
@@ -373,7 +403,7 @@ BEGIN
         summary.similar_case_ids,
         summary.tah_case_ids,
         NOW()
-    FROM summaries_to_save AS summary
+    FROM summaries_with_matches AS summary
     /* Use the primary-key column so this upsert does not depend on PostgreSQL's generated constraint name. */
     ON CONFLICT (application_id)
     DO UPDATE SET
@@ -383,19 +413,24 @@ BEGIN
         tah_case_ids = EXCLUDED.tah_case_ids,
         last_modified = NOW();
 
-    /* Return the updated rows. PostgreSQL has already calculated counts and is_tah. */
+    /*
+     * Return every affected application to the service, including an application
+     * whose database row was removed. Removed rows are returned as empty values
+     * so the service can report zero counts and publish a changed TAH=false event.
+     */
     RETURN QUERY
     SELECT
-        summary.application_id,
-        summary.similar_application_ids,
-        summary.similar_case_ids,
-        summary.similar_case_count,
-        summary.tah_case_ids,
-        summary.tah_case_count,
-        summary.is_tah
-    FROM tsp.titan_similar_cases AS summary
-    WHERE summary.application_id = ANY(affected_application_ids)
-    ORDER BY summary.application_id;
+        affected.application_id,
+        COALESCE(summary.similar_application_ids, '[]'::JSONB),
+        COALESCE(summary.similar_case_ids, '[]'::JSONB),
+        COALESCE(summary.similar_case_count, 0),
+        COALESCE(summary.tah_case_ids, '[]'::JSONB),
+        COALESCE(summary.tah_case_count, 0),
+        COALESCE(summary.is_tah, FALSE)
+    FROM UNNEST(affected_application_ids) AS affected(application_id)
+    LEFT JOIN tsp.titan_similar_cases AS summary
+        ON summary.application_id = affected.application_id
+    ORDER BY affected.application_id;
 END;
 $$;
 
