@@ -99,9 +99,7 @@ class KafkaProcessor:
                 delivery_error = str(error)
                 return
             delivery = KafkaDelivery(
-                timestamp=self._delivery_timestamp(message),
-                partition=message.partition(),
-                offset=message.offset(),
+                timestamp=self._delivery_timestamp(message), partition=message.partition(), offset=message.offset()
             )
 
         try:

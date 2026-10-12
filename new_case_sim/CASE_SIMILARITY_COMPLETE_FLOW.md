@@ -47,7 +47,7 @@ Commit titan_similar_cases
         |       +--> save Kafka delivery acknowledgement
         |
         v
-Send {"source": "case_similarity", "tsp_id": 100} to the next SQS queue
+Send {"source": "P2", "tsp_id": "100", "sent_by": "case-similarity"} to the next SQS queue
         |
         v
 Delete the original SQS message
@@ -712,8 +712,9 @@ After summary refresh and enabled Kafka work succeed, the handler sends:
 
 ```json
 {
-  "source": "case_similarity",
-  "tsp_id": 100
+  "source": "P2",
+  "tsp_id": "100",
+  "sent_by": "case-similarity"
 }
 ```
 

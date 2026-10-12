@@ -82,7 +82,7 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
 
     assert "Messages" not in sqs_client.receive_message(QueueUrl=source_queue_url, WaitTimeSeconds=0)
     next_message = sqs_client.receive_message(QueueUrl=next_queue_url, WaitTimeSeconds=0)["Messages"][0]
-    assert json.loads(next_message["Body"]) == {"tsp_id": 10}
+    assert json.loads(next_message["Body"]) == {"source": "P2", "tsp_id": "10", "sent_by": "sentence-similarity"}
 
     parameters = match_write.execute.call_args.args[1]
     assert parameters == {

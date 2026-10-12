@@ -102,10 +102,7 @@ class Config:
             ssl_cert_file=os.getenv("SSL_CERTFILE", "").strip(),
             ssl_key_file=os.getenv("SSL_KEYFILE", "").strip(),
             tah_topic=TAH_TOPIC,
-            application_url=(
-                os.getenv("APPLICATION_URL", DEFAULT_APPLICATION_URL).strip()
-                or DEFAULT_APPLICATION_URL
-            ),
+            application_url=(os.getenv("APPLICATION_URL", DEFAULT_APPLICATION_URL).strip() or DEFAULT_APPLICATION_URL),
             send_tah_kafka_events=read_boolean("SEND_TAH_KAFKA_EVENTS", False),
             min_similar_case_count=MIN_SIMILAR_CASE_COUNT,
             min_tah_case_count=MIN_TAH_CASE_COUNT,
@@ -129,17 +126,16 @@ class Config:
         }
         if self.send_tah_kafka_events:
             required_values.update(
-                {
-                    "KAFKA_BOOTSTRAP_SERVERS": self.kafka_bootstrap_servers,
-                    "KAFKA_ENV": self.kafka_environment,
-                }
+                {"KAFKA_BOOTSTRAP_SERVERS": self.kafka_bootstrap_servers, "KAFKA_ENV": self.kafka_environment}
             )
         missing = [name for name, value in required_values.items() if not value]
         if missing:
             raise ValueError(f"Missing required configuration: {', '.join(missing)}")
         if self.environment != "local" and not self.dynamic_credential_file:
             raise ValueError("VAULT_YAML_PATH is required outside the local environment")
-        if self.send_tah_kafka_events and self.kafka_security_protocol == "SSL" and not all(
-            (self.kafka_server_ca_cert, self.ssl_cert_file, self.ssl_key_file)
+        if (
+            self.send_tah_kafka_events
+            and self.kafka_security_protocol == "SSL"
+            and not all((self.kafka_server_ca_cert, self.ssl_cert_file, self.ssl_key_file))
         ):
             raise ValueError("Kafka SSL certificate values are required when KAFKA_SECURITY_PROTOCOL is SSL")

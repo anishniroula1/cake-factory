@@ -38,15 +38,9 @@ class Dependencies:
         # Historical deployments keep Kafka disabled, so they do not create a
         # broker connection or require Kafka credentials.
         self.kafka_producer = Producer(self._kafka_config()) if self.config.send_tah_kafka_events else None
-        self.kafka_processor = KafkaProcessor(
-            self.config, self.kafka_producer, self.kafka_event_db_store, self.logger
-        )
+        self.kafka_processor = KafkaProcessor(self.config, self.kafka_producer, self.kafka_event_db_store, self.logger)
         self.case_similarity_handler = CaseSimilarityHandler(
-            self.config,
-            self.case_similarity_db_store,
-            self.kafka_processor,
-            self.aws_sqs,
-            self.logger,
+            self.config, self.case_similarity_db_store, self.kafka_processor, self.aws_sqs, self.logger
         )
 
     def close(self) -> None:

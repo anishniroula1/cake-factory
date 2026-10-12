@@ -250,7 +250,7 @@ class SentenceSimilarityHandler:
 
         sent = self.aws_sqs.send_sqs_message(
             send_queue_url=self.config.sent_sqs_endpoint,
-            message_body={"tsp_id": tsp_id},
+            message_body={"source": "P2", "tsp_id": str(tsp_id), "sent_by": "sentence-similarity"},
             is_fifo=self.config.sent_sqs_endpoint.endswith(".fifo"),
         )
         if not sent:

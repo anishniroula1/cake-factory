@@ -44,7 +44,7 @@ def test_one_live_message_runs_the_complete_case_similarity_flow(service_config)
     } == {
         "processed_message_count": 1,
         "refreshed_applications": [(100, "Asylee")],
-        "next_message": {"source": "case_similarity", "tsp_id": 10},
+        "next_message": {"source": "P2", "tsp_id": "10", "sent_by": "case-similarity"},
         "deleted_messages": [message],
         "kafka_key": "ABC123",
         "kafka_payload": {
@@ -70,10 +70,7 @@ def test_failed_message_is_not_deleted():
 def test_kafka_processor_skips_historical_flow(service_config):
     producer = KafkaProducerFake()
     processor = KafkaProcessor(
-        replace(service_config, send_tah_kafka_events=False),
-        producer,
-        KafkaEventDBStoreFake(),
-        LoggerFake(),
+        replace(service_config, send_tah_kafka_events=False), producer, KafkaEventDBStoreFake(), LoggerFake()
     )
 
     event_count = processor.publish_changed_tah_events([100])
@@ -83,10 +80,7 @@ def test_kafka_processor_skips_historical_flow(service_config):
 
 def test_live_kafka_flow_handles_no_changes_and_missing_producer(service_config):
     no_change_processor = KafkaProcessor(
-        service_config,
-        KafkaProducerFake(),
-        KafkaEventDBStoreFake(events=[]),
-        LoggerFake(),
+        service_config, KafkaProducerFake(), KafkaEventDBStoreFake(events=[]), LoggerFake()
     )
 
     assert no_change_processor.publish_changed_tah_events([100]) == 0
@@ -106,12 +100,7 @@ def test_live_kafka_flow_handles_no_changes_and_missing_producer(service_config)
 )
 def test_kafka_delivery_failure_does_not_save_a_lookup_row(service_config, producer_values):
     event_store = KafkaEventDBStoreFake()
-    processor = KafkaProcessor(
-        service_config,
-        KafkaProducerFake(**producer_values),
-        event_store,
-        LoggerFake(),
-    )
+    processor = KafkaProcessor(service_config, KafkaProducerFake(**producer_values), event_store, LoggerFake())
 
     with pytest.raises(KafkaPublishError):
         processor._publish_event(event_store.events[0])

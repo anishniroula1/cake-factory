@@ -25,11 +25,7 @@ class LoggerFake:
 
 class AwsSqsFake:
     def __init__(
-        self,
-        messages: list[dict] | None = None,
-        send_result: bool = True,
-        delete_result: bool = True,
-        **init_values,
+        self, messages: list[dict] | None = None, send_result: bool = True, delete_result: bool = True, **init_values
     ) -> None:
         self.messages = messages or []
         self.send_result = send_result

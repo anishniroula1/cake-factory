@@ -86,15 +86,12 @@ class CaseSimilarityHandler:
         """Send the processed tsp_id to the configured next SQS queue.
 
         Input: tsp_id=100.
-        Message: {"source": "case_similarity", "tsp_id": 100}.
+        Message: {"source": "P2", "tsp_id": "100", "sent_by": "case-similarity"}.
         """
 
         sent = self.aws_sqs.send_sqs_message(
             send_queue_url=self.config.sent_sqs_endpoint,
-            message_body={
-                "source": "case_similarity",
-                "tsp_id": tsp_id,
-            },
+            message_body={"source": "P2", "tsp_id": str(tsp_id), "sent_by": "case-similarity"},
             wait_time=self.config.retry_seconds,
             retries=self.config.max_attempts - 1,
         )

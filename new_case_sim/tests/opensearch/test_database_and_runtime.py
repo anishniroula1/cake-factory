@@ -61,11 +61,7 @@ def test_database_store_loads_document_and_refreshes_case_summaries(service_conf
             ]
         )
     )
-    store = CaseSimilarityDBStore(
-        service_config,
-        SessionFactoryFake([document_session, summary_session]),
-        LoggerFake(),
-    )
+    store = CaseSimilarityDBStore(service_config, SessionFactoryFake([document_session, summary_session]), LoggerFake())
 
     context = store.load_document_context(10)
     summaries = store.refresh_case_summaries(100, "Asylee")
@@ -113,11 +109,7 @@ def test_kafka_database_store_reads_and_saves_delivery():
 
 def test_database_stores_return_empty_results_and_report_missing_documents(service_config):
     empty_document_session = SessionFake(ResultFake())
-    case_store = CaseSimilarityDBStore(
-        service_config,
-        SessionFactoryFake([empty_document_session]),
-        LoggerFake(),
-    )
+    case_store = CaseSimilarityDBStore(service_config, SessionFactoryFake([empty_document_session]), LoggerFake())
     kafka_store = KafkaEventDBStore(SessionFactoryFake([]))
 
     with pytest.raises(PermanentDataError, match="tsp_id=999"):
@@ -192,12 +184,7 @@ def test_config_loads_local_environment_values(monkeypatch):
     [
         ({"environment": "dev", "dynamic_credential_file": ""}, "VAULT_YAML_PATH"),
         (
-            {
-                "kafka_security_protocol": "SSL",
-                "kafka_server_ca_cert": "",
-                "ssl_cert_file": "",
-                "ssl_key_file": "",
-            },
+            {"kafka_security_protocol": "SSL", "kafka_server_ca_cert": "", "ssl_cert_file": "", "ssl_key_file": ""},
             "Kafka SSL certificate values",
         ),
     ],
@@ -251,11 +238,7 @@ def test_dependencies_use_local_or_dynamic_database_credentials(monkeypatch, ser
         "local_credentials": local_database.arguments["use_dynamic_credentials"],
         "dynamic_file": dynamic_database.arguments["dynamic_credentials_file"],
         "kafka_ca": kafka_config["ssl.ca.location"],
-    } == {
-        "local_credentials": False,
-        "dynamic_file": "/vault/database.yml",
-        "kafka_ca": "ca.pem",
-    }
+    } == {"local_credentials": False, "dynamic_file": "/vault/database.yml", "kafka_ca": "ca.pem"}
 
 
 def test_boolean_environment_value_must_be_true_or_false(monkeypatch):

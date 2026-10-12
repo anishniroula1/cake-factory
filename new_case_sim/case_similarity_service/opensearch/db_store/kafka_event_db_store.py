@@ -133,9 +133,7 @@ class KafkaEventDBStore:
                 for row in rows
             ]
 
-    def save_kafka_delivery(
-        self, event: KafkaEvent, delivery: KafkaDelivery, kafka_environment: str
-    ) -> None:
+    def save_kafka_delivery(self, event: KafkaEvent, delivery: KafkaDelivery, kafka_environment: str) -> None:
         """Save one Kafka-confirmed TAH value and its broker location.
 
         Input: a TAH event plus Kafka timestamp, partition, and offset.

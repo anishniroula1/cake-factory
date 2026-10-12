@@ -317,8 +317,9 @@ to the next SQS queue:
 
 ```json
 {
-  "source": "case_similarity",
-  "tsp_id": 100
+  "source": "P2",
+  "tsp_id": "100",
+  "sent_by": "case-similarity"
 }
 ```
 

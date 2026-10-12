@@ -93,15 +93,19 @@ class CaseSimilarityDBStore:
         with self.session_factory() as session:
             # PostgreSQL handles the relationship counting, ordered locks, and
             # upserts. It returns the final rows after the generated columns run.
-            rows = session.execute(
-                REFRESH_CASE_SUMMARIES,
-                {
-                    "source_application_id": source_application_id,
-                    "analysis_group": analysis_group,
-                    "similar_case_threshold": self.config.min_similar_case_count,
-                    "tah_case_threshold": self.config.min_tah_case_count,
-                },
-            ).mappings().all()
+            rows = (
+                session.execute(
+                    REFRESH_CASE_SUMMARIES,
+                    {
+                        "source_application_id": source_application_id,
+                        "analysis_group": analysis_group,
+                        "similar_case_threshold": self.config.min_similar_case_count,
+                        "tah_case_threshold": self.config.min_tah_case_count,
+                    },
+                )
+                .mappings()
+                .all()
+            )
             session.commit()
 
         # JSONB arrays come back as normal Python lists. Convert every ID to int
