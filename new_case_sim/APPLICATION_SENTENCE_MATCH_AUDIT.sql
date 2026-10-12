@@ -1,9 +1,8 @@
 /*
  * Audit every sentence match between two applications.
  *
- * Set these values when running the queries:
- *   :application_id_a = source application
- *   :application_id_b = target application
+ * Each query has a parameters section. Replace 10 and 20 in both sections with
+ * the application IDs you want to check, then run the query in pgAdmin.
  *
  * titan_matches already contains sentence relationships that passed Sentence
  * Similarity's configured threshold. Distance 0.0 is exact. A distance greater
@@ -22,21 +21,28 @@
  * One source sentence matching three target occurrences produces three rows.
  * The total columns repeat on each row so the result also explains the case level.
  */
-WITH matching_pairs AS (
+WITH parameters AS (
+    /* Change only these two numbers. Do not put quotes around them. */
+    SELECT
+        10::INTEGER AS application_id_a,
+        20::INTEGER AS application_id_b
+),
+matching_pairs AS (
     SELECT DISTINCT
         source_match.global_id AS source_global_id,
         target.target_global_id::INTEGER AS target_global_id,
         target.distance::DOUBLE PRECISION AS distance
-    FROM tsp.titan_matches AS source_match
+    FROM parameters
+    JOIN tsp.titan_matches AS source_match
+        ON source_match.application_id = parameters.application_id_a
     CROSS JOIN LATERAL jsonb_each_text(source_match.matches)
         AS target(target_global_id, distance)
-    WHERE source_match.application_id = :application_id_a
-      AND EXISTS (
+    WHERE EXISTS (
           /* Keep only target sentences owned by application B. */
           SELECT 1
           FROM tsp.titan_matches AS target_owner
           WHERE target_owner.global_id = target.target_global_id::INTEGER
-            AND target_owner.application_id = :application_id_b
+            AND target_owner.application_id = parameters.application_id_b
       )
 ),
 pair_details AS (
@@ -88,9 +94,10 @@ ORDER BY
  *   Each PASS column confirms the calculated value matches the saved value.
  */
 WITH parameters AS (
+    /* Change only these two numbers. Do not put quotes around them. */
     SELECT
-        :application_id_a::INTEGER AS application_id_a,
-        :application_id_b::INTEGER AS application_id_b,
+        10::INTEGER AS application_id_a,
+        20::INTEGER AS application_id_b,
         2::INTEGER AS similar_case_threshold,
         3::INTEGER AS tah_case_threshold
 ),
