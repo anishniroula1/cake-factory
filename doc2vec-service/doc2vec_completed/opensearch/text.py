@@ -3,7 +3,7 @@ import unicodedata
 
 
 def normalize_sentence(value: str) -> str:
-    """Normalize sentence text before creating its stable key.
+    """Clean sentence text before making its key.
 
     Input:  The   Government approved it.
     Output: the government approved it.
@@ -13,7 +13,11 @@ def normalize_sentence(value: str) -> str:
 
 
 def sentence_key(value: str) -> str:
-    """Create the same SHA-256 key whenever normalized text is the same."""
+    """Create the same SHA-256 key for the same cleaned sentence.
+
+    Input: THE Story and the   story.
+    Output: the same 64-character key for both values.
+    """
 
     normalized = normalize_sentence(value)
     if not normalized:

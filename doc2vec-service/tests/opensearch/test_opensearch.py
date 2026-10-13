@@ -1,5 +1,5 @@
 import pytest
-from opensearchpy import TransportError
+from opensearchpy import OpenSearchException, TransportError
 
 from doc2vec_completed.opensearch.errors import PermanentDataError
 from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
@@ -48,29 +48,9 @@ def test_existing_ids_and_bulk_pipeline_selection(
 
     helper.bulk_index("catalog", documents, needs_embedding=True)
     assert "pipeline" not in calls[1][1]
-    assert any(
-        "Checking 2 unique document ID(s)" in message
-        for message in custom_logger.info_messages
-    )
-    assert any(
-        "lookup in alias catalog completed. Found 1" in message
-        for message in custom_logger.info_messages
-    )
-    assert any(
-        "using vectors already stored" in message
-        for message in custom_logger.info_messages
-    )
-    assert any(
-        "using the Bedrock embedding pipeline" in message
-        for message in custom_logger.info_messages
-    )
-    assert sum(
-        "bulk write to catalog completed" in message
-        for message in custom_logger.info_messages
-    ) == 2
 
 
-def test_empty_opensearch_operations_are_logged_and_skipped(
+def test_empty_opensearch_operations_are_skipped(
     service_config,
     custom_logger,
 ):
@@ -78,14 +58,6 @@ def test_empty_opensearch_operations_are_logged_and_skipped(
 
     assert helper.existing_ids("catalog", []) == set()
     assert helper.bulk_index("catalog", [], needs_embedding=False) == 0
-    assert any(
-        "Skipped the OpenSearch lookup" in message
-        for message in custom_logger.info_messages
-    )
-    assert any(
-        "Skipped the OpenSearch bulk write" in message
-        for message in custom_logger.info_messages
-    )
 
 
 def test_refresh_makes_catalog_and_occurrences_searchable(
@@ -104,7 +76,7 @@ def test_refresh_makes_catalog_and_occurrences_searchable(
     )
 
 
-def test_bulk_retries_only_temporary_failed_documents(
+def test_bulk_reports_temporary_failed_documents_to_the_caller(
     monkeypatch,
     service_config,
     custom_logger,
@@ -118,19 +90,14 @@ def test_bulk_retries_only_temporary_failed_documents(
         return len(actions), []
 
     monkeypatch.setattr("doc2vec_completed.opensearch.opensearch.helpers.bulk", bulk)
-    monkeypatch.setattr("doc2vec_completed.opensearch.opensearch.time.sleep", no_wait)
     helper = OpenSearchHelper(service_config, ClientFake(), custom_logger)
     documents = [{"_id": "A"}, {"_id": "B"}]
-    assert helper.bulk_index("catalog", documents, needs_embedding=False) == 2
-    assert [action["_id"] for action in calls[1]] == ["B"]
-    assert any(
-        "bulk write to catalog failed on attempt 1 for 1 document(s)"
-        in message
-        for message in custom_logger.warning_messages
-    )
+    with pytest.raises(OpenSearchException):
+        helper.bulk_index("catalog", documents, needs_embedding=False)
+    assert len(calls) == 1
 
 
-def test_bulk_retries_transport_failure(
+def test_bulk_reports_transport_failure_to_the_caller(
     monkeypatch,
     service_config,
     custom_logger,
@@ -144,17 +111,13 @@ def test_bulk_retries_transport_failure(
         return len(actions), []
 
     monkeypatch.setattr("doc2vec_completed.opensearch.opensearch.helpers.bulk", bulk)
-    monkeypatch.setattr("doc2vec_completed.opensearch.opensearch.time.sleep", no_wait)
     helper = OpenSearchHelper(service_config, ClientFake(), custom_logger)
-    assert helper.bulk_index("catalog", [{"_id": "A"}], False) == 1
-    assert any(
-        "bulk write to catalog failed on attempt 1 for 1 document(s)"
-        in message
-        for message in custom_logger.warning_messages
-    )
+    with pytest.raises(TransportError):
+        helper.bulk_index("catalog", [{"_id": "A"}], False)
+    assert len(calls) == 1
 
 
-def test_existing_id_lookup_logs_retry_and_permanent_failure(
+def test_existing_id_lookup_returns_temporary_and_permanent_failures(
     monkeypatch,
     service_config,
     custom_logger,
@@ -170,15 +133,12 @@ def test_existing_id_lookup_logs_retry_and_permanent_failure(
                 raise TransportError(503, "temporary")
             return super().mget(index, body, params)
 
-    monkeypatch.setattr("doc2vec_completed.opensearch.opensearch.time.sleep", no_wait)
     retry_client = RetryLookupClient()
     helper = OpenSearchHelper(service_config, retry_client, custom_logger)
 
-    assert helper.existing_ids("catalog", ["A"]) == {"A"}
-    assert any(
-        "lookup in alias catalog failed on attempt 1" in message
-        for message in custom_logger.warning_messages
-    )
+    with pytest.raises(TransportError):
+        helper.existing_ids("catalog", ["A"])
+    assert retry_client.attempts == 1
 
     class FailedLookupClient(ClientFake):
         def mget(self, index, body, params):
@@ -191,10 +151,6 @@ def test_existing_id_lookup_logs_retry_and_permanent_failure(
     )
     with pytest.raises(PermanentDataError):
         failed_helper.existing_ids("catalog", ["A"])
-    assert any(
-        "lookup in alias catalog failed permanently" in message
-        for message in custom_logger.error_messages
-    )
 
 
 def test_permanent_opensearch_errors_are_not_retried(
@@ -211,10 +167,6 @@ def test_permanent_opensearch_errors_are_not_retried(
     helper = OpenSearchHelper(service_config, ClientFake(), custom_logger)
     with pytest.raises(PermanentDataError):
         helper.bulk_index("catalog", [{"_id": "A"}], False)
-    assert any(
-        "OpenSearch bulk write to catalog failed permanently" in message
-        for message in custom_logger.error_messages
-    )
 
     def unauthorized(client, actions, **arguments):
         raise TransportError(401, "unauthorized")
@@ -231,9 +183,5 @@ def test_vector_validation_and_retryable_status(service_config, custom_logger):
     helper.validate_vector([0.1, 0.2])
     with pytest.raises(PermanentDataError):
         helper.validate_vector([0.1])
-    assert any(
-        "OpenSearch vector validation failed" in message
-        for message in custom_logger.error_messages
-    )
     assert helper._is_retryable(TransportError(424, "retry"))
     assert not helper._is_retryable(TransportError(400, "stop"))

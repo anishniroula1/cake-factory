@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from doc2vec_completed.opensearch.models import SentencesVector, TextSimilarityInput
+from ta_db_connection.atables import SentencesVector, TextSimilarityInput
 from tests.opensearch.fakes import LoggerFake
 
 
@@ -27,6 +27,7 @@ def dependency_config():
         opensearch_service="es",
         opensearch_iam_access_role="",
         opensearch_batch_size=1_000,
+        opensearch_bulk_retry_count=15,
         occurrence_alias="sentence_occurrences",
         asylee_catalog_alias="sentence_semantic_catalog_asylee",
         refugee_catalog_alias="sentence_semantic_catalog_refugee",
@@ -48,6 +49,7 @@ def dependency_config():
 def service_config():
     return SimpleNamespace(
         opensearch_batch_size=1_000,
+        opensearch_bulk_retry_count=15,
         worker_batch_size=30,
         thread_worker_count=2,
         retry_seconds=1,

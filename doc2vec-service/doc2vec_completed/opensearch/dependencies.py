@@ -1,12 +1,12 @@
 from sqlalchemy.orm import sessionmaker
 
-from doc2vec_completed.opensearch.AwsSQS import AwsSQS
 from doc2vec_completed.opensearch.config import Config
-from doc2vec_completed.opensearch.custom_logger import CustomLogger
-from doc2vec_completed.opensearch.DatabaseConnection import DatabaseConnection
 from doc2vec_completed.opensearch.handlers.historical_handler import HistoricalHandler
 from doc2vec_completed.opensearch.open_search_client import OpenSearchClient
 from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
+from ta_db_connection.database_connection import DatabaseConnection
+from ta_utils.aws.sqs.AwsSQS import AwsSQS
+from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class Dependencies:
@@ -15,7 +15,7 @@ class Dependencies:
         custom_logger: CustomLogger | None = None,
         database_connection: DatabaseConnection | None = None,
     ) -> None:
-        """Create everything used while processing an SQS message."""
+        """Create the shared database, OpenSearch, SQS, and handler objects."""
 
         self.logger = custom_logger or CustomLogger("doc2vec_completed.opensearch")
         self.config = Config.from_environment()
@@ -51,12 +51,12 @@ class Dependencies:
         )
 
     def close(self) -> None:
-        """Close the database connection pool when the process stops."""
+        """Close the PostgreSQL connections when the worker stops."""
 
         self.database.engine.dispose()
 
     def _create_database_connection(self) -> DatabaseConnection:
-        """Create the database connection from the Vault-backed configuration."""
+        """Create the PostgreSQL connection using values already read from Vault."""
 
         return DatabaseConnection(
             pg_db_user=self.config.pg_db_user,

@@ -18,7 +18,7 @@ class DatabaseConnection:
         application_name: str = "doc2vec_historical",
         logger=None,
     ) -> None:
-        """Create the local database connection used by the standalone worker."""
+        """Create the PostgreSQL connection pool used by the worker."""
 
         self.logger = prefect_logger or logger
         self.pg_db_user = pg_db_user

@@ -1,7 +1,7 @@
-from doc2vec_completed.opensearch.custom_logger import CustomLogger
-from doc2vec_completed.opensearch.DatabaseConnection import DatabaseConnection
 from doc2vec_completed.opensearch.dependencies import Dependencies
 from doc2vec_completed.opensearch.sqs_processor import SqsProcessor
+from ta_db_connection.database_connection import DatabaseConnection
+from ta_utils.logger.CustomLogger import CustomLogger
 
 
 def run_opensearch_flow(
@@ -9,7 +9,7 @@ def run_opensearch_flow(
     database_connection: DatabaseConnection | None = None,
     dependencies: Dependencies | None = None,
 ) -> None:
-    """Build one dependency container and start the SQS processor."""
+    """Create the service objects and start reading SQS messages."""
 
     service_dependencies = dependencies or Dependencies(
         custom_logger,
@@ -20,6 +20,7 @@ def run_opensearch_flow(
     try:
         processor.run()
     finally:
+        service_dependencies.logger.set_generic_message(None)
         service_dependencies.close()
 
 

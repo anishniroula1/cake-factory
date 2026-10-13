@@ -17,21 +17,23 @@ for this flow live under `tests/opensearch`.
 helper, SQS helper, and historical handler. The SQS processor receives only
 this one dependency object.
 `doc2vec_completed.opensearch.main.run_opensearch_flow(custom_logger=...)` can
-still receive the team's logger, while `custom_logger.py` remains the
-standalone default.
+still receive the team's logger, while `ta_utils/logger/CustomLogger.py`
+remains the standalone default.
 
-`AwsSQS.py` mirrors the shared SQS library used by the application. It creates
-the AWS client from the pod credentials, receives and formats messages, keeps
-the receipt handle and receive count, deletes completed messages, and sends the
-next FIFO or standard message. The historical code uses only
+`ta_utils/aws/sqs/AwsSQS.py` mirrors the shared SQS library used by the
+application. It creates the AWS client from the pod credentials, receives and
+formats messages, keeps the receipt handle and receive count, deletes completed
+messages, and sends the next FIFO or standard message. The historical code uses only
 `listen_sqs_message`, `send_sqs_message`, and `delete_messages`; unused batch
 operations are intentionally not included.
 
-`DatabaseConnection.py` mirrors the shared database library's connection-pool
-interface. It owns the SQLAlchemy engine, pool size, overflow, recycle time,
-pre-ping check, and PostgreSQL `application_name`. `VaultSecrets.py` reads the
-mounted YAML file identified by `VAULT_YAML_PATH`. Production can still pass
-the real shared database object by calling `run_opensearch_flow` with
+`ta_db_connection/database_connection.py` mirrors the shared database
+library's connection-pool interface. `ta_db_connection/atables.py` contains
+the table models used by this flow. The connection owns the SQLAlchemy engine,
+pool size, overflow, recycle time, pre-ping check, and PostgreSQL
+`application_name`. `ta_utils/vault/VaultSecrets.py` reads the mounted YAML
+file identified by `VAULT_YAML_PATH`. Production can still pass the real shared
+database object by calling `run_opensearch_flow` with
 `database_connection=shared_connection`.
 
 The Vault YAML file provides these values:
@@ -85,35 +87,40 @@ the expected fields are visible before a document is sent for bulk indexing.
    `embedding_type = 2`. If no vector exists, let the catalog's Bedrock ingest
    pipeline create it.
 7. Write every sentence occurrence using `global_id` as its OpenSearch ID.
-8. After every page succeeds, send the `tsp_id` and `HISTORICAL` reason to the
-   Sentence Similarity queue.
+8. After all pages succeed, refresh the selected catalog and occurrence
+   alias once, then send the `tsp_id` and `HISTORICAL` reason to the Sentence
+   Similarity queue.
 9. The SQS processor deletes the source message only after the handler succeeds.
 
-Documents use stable OpenSearch IDs, so retrying a page updates the same
-documents instead of creating duplicates. Temporary operations retry three
-times by default. The OpenSearch helper continues retrying temporary Lasso,
-Bedrock, gateway, and OpenSearch failures while applying the shared embedding
-cooldown.
+Documents use stable OpenSearch IDs, so retrying a write updates the same
+documents instead of creating duplicates. Each OpenSearch bulk write gets the
+original request plus 15 retries, with a five-second wait after each failed
+attempt. Other temporary database, AWS, OpenSearch lookup, refresh, queue, or
+network operations get up to three total attempts. Only the failed operation
+is retried; the whole worker batch is not started again. A throttled embedding
+request also starts one short cooldown shared by the embedding workers.
 
 ## Processing logs
 
-The worker writes simple progress logs in processing order. They show when a
-message starts, how many sentences were found, when each database page is
-loaded, when keys are saved, and when catalog and occurrence writes finish.
-Parallel worker messages include the first and last `global_id` in the batch,
-so a failed batch is easy to find without logging the `tsp_id`.
+The worker keeps normal logs short. It logs the message start, source count,
+page range, one result for each worker batch, page completion, final result,
+refresh, and source-message deletion. The worker-batch result shows how many
+keys were generated or reused, how many catalog keys already existed, how many
+saved vectors were reused, how many vectors Bedrock created, and how many
+occurrences were written.
 
-Every failed stage writes an error before it is retried. Retry logs show the
-attempt number and wait time. A permanent failure says that it will not be
-retried, and the source SQS message is left on the queue. A successful flow
-logs the source count, indexed count, next-queue send, and source-message
-deletion.
+A temporary operation logs a warning before waiting and retrying. If a later
+attempt works, one information log confirms the successful attempt. If the
+operation exhausts its configured attempts, the SQS boundary writes one final
+error and does not delete the source message. The queue then applies its
+configured receive retry and DLQ policy. Invalid data follows the same single
+final-error path without repeating an operation that waiting cannot repair.
 
-The OpenSearch helper also logs every ID lookup and bulk write. Its messages
-show the alias, document count, whether saved vectors or the Bedrock pipeline
-are used, retry failures, and permanent failures. Shared embedding cooldown
-waits use `DEBUG` because many workers can wait at the same time. Empty lookup
-and write requests are logged as skipped operations.
+Unexpected runtime or programming errors are not treated as temporary service
+failures. They are allowed to surface so New Relic shows the real code defect.
+OpenSearch ID lookups, empty writes, and successful low-level writes do not
+produce extra logs. Shared embedding cooldown waits use `DEBUG` because many
+workers can wait at the same time.
 
 ## Database tables
 
@@ -134,7 +141,7 @@ only from the separate `embeddings` table.
 `sectionName`, and `isCurrent` from the related `text_similarity_input` row and
 does not store `a_number`.
 
-If production column names differ, update `models.py`.
+If production column names differ, update `ta_db_connection/atables.py`.
 
 ## OpenSearch aliases
 

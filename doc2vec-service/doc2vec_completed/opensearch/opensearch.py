@@ -1,15 +1,14 @@
 import threading
 import time
 
-from opensearchpy import OpenSearch, TransportError, helpers
+from opensearchpy import OpenSearch, OpenSearchException, TransportError, helpers
 
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import OpenSearchDocument
-from doc2vec_completed.opensearch.custom_logger import CustomLogger
 from doc2vec_completed.opensearch.errors import PermanentDataError
+from ta_utils.logger.CustomLogger import CustomLogger
 
-# These failures are normally temporary problems from OpenSearch, Lasso,
-# Bedrock, or a gateway in front of them.
+# These status codes usually mean the service needs a short pause and another try.
 RETRYABLE_STATUS_CODES = {408, 424, 425, 429, 500, 502, 503, 504}
 
 
@@ -20,7 +19,7 @@ class OpenSearchHelper:
         client: OpenSearch,
         custom_logger: CustomLogger,
     ) -> None:
-        """Keep the small amount of OpenSearch code shared by all handlers."""
+        """Save the OpenSearch client, settings, and logger."""
 
         self.config = config
         self.client = client
@@ -29,55 +28,39 @@ class OpenSearchHelper:
         self.embedding_cooldown_until = 0.0
 
     def existing_ids(self, alias: str, document_ids: list[str]) -> set[str]:
-        """Return document IDs that already exist in an OpenSearch alias."""
+        """Return the requested IDs that already exist in an alias.
+
+        Input: document_ids=["A", "B"] and only A exists.
+        Output: {"A"}.
+
+        A temporary error goes back to the retry code. A bad request stops
+        immediately because waiting will not fix permissions or a bad mapping.
+        """
 
         existing: set[str] = set()
         unique_ids = list(dict.fromkeys(document_ids))
         if not unique_ids:
-            self.logger.info(
-                f"Skipped the OpenSearch lookup in {alias} because no document "
-                "IDs were provided."
-            )
             return existing
 
-        self.logger.info(
-            f"Checking {len(unique_ids)} unique document ID(s) in OpenSearch "
-            f"alias {alias}."
-        )
         for offset in range(0, len(unique_ids), self.config.opensearch_batch_size):
             batch = unique_ids[offset : offset + self.config.opensearch_batch_size]
-            attempt = 0
-            while True:
-                attempt += 1
-                try:
-                    response = self.client.mget(
-                        index=alias,
-                        body={"ids": batch},
-                        params={"_source": "false"},
-                    )
-                    break
-                except TransportError as error:
-                    if not self._is_retryable(error):
-                        message = (
-                            f"OpenSearch lookup in alias {alias} failed permanently: "
-                            f"{str(error)[:500]}"
-                        )
-                        self.logger.error(message)
-                        raise PermanentDataError(message) from error
-                    self.logger.warning(
-                        f"OpenSearch lookup in alias {alias} failed on attempt "
-                        f"{attempt} for {len(batch)} document ID(s). Retrying in "
-                        f"{self.config.retry_seconds} seconds."
-                    )
-                    time.sleep(self.config.retry_seconds)
+            try:
+                response = self.client.mget(
+                    index=alias,
+                    body={"ids": batch},
+                    params={"_source": "false"},
+                )
+            except TransportError as error:
+                if self._is_retryable(error):
+                    raise
+                raise PermanentDataError(
+                    f"OpenSearch lookup in alias {alias} was rejected: "
+                    f"{str(error)[:500]}"
+                ) from error
 
             for document in response["docs"]:
                 if document.get("found"):
                     existing.add(str(document["_id"]))
-        self.logger.info(
-            f"OpenSearch lookup in alias {alias} completed. Found "
-            f"{len(existing)} existing document(s)."
-        )
         return existing
 
     def bulk_index(
@@ -86,121 +69,82 @@ class OpenSearchHelper:
         documents: list[OpenSearchDocument],
         needs_embedding: bool,
     ) -> int:
-        """Index documents and keep retrying temporary failed items.
+        """Try one OpenSearch bulk write.
 
-        Every document must contain an internal `_id`. The helper removes that
-        value from `_source` before sending the document to OpenSearch.
+        Input: documents with an `_id` field.
+        Output: the number written when the request succeeds.
+
+        `_id` is used as the OpenSearch document ID and is removed from the
+        saved body. The caller handles the wait and retry when this call fails.
         """
 
         if not documents:
-            self.logger.info(
-                f"Skipped the OpenSearch bulk write to {alias} because there "
-                "were no documents to index."
-            )
             return 0
 
-        vector_source = (
-            "the Bedrock embedding pipeline"
-            if needs_embedding
-            else "vectors already stored in the documents"
-        )
-        self.logger.info(
-            f"Starting an OpenSearch bulk write of {len(documents)} document(s) "
-            f"to {alias} using {vector_source}."
-        )
-        pending = documents
-        attempt = 0
-        while pending:
-            attempt += 1
-            if needs_embedding:
-                self._wait_for_embedding_cooldown()
+        if needs_embedding:
+            self._wait_for_embedding_cooldown()
 
-            actions = []
-            for document in pending:
-                actions.append(
-                    {
-                        "_op_type": "index",
-                        "_index": alias,
-                        "_id": str(document["_id"]),
-                        "_source": {
-                            key: value
-                            for key, value in document.items()
-                            if key != "_id"
-                        },
-                    }
-                )
-
-            bulk_arguments = {
-                "chunk_size": self.config.opensearch_batch_size,
-                "raise_on_error": False,
-                "raise_on_exception": True,
+        actions = [
+            {
+                "_op_type": "index",
+                "_index": alias,
+                "_id": str(document["_id"]),
+                "_source": {key: value for key, value in document.items() if key != "_id"},
             }
-            if not needs_embedding:
-                # This prevents an index default pipeline from replacing an
-                # existing vector or calling Bedrock unnecessarily.
-                bulk_arguments["pipeline"] = "_none"
+            for document in documents
+        ]
+        bulk_arguments = {
+            "chunk_size": self.config.opensearch_batch_size,
+            "raise_on_error": False,
+            "raise_on_exception": True,
+        }
+        if not needs_embedding:
+            # This document already has its vector. Skip the default pipeline so
+            # Bedrock does not create and charge for the same vector again.
+            bulk_arguments["pipeline"] = "_none"
 
-            try:
-                _, failures = helpers.bulk(
-                    self.client,
-                    actions,
-                    **bulk_arguments,
-                )
-            except TransportError as error:
-                if not self._is_retryable(error):
-                    message = (
-                        f"OpenSearch bulk write to {alias} failed permanently: "
-                        f"{str(error)[:500]}"
-                    )
-                    self.logger.error(message)
-                    raise PermanentDataError(message) from error
-                self._pause_before_retry(alias, attempt, len(pending), needs_embedding)
-                continue
-
-            if not failures:
-                self.logger.info(
-                    f"OpenSearch bulk write to {alias} completed. Indexed "
-                    f"{len(documents)} document(s)."
-                )
-                return len(documents)
-
-            try:
-                pending = self._retryable_documents(failures, pending)
-            except PermanentDataError as error:
-                self.logger.error(
-                    f"OpenSearch bulk write to {alias} failed permanently: "
+        try:
+            _, failures = helpers.bulk(self.client, actions, **bulk_arguments)
+        except TransportError as error:
+            if not self._is_retryable(error):
+                raise PermanentDataError(
+                    f"OpenSearch bulk write to {alias} was rejected: "
                     f"{str(error)[:500]}"
-                )
-                raise
-            self._pause_before_retry(alias, attempt, len(pending), needs_embedding)
+                ) from error
+            if needs_embedding:
+                self._start_embedding_cooldown()
+            raise
 
+        if failures:
+            retryable_documents = self._retryable_documents(failures, documents)
+            if needs_embedding:
+                self._start_embedding_cooldown()
+            raise OpenSearchException(
+                f"OpenSearch temporarily rejected {len(retryable_documents)} "
+                f"document(s) in alias {alias}"
+            )
         return len(documents)
 
     def validate_vector(self, vector: list[float]) -> None:
-        """Reject a vector that does not match the 512-dimension mapping."""
+        """Stop when a saved vector has the wrong number of values.
+
+        Example: a 1,024-value vector cannot go into a 512-value field.
+        """
 
         if len(vector) != self.config.vector_dimension:
-            message = (
-                f"embedding has {len(vector)} values; "
-                f"expected {self.config.vector_dimension}"
+            raise PermanentDataError(
+                f"embedding has {len(vector)} values; expected "
+                f"{self.config.vector_dimension}"
             )
-            self.logger.error(f"OpenSearch vector validation failed: {message}")
-            raise PermanentDataError(message)
 
     def refresh_indices(self, catalog_alias: str) -> None:
-        """Make this document's catalog and occurrence writes searchable.
+        """Make the new catalog and occurrence documents searchable.
 
-        Input: catalog_alias=sentence_semantic_catalog_asylee
-
-        This runs once after all worker batches finish. It does not refresh
-        after every bulk request, which would unnecessarily slow ingestion.
+        Input: catalog_alias="sentence_semantic_catalog_asylee".
+        This runs once after all batches because refreshing every batch is slow.
         """
 
         indices = f"{catalog_alias},{self.config.occurrence_alias}"
-        self.logger.info(
-            "Refreshing the OpenSearch catalog and occurrence indexes before "
-            "sending the document to Sentence Similarity."
-        )
         self.client.indices.refresh(index=indices)
         self.logger.info(
             "OpenSearch refresh completed. Newly indexed sentences are now "
@@ -212,7 +156,12 @@ class OpenSearchHelper:
         failures: list,
         documents: list[OpenSearchDocument],
     ) -> list[OpenSearchDocument]:
-        """Return only temporary failed documents from a bulk response."""
+        """Return failed documents that are allowed to be tried again.
+
+        Example: A succeeds and B returns 503. Output contains only B.
+        A status such as 400 stops immediately because another try will not help.
+        The caller uses this result to count failures, then retries the full batch.
+        """
 
         failed_ids = set()
         for failure in failures:
@@ -230,39 +179,24 @@ class OpenSearchHelper:
             document for document in documents if str(document["_id"]) in failed_ids
         ]
 
-    def _pause_before_retry(
-        self,
-        alias: str,
-        attempt: int,
-        failed_count: int,
-        needs_embedding: bool,
-    ) -> None:
-        """Log one short error and apply the correct retry pause."""
+    def _start_embedding_cooldown(self) -> None:
+        """Set one shared wait time after Lasso or Bedrock asks us to slow down."""
 
-        request_type = "embedding" if needs_embedding else "bulk"
-        self.logger.warning(
-            f"OpenSearch {request_type} write to {alias} failed on attempt "
-            f"{attempt} for {failed_count} document(s). Retrying in "
-            f"{self.config.retry_seconds} seconds."
-        )
-        if needs_embedding:
-            with self.cooldown_lock:
-                self.embedding_cooldown_until = max(
-                    self.embedding_cooldown_until,
-                    time.monotonic() + self.config.retry_seconds,
-                )
-            return
-        time.sleep(self.config.retry_seconds)
+        with self.cooldown_lock:
+            self.embedding_cooldown_until = max(
+                self.embedding_cooldown_until,
+                time.monotonic() + self.config.retry_seconds,
+            )
 
     def _wait_for_embedding_cooldown(self) -> None:
-        """Wait when another worker reports Lasso or Bedrock throttling."""
+        """Wait until the shared Lasso or Bedrock pause has finished."""
 
         while True:
             with self.cooldown_lock:
                 remaining = self.embedding_cooldown_until - time.monotonic()
             if remaining <= 0:
                 return
-            self.logger.info(
+            self.logger.debug(
                 "Waiting "
                 f"{remaining:.1f} second(s) before the next OpenSearch embedding "
                 "write because an earlier request was throttled."
@@ -271,7 +205,7 @@ class OpenSearchHelper:
 
     @staticmethod
     def _is_retryable(error: TransportError) -> bool:
-        """Return true for network errors and known temporary status codes."""
+        """Return True when waiting and trying the request again may work."""
 
         status = getattr(error, "status_code", None)
         if status in {None, "N/A"}:

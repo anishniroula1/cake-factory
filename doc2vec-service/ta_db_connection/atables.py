@@ -23,7 +23,7 @@ class Base(DeclarativeBase):
 
 
 class TextSimilarityInput(Base):
-    """Provide document-level values shared by every sentence for one tsp_id."""
+    """Map the document fields shared by every sentence with one tsp_id."""
 
     __tablename__ = "text_similarity_input"
     __table_args__: ClassVar[dict[str, object]] = {"schema": "tsp"}
@@ -36,6 +36,8 @@ class TextSimilarityInput(Base):
 
 
 class SentencesVector(Base):
+    """Map one saved sentence and its Doc2Vec processing fields."""
+
     __tablename__ = "sentences_vector"
     __table_args__: ClassVar[dict[str, object]] = {
         "extend_existing": True,
@@ -97,6 +99,8 @@ class SentencesVector(Base):
 
 
 class Embeddings(Base):
+    """Map one saved embedding for a global_id and embedding type."""
+
     __tablename__ = "embeddings"
 
     global_id: Mapped[int] = mapped_column(Integer, primary_key=True)

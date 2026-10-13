@@ -6,18 +6,18 @@ import yaml
 
 class VaultSecrets:
     def __init__(self, secret_file: str | None = None) -> None:
-        """Read the Vault YAML file mounted for this service."""
+        """Find the Vault YAML file and read its values."""
 
         self.secret_file = secret_file or os.getenv("VAULT_YAML_PATH", "").strip()
         self.secrets = self._read_secrets()
 
     def get(self, name: str, default=None):
-        """Return one Vault value or the supplied default value."""
+        """Return one Vault value, or the default when the name is missing."""
 
         return self.secrets.get(name, default)
 
     def _read_secrets(self) -> dict:
-        """Load the mounted YAML file into a simple key and value dictionary."""
+        """Read the YAML file and return its names and values as a dictionary."""
 
         if not self.secret_file:
             return {}

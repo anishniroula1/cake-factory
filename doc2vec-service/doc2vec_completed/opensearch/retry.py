@@ -1,25 +1,43 @@
 import time
 from collections.abc import Callable
+from typing import Any
 
-from doc2vec_completed.opensearch.custom_logger import CustomLogger
+from botocore.exceptions import BotoCoreError
+from opensearchpy.exceptions import OpenSearchException
+from sqlalchemy.exc import SQLAlchemyError
+
 from doc2vec_completed.opensearch.errors import (
+    OperationFailedError,
     PermanentDataError,
-    PermanentMessageError,
+    QueueSendError,
+)
+from ta_utils.logger.CustomLogger import CustomLogger
+
+RETRYABLE_ERRORS = (
+    BotoCoreError,
+    OpenSearchException,
+    SQLAlchemyError,
+    TimeoutError,
+    ConnectionError,
+    QueueSendError,
 )
 
 
-def retry_operation[**Parameters, Result](
+def retry_operation[Result](
     label: str,
-    operation: Callable[Parameters, Result],
-    *arguments: Parameters.args,
+    operation: Callable[..., Result],
+    *arguments: Any,
     wait_seconds: int,
     max_attempts: int = 3,
-    custom_logger: CustomLogger | None = None,
+    custom_logger: CustomLogger,
 ) -> Result:
-    """Try an operation up to three times unless another limit is passed.
+    """Run one job again when an outside service has a temporary problem.
 
-    Input: max_attempts=5 allows up to five total attempts. Extra values are
-    passed directly to the operation.
+    Input: a label, the job to call, its values, wait time, and attempt limit.
+    Output: the job result after it succeeds.
+
+    Database, AWS, network, and OpenSearch errors may work on another try.
+    Bad data and code bugs stop immediately because waiting will not fix them.
     """
 
     if max_attempts < 1:
@@ -27,25 +45,25 @@ def retry_operation[**Parameters, Result](
 
     for attempt in range(1, max_attempts + 1):
         try:
-            return operation(*arguments)
-        except Exception as error:
-            if isinstance(error, (PermanentDataError, PermanentMessageError)):
-                if custom_logger:
-                    custom_logger.error(
-                        f"{label} failed and will not be retried: "
-                        f"{str(error)[:500]}"
-                    )
-                raise
-            if attempt == max_attempts:
-                if custom_logger:
-                    custom_logger.error(
-                        f"{label} failed after {max_attempts} attempt(s): "
-                        f"{str(error)[:500]}"
-                    )
-                raise
-            if custom_logger:
-                custom_logger.warning(
-                    f"{label} attempt {attempt} failed: {str(error)[:500]}; "
-                    f"retrying in {wait_seconds} seconds"
+            result = operation(*arguments)
+            if attempt > 1:
+                custom_logger.info(
+                    f"{label} succeeded on attempt {attempt} after "
+                    f"{attempt - 1} failed attempt(s)."
                 )
+            return result
+        except PermanentDataError:
+            raise
+        except RETRYABLE_ERRORS as error:
+            if attempt == max_attempts:
+                raise OperationFailedError(
+                    f"{label} failed after {max_attempts} attempts: "
+                    f"{str(error)[:500]}"
+                ) from error
+            custom_logger.warning(
+                f"{label} attempt {attempt} failed: {str(error)[:500]}; "
+                f"retrying in {wait_seconds} seconds"
+            )
             time.sleep(wait_seconds)
+
+    raise OperationFailedError(f"{label} ended without returning a result")

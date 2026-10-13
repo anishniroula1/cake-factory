@@ -25,7 +25,7 @@ class AwsSQS:
         retry_wait_seconds: int = 5,
         sqs_client=None,
     ) -> None:
-        """Create the small SQS wrapper used by the historical worker."""
+        """Create the SQS client and save the source queue settings."""
 
         self._logger = logger
         self._sqs = sqs_client or boto3.client(
@@ -40,7 +40,7 @@ class AwsSQS:
         self._retry_wait_seconds = retry_wait_seconds
 
     def receive_messages(self) -> list[RawSqsMessage]:
-        """Receive messages and return an empty list after a temporary failure."""
+        """Read messages from SQS, or return an empty list when the call fails."""
 
         try:
             response = self._sqs.receive_message(
@@ -67,15 +67,15 @@ class AwsSQS:
         return messages
 
     def sqs_message_to_json(self, message: RawSqsMessage) -> SqsMessage:
-        """Convert one raw SQS body and keep the fields needed for deletion."""
+        """Turn one SQS JSON body into a dictionary used by this service."""
 
         if not message:
             return {}
 
         try:
             message_object = json.loads(message.get("Body", ""))
-            # Some publishers encode the JSON body twice. Decode that second
-            # layer without stripping valid slashes or quotation marks.
+            # A message may contain JSON text inside another JSON value.
+            # Decode the second value so the result is one normal dictionary.
             if isinstance(message_object, str):
                 message_object = json.loads(message_object)
             if not isinstance(message_object, dict):
@@ -103,7 +103,7 @@ class AwsSQS:
             return {}
 
     def listen_sqs_message(self) -> list[SqsMessage]:
-        """Receive raw SQS messages and return only valid JSON messages."""
+        """Read SQS and return only messages with a valid JSON dictionary."""
 
         formatted_messages: list[SqsMessage] = []
         for message in self.receive_messages():
@@ -113,7 +113,7 @@ class AwsSQS:
         return formatted_messages
 
     def delete_messages(self, message: SqsMessage) -> bool:
-        """Delete one successfully processed source message."""
+        """Delete one source message after its document finishes successfully."""
 
         try:
             self._sqs.delete_message(
@@ -140,7 +140,11 @@ class AwsSQS:
         retries: int = 0,
         is_fifo: bool = True,
     ) -> bool:
-        """Send one message and retry the failed send when requested."""
+        """Send one message to the next queue.
+
+        Input: queue URL, message body, retry wait, retry count, and queue type.
+        Output: True when SQS accepts the message, otherwise False.
+        """
 
         body = (
             message_body if isinstance(message_body, str) else json.dumps(message_body)

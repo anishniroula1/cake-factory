@@ -6,11 +6,12 @@ from sqlalchemy.orm import Session
 
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import CatalogDocument, OccurrenceDocument
-from doc2vec_completed.opensearch.custom_logger import CustomLogger
 from doc2vec_completed.opensearch.errors import PermanentDataError
-from doc2vec_completed.opensearch.models import Embeddings, SentencesVector
 from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
+from doc2vec_completed.opensearch.retry import retry_operation
 from doc2vec_completed.opensearch.text import sentence_key
+from ta_db_connection.atables import Embeddings, SentencesVector
+from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class SentenceBatchProcessor:
@@ -21,7 +22,7 @@ class SentenceBatchProcessor:
         opensearch: OpenSearchHelper,
         custom_logger: CustomLogger,
     ) -> None:
-        """Keep the resources used to index one reusable sentence batch."""
+        """Save the tools used to process one small sentence batch."""
 
         self.config = config
         self.session_factory = session_factory
@@ -29,63 +30,59 @@ class SentenceBatchProcessor:
         self.logger = custom_logger
 
     def process(self, rows: list[SentencesVector], label: str) -> int:
-        """Prepare and index one sentence batch.
+        """Save keys, catalog documents, and occurrences for one batch.
 
-        Input: rows contains one document's sentences and label identifies the
-        batch in logs. Output: number of indexed occurrence documents.
+        Input: 30 sentence rows from one document.
+        Output: 30 after all 30 occurrence documents are written.
         """
 
-        stage = "sentence-key update"
-        try:
-            self.logger.info(f"{label} is preparing sentence keys.")
-            generated_count, reused_count = self._save_keys(rows)
-            self.logger.info(
-                f"{label} prepared sentence keys. Generated {generated_count} "
-                f"new key(s) and reused {reused_count} existing key(s)."
-            )
+        generated_count, reused_count = retry_operation(
+            f"Save sentence keys for {label}",
+            self._save_keys,
+            rows,
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
+        )
 
-            stage = "catalog selection"
-            document = rows[0].tsp
-            catalog_alias = self.catalog_alias(document.analysis_group)
-            self.logger.info(
-                f"{label} selected catalog {catalog_alias} for analysis group "
-                f"{document.analysis_group}."
-            )
+        document = rows[0].tsp
+        catalog_alias = self.catalog_alias(document.analysis_group)
+        embeddings = retry_operation(
+            f"Load saved embeddings for {label}",
+            self._load_embeddings,
+            [row.global_id for row in rows],
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
+        )
+        existing_count, saved_vector_count, bedrock_count = self._index_catalog_rows(
+            catalog_alias,
+            rows,
+            embeddings,
+            label,
+        )
 
-            stage = "saved embedding lookup"
-            embeddings = self._load_embeddings([row.global_id for row in rows])
-            self.logger.info(
-                f"{label} loaded {len(embeddings)} saved Titan embedding(s)."
-            )
-
-            stage = "catalog indexing"
-            self._index_catalog_rows(catalog_alias, rows, embeddings, label)
-
-            stage = "occurrence indexing"
-            occurrences = self._occurrence_documents(rows)
-            self.logger.info(
-                f"{label} is writing {len(occurrences)} occurrence document(s) "
-                f"to {self.config.occurrence_alias}."
-            )
-            self.opensearch.bulk_index(
-                self.config.occurrence_alias,
-                occurrences,
-                needs_embedding=False,
-            )
-            self.logger.info(
-                f"{label} wrote {len(occurrences)} occurrence document(s)."
-            )
-            return len(rows)
-        except Exception as error:
-            self.logger.error(
-                f"{label} failed during {stage}: {str(error)[:500]}"
-            )
-            raise
+        occurrences = self._occurrence_documents(rows)
+        retry_operation(
+            f"Write occurrences for {label}",
+            self.opensearch.bulk_index,
+            self.config.occurrence_alias,
+            occurrences,
+            False,
+            wait_seconds=self.config.retry_seconds,
+            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            custom_logger=self.logger,
+        )
+        self.logger.info(
+            f"{label} completed: {generated_count} new key(s), "
+            f"{reused_count} reused key(s), {existing_count} existing catalog "
+            f"key(s), {saved_vector_count} saved vector(s), {bedrock_count} "
+            f"Bedrock vector(s), and {len(occurrences)} occurrence(s)."
+        )
+        return len(rows)
 
     def _save_keys(self, rows: list[SentencesVector]) -> tuple[int, int]:
-        """Reuse existing keys and save only missing keys.
+        """Keep saved sentence keys and create only missing keys.
 
-        Output: (generated key count, reused key count).
+        Example output: (20, 10) means 20 new keys and 10 saved keys.
         """
 
         current_time = datetime.now(UTC)
@@ -125,8 +122,8 @@ class SentenceBatchProcessor:
                 session.execute(statement, updates)
                 session.commit()
         except Exception:
-            # Restore the in-memory rows so a retry does not mistake an
-            # uncommitted generated key for one that already exists.
+            # The database did not save these keys. Put the Python rows back the
+            # way they were so the retry creates and saves the keys again.
             for row, original_key, original_last_modified in prepared_rows:
                 row.sentence_key = original_key
                 row.last_modified = original_last_modified
@@ -134,7 +131,7 @@ class SentenceBatchProcessor:
         return len(updates), reused_count
 
     def catalog_alias(self, analysis_group: str) -> str:
-        """Return the catalog selected for one analysis group."""
+        """Choose the Asylee or Refugee catalog for the document."""
 
         normalized_group = analysis_group.strip().casefold()
         if normalized_group == "asylee":
@@ -144,7 +141,10 @@ class SentenceBatchProcessor:
         raise PermanentDataError(f"unsupported analysis_group {analysis_group!r}")
 
     def _load_embeddings(self, global_ids: list[int]) -> dict[int, list[float]]:
-        """Read saved Titan type-2 vectors for one worker batch."""
+        """Read saved Titan vectors for the requested global IDs.
+
+        Input: [10, 20]. Output: {10: [vector values]} when only 10 has one.
+        """
 
         with self.session_factory() as session:
             statement = select(Embeddings).where(
@@ -163,12 +163,20 @@ class SentenceBatchProcessor:
         rows: list[SentencesVector],
         embeddings: dict[int, list[float]],
         label: str,
-    ) -> None:
-        """Write missing unique keys to one analysis-group catalog."""
+    ) -> tuple[int, int, int]:
+        """Add only missing sentence keys to the selected catalog.
 
-        existing_keys = self.opensearch.existing_ids(
+        Saved vectors are reused. Bedrock creates vectors that are missing.
+        Output: existing key count, saved vector count, Bedrock vector count.
+        """
+
+        existing_keys = retry_operation(
+            f"Check existing catalog keys for {label}",
+            self.opensearch.existing_ids,
             catalog_alias,
             [row.sentence_key for row in rows],
+            wait_seconds=self.config.retry_seconds,
+            custom_logger=self.logger,
         )
         with_vectors: list[CatalogDocument] = []
         need_vectors: list[CatalogDocument] = []
@@ -193,31 +201,37 @@ class SentenceBatchProcessor:
             document["sentenceContentVector"] = vector
             with_vectors.append(document)
 
-        self.logger.info(
-            f"{label} is writing catalog {catalog_alias}. Existing keys: "
-            f"{len(existing_keys)}. Saved vectors: {len(with_vectors)}. "
-            f"Vectors for Bedrock: {len(need_vectors)}."
-        )
-        self.opensearch.bulk_index(
+        retry_operation(
+            f"Write saved vectors to {catalog_alias} for {label}",
+            self.opensearch.bulk_index,
             catalog_alias,
             with_vectors,
-            needs_embedding=False,
+            False,
+            wait_seconds=self.config.retry_seconds,
+            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            custom_logger=self.logger,
         )
-        self.opensearch.bulk_index(
+        retry_operation(
+            f"Create Bedrock vectors in {catalog_alias} for {label}",
+            self.opensearch.bulk_index,
             catalog_alias,
             need_vectors,
-            needs_embedding=True,
+            True,
+            wait_seconds=self.config.retry_seconds,
+            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            custom_logger=self.logger,
         )
-        self.logger.info(
-            f"{label} completed catalog {catalog_alias} with "
-            f"{len(with_vectors) + len(need_vectors)} indexed document(s)."
-        )
+        return len(existing_keys), len(with_vectors), len(need_vectors)
 
     def _occurrence_documents(
         self,
         rows: list[SentencesVector],
     ) -> list[OccurrenceDocument]:
-        """Build occurrence documents from sentence and joined document rows."""
+        """Build one occurrence document for every sentence row.
+
+        The sentence row gives sentence fields. Its tsp row gives application
+        fields shared by the whole document.
+        """
 
         document = rows[0].tsp
         occurrences: list[OccurrenceDocument] = []

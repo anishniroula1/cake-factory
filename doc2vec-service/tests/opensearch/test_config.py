@@ -52,6 +52,7 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
     assert config.sentence_similarity_backfill_queue_url.endswith("similarity.fifo")
     assert config.thread_worker_count == 100
     assert config.worker_batch_size == 30
+    assert config.opensearch_bulk_retry_count == 15
     assert config.vector_dimension == 512
     assert config.asylee_catalog_alias == "sentence_semantic_catalog_asylee"
     assert config.refugee_catalog_alias == "sentence_semantic_catalog_refugee"

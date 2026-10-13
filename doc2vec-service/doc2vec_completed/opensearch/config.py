@@ -4,14 +4,15 @@ from typing import Self
 
 from dotenv import load_dotenv
 
-from doc2vec_completed.opensearch.VaultSecrets import VaultSecrets
+from ta_utils.vault.VaultSecrets import VaultSecrets
 
 load_dotenv()
 
-# These values belong to this historical flow and do not change by environment.
+# These values are the same in every environment, so they do not need env values.
 OPENSEARCH_PORT = 443
 OPENSEARCH_SERVICE = "es"
 OPENSEARCH_BATCH_SIZE = 1_000
+OPENSEARCH_BULK_RETRY_COUNT = 15  # Retries after the original bulk request.
 WORKER_BATCH_SIZE = 30
 THREAD_WORKER_COUNT = 100
 RETRY_SECONDS = 5
@@ -19,7 +20,11 @@ TITAN_EMBEDDING_TYPE = 2
 
 
 def read_integer(name: str, default: int, minimum: int = 1) -> int:
-    """Read a whole number and reject values that are too small."""
+    """Read a whole number from the environment.
+
+    Input: name="DATABASE_POOL_SIZE" and default=20.
+    Output: the env value, or 20 when the env value is missing.
+    """
 
     try:
         value = int(os.getenv(name, str(default)).strip())
@@ -52,6 +57,7 @@ class Config:
     asylee_catalog_alias: str
     refugee_catalog_alias: str
     opensearch_batch_size: int
+    opensearch_bulk_retry_count: int
 
     # SQS
     doc2vec_queue_url: str
@@ -70,11 +76,11 @@ class Config:
 
     @classmethod
     def from_environment(cls) -> Self:
-        """Build configuration from environment values."""
+        """Read Vault and env values and return one Config object."""
 
         secrets = VaultSecrets()
         config = cls(
-            # Database credentials and environment properties
+            # Read the PostgreSQL login from Vault and pool sizes from env.
             pg_db_user=str(secrets.get("pgUser") or ""),
             pg_db_password=str(secrets.get("pgPassword") or ""),
             pg_db_host=str(secrets.get("pgHost") or ""),
@@ -87,7 +93,7 @@ class Config:
                 10,
                 minimum=0,
             ),
-            # OpenSearch resources
+            # Read values needed to connect to the correct OpenSearch indexes.
             aws_region=os.getenv("AWS_DEFAULT_REGION", "us-east-1").strip(),
             opensearch_iam_access_role=os.getenv(
                 "OPENSEARCH_IAM_ACCESS_ROLE",
@@ -108,7 +114,8 @@ class Config:
                 "sentence_semantic_catalog_refugee",
             ).strip(),
             opensearch_batch_size=OPENSEARCH_BATCH_SIZE,
-            # SQS resources
+            opensearch_bulk_retry_count=OPENSEARCH_BULK_RETRY_COUNT,
+            # Read the source and next-step SQS queue values.
             doc2vec_queue_url=str(secrets.get("awsReceiveSqsQueueEndpoint") or ""),
             sentence_similarity_backfill_queue_url=os.getenv(
                 "SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL",
@@ -126,7 +133,7 @@ class Config:
                 7_200,
             ),
             aws_endpoint_url=os.getenv("AWS_ENDPOINT_URL", "").strip(),
-            # Historical processing resources
+            # Use the fixed batch, worker, retry, and Titan settings above.
             worker_batch_size=WORKER_BATCH_SIZE,
             thread_worker_count=THREAD_WORKER_COUNT,
             retry_seconds=RETRY_SECONDS,
@@ -137,7 +144,7 @@ class Config:
         return config
 
     def validate(self) -> None:
-        """Stop startup when a required value or safe limit is missing."""
+        """Stop startup when a required setting is missing or not allowed."""
 
         if not self.opensearch_host:
             raise ValueError("OPENSEARCH_HOST is required")

@@ -3,8 +3,8 @@ import pytest
 from doc2vec_completed.opensearch import main
 from doc2vec_completed.opensearch.dependencies import Dependencies
 from doc2vec_completed.opensearch.handlers.historical_handler import HistoricalHandler
-from doc2vec_completed.opensearch.models import Embeddings, SentencesVector
 from doc2vec_completed.opensearch.text import sentence_key
+from ta_db_connection.atables import Embeddings, SentencesVector
 from tests.opensearch.fakes import OpenSearchFake, SessionFake, SessionSequence, SqsFake
 
 
@@ -191,7 +191,7 @@ def test_temporary_worker_failure_retries_without_losing_the_message(
         def existing_ids(self, alias, document_ids):
             self.read_attempts += 1
             if self.read_attempts == 1:
-                raise RuntimeError("temporary OpenSearch failure")
+                raise ConnectionError("temporary OpenSearch failure")
             return super().existing_ids(alias, document_ids)
 
     monkeypatch.setattr(

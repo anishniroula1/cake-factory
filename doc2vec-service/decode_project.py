@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def main():
-    """Run a generated self-extracting project file."""
+    """Run generate_project.py and recreate its saved project folder."""
 
     if len(sys.argv) < 2:
         raise SystemExit("Usage: python decode_project.py PROJECT_FILE [TARGET]")
