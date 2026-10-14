@@ -1,8 +1,8 @@
 # Sentence Similarity Service
 
-Sentence Similarity is an SQS worker that processes one document (`tsp_id`) at
+Sentence Similarity is an SQS/OpenSearch worker that processes one document (`tsp_id`) at
 a time. It classifies every sentence, finds exact and semantic matches in
-OpenSearch, and saves the relationships in PostgreSQL.
+OpenSearch, and saves the relationships in PostgreSQL (`tsp` schema) database.
 
 The same application supports real-time and historical processing. Each
 deployment can listen to a different SQS queue, but the processing logic stays
@@ -19,18 +19,17 @@ For each SQS message, the service:
 5. Loads each source vector from that catalog by `sentenceKey`.
 6. Processes up to 30 source sentences at the same time.
 7. Checks each vector against the tracer and form-language catalog.
-8. Updates the sentence classification in PostgreSQL and the sentence catalog.
+8. Updates the sentence classification in `sentences_vector` table and the sentence catalog.
 9. Skips normal matching when a sentence is a tracer, non-matcher, or form language.
 10. Searches the sentence catalog for every exact and semantic key at or above 76%.
 11. Expands those keys through `sentence_occurrences` and excludes occurrences
     from the source application.
 12. Classifies target sentences and removes ineligible targets.
 13. Saves the remaining relationships in both directions in `tsp.titan_matches`.
-14. Sends the completed `tsp_id` to the next SQS queue.
+14. Sends the completed `tsp_id` to the next SQS queue (Case Similarity Service).
 15. Deletes the source message only after all work completes successfully.
 
-If processing fails, the source message is not deleted. The SQS redrive policy
-controls retries and eventual delivery to the DLQ.
+If processing fails, the source message is not deleted. The SQS retries three time and eventual delivery to the DLQ.
 
 ## Message format
 
@@ -64,6 +63,13 @@ isFormLanguage=true                         -> form language
 no qualifying result                        -> eligible for sentence matching
 ```
 
+### Non matcher logic
+```
+1. is_non_matcher and not is_form_lanaguage
+2. is_non_matcher and is_form_lanaguage
+3. non is_non_matcher and is_form_lanaguage
+```
+
 All three flags are independent. Different qualifying reference records can
 make more than one flag true. A sentence is excluded from normal sentence
 matching when any flag is true.
@@ -75,7 +81,7 @@ checked again against the tracer catalog. Occurrence-level flags are stored in
 
 ## Sentence matching
 
-Eligible sentences are searched in one of these catalogs:
+Eligible sentences are searched in one of these catalogs alais:
 
 - `sentence_semantic_catalog_asylee`
 - `sentence_semantic_catalog_refugee`
@@ -93,6 +99,7 @@ row:
 
 ```text
 bucket = matching global_id % 16
+34 % 16 = 2 <---- 2 is the bucket number
 ```
 
 One bucket can look like this:
@@ -117,8 +124,8 @@ PostgreSQL function writes both directions in one transaction and calculates
 `match_count` and `verbatim`. Buckets keep JSONB updates smaller and reduce
 lock contention between sentence workers.
 
-The shared Flyway migration owns the table and the
-`tsp.upsert_bidirectional_titan_matches` function.
+To know more about the function we use, check `tsp.upsert_bidirectional_titan_matches` function 
+under the `tsp` schema function section.
 
 ## Project layout
 
@@ -131,21 +138,11 @@ similarity_completed/opensearch/
   config.py              Environment values and processing constants
   dependencies.py        Database, OpenSearch, SQS, and handler construction
   sqs_processor.py       Receive, process, and delete SQS messages
-ta_db_connection/        Local copy of the shared database library imports
-ta_utils/                Local copy of shared SQS, logging, and Vault imports
 tests/opensearch/        OpenSearch-flow unit tests
 ```
 
-The local `ta_utils` and `ta_db_connection` folders use the same import paths as
-the team libraries. They let this project run by itself. When copying the
-service into the main application, those local folders can be removed so the
-installed libraries provide the imports.
-
 ## Local prerequisites
 
-- Python 3.12
-- `uv`
-- Docker with Docker Compose
 - Access to the PostgreSQL database used for testing
 - AWS credentials that can access the configured OpenSearch domain
 
@@ -194,44 +191,20 @@ Start LocalStack and create the source and next-service FIFO queues:
 make localstack
 ```
 
-In a second terminal, start the worker:
+Start the worker:
 
 ```bash
 make local
 ```
 
-In a third terminal, send the sample message from the Makefile:
+In a second terminal, send the sample message from the Makefile:
 
 ```bash
 make sos
 ```
 
-The sample uses `tsp_id=8205`. Pass another document ID when needed:
+In the makefile there is a `opensearch_msg`, change the `tsp_id` as per your test need.
 
-```bash
-make sos TSP_ID=12345
-```
-
-## Run in Docker
-
-Create `.env` and `localVaultSecret.yaml` first, then run:
-
-```bash
-make run
-```
-
-This starts LocalStack, creates both FIFO queues, builds the worker image, and
-runs the worker. Follow its logs with:
-
-```bash
-make logs
-```
-
-Stop the worker and LocalStack with:
-
-```bash
-make down
-```
 
 ## Run tests
 
@@ -241,56 +214,8 @@ Run only the OpenSearch flow tests:
 make ostest
 ```
 
-`ostest` installs the development dependencies and runs
-`tests/opensearch`. These tests use controlled database, OpenSearch, and SQS
-boundaries; they do not require the real OpenSearch domain or PostgreSQL
-database.
-
-Run lint plus the complete test suite with the configured coverage requirement:
+`ostest` runs the tests inside  `tests/opensearch`
 
 ```bash
 make test
 ```
-
-## Make commands
-
-| Command | Purpose |
-|---|---|
-| `make localstack` | Start LocalStack and create both local FIFO queues. |
-| `make local` | Run the worker directly with `uv`; recommended for development. |
-| `make sos` | Send the default sample `tsp_id` to the source queue. |
-| `make sos TSP_ID=12345` | Send a specific `tsp_id`. |
-| `make run` | Build and run the worker and LocalStack in Docker. |
-| `make ostest` | Run only `tests/opensearch`. |
-| `make test` | Run Ruff and the full test suite with coverage. |
-| `make logs` | Follow Docker worker logs. |
-| `make down` | Stop Docker services. |
-
-## Main processing settings
-
-The values below are constants in `similarity_completed/opensearch/config.py`:
-
-| Setting | Value |
-|---|---:|
-| Source sentence page | 30 |
-| Sentence worker threads | 30 |
-| Titan vector dimensions | 512 |
-| Sentence match threshold | 76% |
-| Tracer classification threshold | 70% |
-| Tracer top K | 100 |
-| IVF nprobes | 64 |
-| Titan match write batch | 500 |
-| Retry wait | 5 seconds |
-| Occurrence readiness wait | 30 seconds |
-| SQS visibility timeout | 2 hours |
-
-## Common local issues
-
-- **Local SQS connection fails:** run `make localstack` and confirm
-  `AWS_LOCAL_ENDPOINT_URL=http://localhost:4566` in `.env`.
-- **Vault file is missing:** create `localVaultSecret.yaml` and keep
-  `VAULT_YAML_PATH=./localVaultSecret.yaml`.
-- **OpenSearch returns 403:** confirm the active AWS credentials and the role
-  configured by `OPENSEARCH_IAM_ACCESS_ROLE` can access the domain.
-- **The document is not processed:** confirm Doc2Vec already indexed the
-  document's sentence occurrences and catalog vectors.
