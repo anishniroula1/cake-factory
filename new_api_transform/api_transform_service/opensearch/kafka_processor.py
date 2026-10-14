@@ -11,6 +11,8 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class KafkaProcessor:
+    """Publish API events to Kafka and save broker-confirmed audit records."""
+
     def __init__(
         self,
         config: Config,
@@ -18,8 +20,6 @@ class KafkaProcessor:
         transmission_db_store: TransmissionDBStore,
         custom_logger: CustomLogger,
     ) -> None:
-        """Publish complete API events and save broker-confirmed audit rows."""
-
         self.config = config
         self.producer = producer
         self.transmission_db_store = transmission_db_store
@@ -28,8 +28,11 @@ class KafkaProcessor:
     def publish(self, events: list[dict]) -> int:
         """Publish a group of application events and require every acknowledgement.
 
-        The payload is encoded as a JSON string inside the outer event because
-        existing consumers expect that exact format.
+        Input: a list containing one or more API events.
+        Output: the number of events acknowledged by Kafka. The inner payload is
+        stored as JSON text because existing consumers expect that format.
+
+        Raises: KafkaPublishError when Kafka rejects an event or does not confirm every delivery.
         """
 
         deliveries: list[KafkaDelivery] = []
@@ -62,16 +65,26 @@ class KafkaProcessor:
 
     @staticmethod
     def _serialize_payload(event: dict) -> dict:
-        """Copy an event and turn its inner payload into JSON text."""
+        """Copy an event and convert its inner payload into JSON text.
+
+        Input: an event whose after.payload value is a dictionary.
+        Output: a copy whose after.payload value is a JSON string.
+        """
 
         kafka_event = json.loads(json.dumps(event, default=str))
         kafka_event["after"]["payload"] = json.dumps(kafka_event["after"]["payload"])
         return kafka_event
 
     def _delivery_callback(self, event: dict, kafka_value: str, deliveries: list[KafkaDelivery], errors: list[str]):
-        """Create the callback that records one event's broker result."""
+        """Create the callback that records one event's Kafka delivery result.
+
+        Input: one source event, its serialized value, and shared success and error lists.
+        Output: a callback that adds either a KafkaDelivery audit record or an error message.
+        """
 
         def callback(error: KafkaError | None, message: Message) -> None:
+            # Kafka calls this function later. nonlocal lists let the outer
+            # publish method inspect every success and failure after flush().
             if error is not None:
                 errors.append(str(error))
                 return

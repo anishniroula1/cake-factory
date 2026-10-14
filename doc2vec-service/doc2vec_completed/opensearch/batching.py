@@ -2,9 +2,9 @@ from collections.abc import Iterator
 
 
 def batches[Value](values: list[Value], size: int) -> Iterator[list[Value]]:
-    """Break one large list into smaller lists.
+    """Split a list into ordered batches without dropping remaining items.
 
-    Input: 65 rows with size=30.
+    Input: values=[65 rows], size=30
     Output: lists containing 30 rows, 30 rows, and 5 rows.
     """
 

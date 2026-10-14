@@ -2,6 +2,8 @@ from sqlalchemy import URL, create_engine
 
 
 class DatabaseConnection:
+    """Create and expose the SQLAlchemy PostgreSQL connection pool."""
+
     def __init__(
         self,
         pg_db_user: str,
@@ -18,8 +20,6 @@ class DatabaseConnection:
         application_name: str = "doc2vec_historical",
         logger=None,
     ) -> None:
-        """Create the PostgreSQL connection pool used by the worker."""
-
         self.logger = prefect_logger or logger
         self.pg_db_user = pg_db_user
         self.pg_db_password = pg_db_password

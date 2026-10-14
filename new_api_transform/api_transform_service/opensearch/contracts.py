@@ -28,6 +28,8 @@ class KafkaDelivery:
 
 
 class TransformResult(TypedDict):
+    """Counts returned after one API Transform processing cycle."""
+
     source_message_count: int
     application_count: int
     kafka_event_count: int

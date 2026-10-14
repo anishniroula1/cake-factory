@@ -9,7 +9,13 @@ def run_opensearch_flow(
     database_connection: DatabaseConnection | None = None,
     dependencies: Dependencies | None = None,
 ) -> None:
-    """Create the service objects and start reading SQS messages."""
+    """Build service dependencies and start the Doc2Vec SQS processing loop.
+
+    Input: optional custom_logger, database_connection, or prebuilt dependencies.
+
+    When no objects are supplied, production dependencies are built from Vault
+    and environment configuration. Resources close when the loop exits.
+    """
 
     service_dependencies = dependencies or Dependencies(
         custom_logger,

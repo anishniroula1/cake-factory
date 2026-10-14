@@ -32,7 +32,14 @@ MAX_ATTEMPTS = 3
 
 
 def read_boolean(name: str, default: bool) -> bool:
-    """Read an environment toggle written as true or false."""
+    """Read an environment toggle written as true or false.
+
+    Input: name="REDUCE_KAFKA_SIZE", default=False
+    Output: True when the environment value is "true"; otherwise False.
+
+    Raises:
+        ValueError: If the configured value is not true or false.
+    """
 
     value = os.getenv(name, str(default)).strip().lower()
     if value not in {"true", "false"}:
@@ -41,7 +48,11 @@ def read_boolean(name: str, default: bool) -> bool:
 
 
 def dlq_url(queue_url: str) -> str:
-    """Build the existing DLQ URL from the normal API Transform queue URL."""
+    """Build the DLQ URL from the normal API Transform queue URL.
+
+    Input: queue_url="https://sqs.../asylee-api-transform.fifo"
+    Output: "https://sqs.../asylee-dlq-api-transform.fifo"
+    """
 
     return re.sub(r"(asylee|refugee)-([^/]+\.fifo)", r"\1-dlq-\2", queue_url)
 
@@ -92,7 +103,7 @@ class Config:
 
     @classmethod
     def from_environment(cls) -> Self:
-        """Build configuration from Vault secrets and deployment values."""
+        """Build the worker configuration from Vault and environment values."""
 
         secrets = VaultSecrets()
         source_queue = os.getenv("AWS_RECEIVE_SQS_QUEUE_ENDPOINT", "").strip()
@@ -136,7 +147,7 @@ class Config:
         return config
 
     def validate(self) -> None:
-        """Stop startup when a required deployment value is missing."""
+        """Validate settings required by PostgreSQL, SQS, and Kafka."""
 
         required = {
             "pgUser": self.pg_db_user,

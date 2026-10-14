@@ -110,17 +110,19 @@ LOAD_PUBLIC_TEMPLATES = text(
 
 
 class ContentDBStore:
-    def __init__(self, session_factory: Callable[[], Session], sentence_match_limit: int) -> None:
-        """Read documents, templates, and Titan-backed sentence matches."""
+    """Load documents, templates, sentences, and Titan-backed sentence matches."""
 
+    def __init__(self, session_factory: Callable[[], Session], sentence_match_limit: int) -> None:
         self.session_factory = session_factory
         self.sentence_match_limit = sentence_match_limit
 
     def load_sentences(self, application_ids: list[int], reduce_kafka_size: bool) -> dict[int, list[dict]]:
-        """Build the existing sentence response from the 16 Titan match buckets.
+        """Build the existing sentence response from all 16 Titan match buckets.
 
-        Example: buckets {"20": 0.0} and {"30": 0.12} become the list
-        [{"global_id": 20, "distance": 0.0}, {"global_id": 30, "distance": 0.12}].
+        Input: application_ids=[50], reduce_kafka_size=False, with bucket values
+        {"20": 0.0} and {"30": 0.12}
+        Output: {50: [{..., "matches": [{"global_id": 20, "distance": 0.0},
+        {"global_id": 30, "distance": 0.12}]}]}
         """
 
         if not application_ids:
@@ -147,12 +149,21 @@ class ContentDBStore:
         return grouped
 
     def load_documents(self, application_ids: list[int]) -> dict[int, list[dict]]:
-        """Load document metadata and count sentences having at least one Titan match."""
+        """Load document metadata and count sentences with at least one Titan match.
+
+        Input: application_ids=[50]
+        Output: {50: [{"tsp_id": 10, "section_name": "Affidavit",
+        "match_count": 3, ...}]}
+        """
 
         return self._load_grouped(LOAD_DOCUMENTS, application_ids)
 
     def load_public_templates(self, application_ids: list[int]) -> dict[int, dict]:
-        """Load the newest public-template row for each Asylee application."""
+        """Load the newest public-template row for each Asylee application.
+
+        Input: application_ids=[50]
+        Output: {50: {"a_number": 900001, "url": "https://...", ...}}
+        """
 
         if not application_ids:
             return {}
@@ -166,7 +177,11 @@ class ContentDBStore:
         return templates
 
     def _load_grouped(self, statement, application_ids: list[int]) -> dict[int, list[dict]]:
-        """Group database rows by application ID without repeating this small loop."""
+        """Execute a shared query and group its rows by application ID.
+
+        Input: application_ids=[50, 60]
+        Output: {50: [rows for 50], 60: [rows for 60]}
+        """
 
         if not application_ids:
             return {}
@@ -181,14 +196,22 @@ class ContentDBStore:
 
     @staticmethod
     def _small_match(match: dict) -> dict:
-        """Keep only the two fields used by the API and floor distance to four decimals."""
+        """Keep API match fields and floor distance to four decimal places.
+
+        Input: match={"global_id": "20", "distance": 0.123456}
+        Output: {"global_id": 20, "distance": 0.1234}
+        """
 
         distance = float(match["distance"])
         return {"global_id": int(match["global_id"]), "distance": math.floor(distance * 10000) / 10000}
 
     @staticmethod
     def _is_match_only_update(matches_modified: datetime | None, sentence_modified: datetime | None) -> bool:
-        """Return true when match data changed over 30 minutes after the sentence."""
+        """Determine whether only sentence-match data changed.
+
+        Input: matches_modified more than 30 minutes after sentence_modified.
+        Output: True
+        """
 
         if matches_modified is None or sentence_modified is None:
             return False

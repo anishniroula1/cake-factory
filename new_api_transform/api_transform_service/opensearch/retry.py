@@ -20,7 +20,13 @@ def retry_operation[Result](
     custom_logger: CustomLogger,
     max_attempts: int = 3,
 ) -> Result:
-    """Retry only the operation that failed and report a later success."""
+    """Retry only the failed operation and report when a later attempt succeeds.
+
+    Input: max_attempts=3 runs the operation no more than three times.
+    Output: the operation result from its first successful attempt.
+
+    Raises: OperationFailedError after all configured attempts fail.
+    """
 
     for attempt in range(1, max_attempts + 1):
         try:

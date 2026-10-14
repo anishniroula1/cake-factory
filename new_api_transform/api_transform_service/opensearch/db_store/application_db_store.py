@@ -85,16 +85,17 @@ LOAD_APPLICATION_RECORDS = text(
 
 
 class ApplicationDBStore:
-    def __init__(self, session_factory: Callable[[], Session]) -> None:
-        """Keep database reads for identifying applications and building a_records."""
+    """Resolve document ownership and load application-level API records."""
 
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
     def load_application_reference(self, tsp_id: TspId) -> ApplicationReference | None:
         """Find the application affected by one incoming document ID.
 
-        Input: tsp_id=10, where the document belongs to application 50.
-        Output: ApplicationReference(application_id=50, a_number=900001).
+        Input: tsp_id=10
+        Output: ApplicationReference(application_id=50, a_number=900001), or
+        None when the document does not exist.
         """
 
         with self.session_factory() as session:
@@ -104,10 +105,13 @@ class ApplicationDBStore:
         return ApplicationReference(int(row["application_id"]), int(row["a_number"]))
 
     def load_application_records(self, references: list[ApplicationReference]) -> dict[int, dict]:
-        """Load the case fields placed in the a_records part of each Kafka event.
+        """Load the case fields placed in each Kafka event's a_records section.
 
-        Titan case lists contain application IDs. This query also provides the
-        matching A-number list expected by the existing API contract.
+        Input: references=[ApplicationReference(application_id=50, a_number=900001)]
+        Output: {50: {"a_number": 900001, "similar_case_ids": [...], ...}}
+
+        Titan case lists contain application IDs. The query also maps those IDs
+        to the A-number list required by the existing API contract.
         """
 
         if not references:

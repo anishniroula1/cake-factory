@@ -9,7 +9,11 @@ def run_opensearch_flow(
     database_connection: DatabaseConnection | None = None,
     dependencies: Dependencies | None = None,
 ) -> None:
-    """Build dependencies and start the API Transform SQS processor."""
+    """Build dependencies and start the API Transform SQS processor.
+
+    Input: optional test or application-owned logger, database connection, or dependencies.
+    The database pool and generic log context are cleaned up when the processor stops.
+    """
 
     service_dependencies = dependencies or Dependencies(custom_logger, database_connection)
     try:

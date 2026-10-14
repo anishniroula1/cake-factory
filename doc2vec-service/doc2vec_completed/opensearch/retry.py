@@ -31,13 +31,20 @@ def retry_operation[Result](
     max_attempts: int = 3,
     custom_logger: CustomLogger,
 ) -> Result:
-    """Run one job again when an outside service has a temporary problem.
+    """Execute one operation with bounded retries for transient failures.
+    Permanent data errors stop immediately, while supported external failures
+    retry until the operation succeeds or reaches the configured maximum.
 
-    Input: a label, the job to call, its values, wait time, and attempt limit.
-    Output: the job result after it succeeds.
+    Input: label="Write occurrences", operation=bulk_index, wait_seconds=5,
+    max_attempts=3
+    Output: the operation result without modification.
 
-    Database, AWS, network, and OpenSearch errors may work on another try.
-    Bad data and code bugs stop immediately because waiting will not fix them.
+    max_attempts=3 means one initial execution and two retries.
+
+    Raises:
+        ValueError: If max_attempts is less than one.
+        PermanentDataError: If retrying cannot repair the input or request.
+        OperationFailedError: If all retry attempts fail.
     """
 
     if max_attempts < 1:
@@ -57,8 +64,7 @@ def retry_operation[Result](
         except RETRYABLE_ERRORS as error:
             if attempt == max_attempts:
                 raise OperationFailedError(
-                    f"{label} failed after {max_attempts} attempts: "
-                    f"{str(error)[:500]}"
+                    f"{label} failed after {max_attempts} attempts: {str(error)[:500]}"
                 ) from error
             custom_logger.warning(
                 f"{label} attempt {attempt} failed: {str(error)[:500]}; "

@@ -10,13 +10,13 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class Dependencies:
+    """Build and own the shared resources used by the Doc2Vec worker."""
+
     def __init__(
         self,
         custom_logger: CustomLogger | None = None,
         database_connection: DatabaseConnection | None = None,
     ) -> None:
-        """Create the shared database, OpenSearch, SQS, and handler objects."""
-
         self.logger = custom_logger or CustomLogger("doc2vec_completed.opensearch")
         self.config = Config.from_environment()
         self.database = database_connection or self._create_database_connection()
@@ -51,12 +51,12 @@ class Dependencies:
         )
 
     def close(self) -> None:
-        """Close the PostgreSQL connections when the worker stops."""
+        """Close the database pool when the process stops."""
 
         self.database.engine.dispose()
 
     def _create_database_connection(self) -> DatabaseConnection:
-        """Create the PostgreSQL connection using values already read from Vault."""
+        """Create the database connection from Vault-backed configuration."""
 
         return DatabaseConnection(
             pg_db_user=self.config.pg_db_user,

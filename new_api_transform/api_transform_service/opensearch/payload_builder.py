@@ -7,9 +7,9 @@ from api_transform_service.opensearch.errors import PermanentDataError
 
 
 class PayloadBuilder:
-    def __init__(self, config: Config) -> None:
-        """Build the existing API Kafka contract without the NER section."""
+    """Build the existing API Kafka contract without adding the NER section."""
 
+    def __init__(self, config: Config) -> None:
         self.config = config
 
     def build_application_events(
@@ -57,7 +57,11 @@ class PayloadBuilder:
         return self._split_sentences(full_event, maximum_size)
 
     def _clean_application_record(self, record: dict) -> dict:
-        """Remove repeated identifiers and normalize Refugee receipt numbers."""
+        """Remove repeated identifiers and normalize a Refugee receipt number.
+
+        Input: a record containing application_id, a_number, analysis_group, and receipt_number="ABC123".
+        Output: the remaining API fields with receipt_number="ABC-00000123" for a Refugee record.
+        """
 
         cleaned = dict(record)
         if cleaned.get("analysis_group") == "Refugee" and cleaned.get("receipt_number"):
@@ -69,8 +73,9 @@ class PayloadBuilder:
     def _split_sentences(self, full_event: dict, maximum_size: int) -> list[dict]:
         """Split only sentences and keep application metadata in the first event.
 
-        The first chunk uses op=c. Later chunks contain a_records and sentences
-        with op=u, matching the current consumer contract.
+        Input: one oversized event and its maximum allowed byte size.
+        Output: a create event for the first sentence chunk followed by update
+        events for later chunks, matching the current consumer contract.
         """
 
         sentences = full_event["after"]["payload"].get("sentences", [])
@@ -103,13 +108,21 @@ class PayloadBuilder:
 
     @staticmethod
     def serialized_size(event: dict) -> int:
-        """Return the real UTF-8 byte size that Kafka receives."""
+        """Return the UTF-8 byte size Kafka receives.
+
+        Input: event={"op": "c"}
+        Output: the number of bytes in its JSON representation.
+        """
 
         return len(json.dumps(event, default=str).encode("utf-8"))
 
     @staticmethod
     def _normalize_receipt_number(receipt_number: str) -> str:
-        """Format a Refugee receipt as PREFIX-########."""
+        """Format a Refugee receipt as PREFIX-########.
+
+        Input: receipt_number="ABC123"
+        Output: "ABC-00000123"
+        """
 
         if "-" in receipt_number:
             prefix, number = receipt_number.split("-", 1)

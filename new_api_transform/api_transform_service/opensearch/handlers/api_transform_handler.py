@@ -14,6 +14,8 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class ApiTransformHandler:
+    """Build and publish the API payload for the application affected by one document."""
+
     def __init__(
         self,
         config: Config,
@@ -25,8 +27,6 @@ class ApiTransformHandler:
         kafka_processor: KafkaProcessor,
         custom_logger: CustomLogger,
     ) -> None:
-        """Connect database reads, payload building, and Kafka publication."""
-
         self.config = config
         self.application_db_store = application_db_store
         self.applicant_db_store = applicant_db_store
@@ -60,7 +60,11 @@ class ApiTransformHandler:
             raise
 
     def _process_application(self, reference, historical: bool) -> int:
-        """Load every related section and publish one affected application."""
+        """Load all API sections, build events, and publish one affected application.
+
+        Input: a reference with application_id=100 and historical=True.
+        Output: the number of application events confirmed by Kafka.
+        """
 
         application_ids = [reference.application_id]
         records = self._retry(
@@ -102,8 +106,9 @@ class ApiTransformHandler:
     def _publish_with_buffer_limit(self, events: list[dict]) -> int:
         """Publish before buffered event bytes approach PostgreSQL and worker limits.
 
-        This keeps the current 450 MB safety boundary even when one application
-        is split into several Kafka events.
+        Input: application events produced by PayloadBuilder.
+        Output: the total number of events confirmed by Kafka. Events are sent
+        before their combined size passes the configured 450 MB safety limit.
         """
 
         published_count = 0
@@ -124,7 +129,11 @@ class ApiTransformHandler:
         return published_count
 
     def _retry(self, label, operation, *arguments):
-        """Apply the service retry settings to one isolated operation."""
+        """Run one operation with the retry count and wait time from Config.
+
+        Input: label="Load application records", an operation, and its arguments.
+        Output: the value returned by the operation after it succeeds.
+        """
 
         return retry_operation(
             label,

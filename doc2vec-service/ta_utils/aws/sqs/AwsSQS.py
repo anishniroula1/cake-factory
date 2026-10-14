@@ -13,6 +13,8 @@ from doc2vec_completed.opensearch.contracts import (
 
 
 class AwsSQS:
+    """Provide the SQS receive, send, and delete operations used by Doc2Vec."""
+
     def __init__(
         self,
         queue_url: str | None,
@@ -25,8 +27,6 @@ class AwsSQS:
         retry_wait_seconds: int = 5,
         sqs_client=None,
     ) -> None:
-        """Create the SQS client and save the source queue settings."""
-
         self._logger = logger
         self._sqs = sqs_client or boto3.client(
             "sqs",
@@ -40,7 +40,13 @@ class AwsSQS:
         self._retry_wait_seconds = retry_wait_seconds
 
     def receive_messages(self) -> list[RawSqsMessage]:
-        """Read messages from SQS, or return an empty list when the call fails."""
+        """Receive raw messages from the configured source queue.
+
+        Output: boto3 messages containing Body, MessageId, and ReceiptHandle.
+
+        An empty list is returned when no message is available or the request
+        fails. A failed request waits before the next receive attempt.
+        """
 
         try:
             response = self._sqs.receive_message(
@@ -67,7 +73,14 @@ class AwsSQS:
         return messages
 
     def sqs_message_to_json(self, message: RawSqsMessage) -> SqsMessage:
-        """Turn one SQS JSON body into a dictionary used by this service."""
+        """Decode one SQS JSON body and attach its delivery metadata.
+
+        Input: message.Body="{\"reason\": \"HISTORICAL\", \"tsp_id\": 1040}"
+        Output: {"reason": "HISTORICAL", "tsp_id": 1040,
+        "MessageId": "abc", "ReceiptHandle": "receipt", "message_receive_count": 1}
+
+        Invalid JSON returns an empty mapping.
+        """
 
         if not message:
             return {}
@@ -103,7 +116,10 @@ class AwsSQS:
             return {}
 
     def listen_sqs_message(self) -> list[SqsMessage]:
-        """Read SQS and return only messages with a valid JSON dictionary."""
+        """Receive SQS records and retain messages with valid JSON object bodies.
+
+        Output: decoded messages ready for processing, or an empty list.
+        """
 
         formatted_messages: list[SqsMessage] = []
         for message in self.receive_messages():
@@ -113,7 +129,11 @@ class AwsSQS:
         return formatted_messages
 
     def delete_messages(self, message: SqsMessage) -> bool:
-        """Delete one source message after its document finishes successfully."""
+        """Delete one source message after its document finishes successfully.
+
+        Input: message={"MessageId": "abc", "ReceiptHandle": "receipt"}
+        Output: True when SQS accepts the delete request; otherwise False.
+        """
 
         try:
             self._sqs.delete_message(
@@ -140,10 +160,11 @@ class AwsSQS:
         retries: int = 0,
         is_fifo: bool = True,
     ) -> bool:
-        """Send one message to the next queue.
+        """Send one message to a downstream queue with optional retries.
 
-        Input: queue URL, message body, retry wait, retry count, and queue type.
-        Output: True when SQS accepts the message, otherwise False.
+        Input: send_queue_url="https://sqs.../similarity.fifo",
+        message_body={"reason": "HISTORICAL", "tsp_id": 1040}, retries=2
+        Output: True when SQS returns HTTP 200; otherwise False after all attempts.
         """
 
         body = (

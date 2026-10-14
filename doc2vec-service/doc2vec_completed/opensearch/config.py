@@ -20,10 +20,13 @@ TITAN_EMBEDDING_TYPE = 2
 
 
 def read_integer(name: str, default: int, minimum: int = 1) -> int:
-    """Read a whole number from the environment.
+    """Read and validate an integer environment value.
 
-    Input: name="DATABASE_POOL_SIZE" and default=20.
-    Output: the env value, or 20 when the env value is missing.
+    Input: name="DATABASE_POOL_SIZE", default=20, minimum=1
+    Output: the configured integer, or 20 when the value is missing.
+
+    Raises:
+        ValueError: If the value is not an integer or is below the minimum.
     """
 
     try:
@@ -76,7 +79,7 @@ class Config:
 
     @classmethod
     def from_environment(cls) -> Self:
-        """Read Vault and env values and return one Config object."""
+        """Build the worker configuration from Vault and environment values."""
 
         secrets = VaultSecrets()
         config = cls(
@@ -144,7 +147,7 @@ class Config:
         return config
 
     def validate(self) -> None:
-        """Stop startup when a required setting is missing or not allowed."""
+        """Validate settings required by PostgreSQL, OpenSearch, and SQS."""
 
         if not self.opensearch_host:
             raise ValueError("OPENSEARCH_HOST is required")

@@ -23,6 +23,8 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class HistoricalHandler:
+    """Load historical sentence pages and coordinate their OpenSearch indexing."""
+
     def __init__(
         self,
         config: Config,
@@ -31,8 +33,6 @@ class HistoricalHandler:
         aws_sqs: AwsSQS,
         custom_logger: CustomLogger,
     ) -> None:
-        """Save the tools used to process one historical document."""
-
         self.config = config
         self.session_factory = session_factory
         self.opensearch = opensearch
@@ -46,10 +46,16 @@ class HistoricalHandler:
         )
 
     def process(self, tsp_id: TspId) -> HistoricalResult | None:
-        """Move one document's saved sentences into OpenSearch.
+        """Index every saved sentence for one historical document. Pages are
+        processed concurrently, both indexes are refreshed, and Sentence
+        Similarity is notified only after indexing completes.
 
-        Input: tsp_id=1040.
-        Output: sentence counts after every row is indexed, or None on failure.
+        Input: tsp_id=1040
+        Output: {"reason": "HISTORICAL", "tsp_id": 1040,
+        "source_count": 65, "indexed_count": 65}
+
+        The method returns None when the document has no sentence rows or its
+        rows disappear before they can be loaded.
         """
 
         self.logger.info("Sentence processing started.")
@@ -149,9 +155,10 @@ class HistoricalHandler:
         }
 
     def _count(self, tsp_id: TspId) -> int:
-        """Count the sentence rows that belong to one tsp_id.
+        """Count the sentence rows that belong to one document.
 
-        Input: tsp_id=1040. Output: 65 when the document has 65 sentences.
+        Input: tsp_id=1040
+        Output: 65 when the document contains 65 sentence rows.
         """
 
         with self.session_factory() as session:
@@ -167,10 +174,11 @@ class HistoricalHandler:
         tsp_id: TspId,
         after_global_id: int,
     ) -> list[SentencesVector]:
-        """Read the next page of sentences in global_id order.
+        """Load the next ordered sentence page without reading the entire document.
 
-        Input: tsp_id=1040 and after_global_id=3000.
-        Output: rows whose global_id is greater than 3000.
+        Input: tsp_id=1040, after_global_id=3000
+        Output: up to 3000 rows whose global_id is greater than 3000 when the
+        worker count is 100 and each worker receives 30 rows.
         """
 
         # Example: 100 workers with 30 rows each load at most 3,000 rows.
@@ -209,7 +217,11 @@ class HistoricalHandler:
             return list(session.scalars(statement))
 
     def _run_worker(self, rows: list[SentencesVector]) -> int:
-        """Send one small sentence list to the batch processor."""
+        """Send one sentence batch to the shared batch processor.
+
+        Input: rows containing global IDs 3001 through 3030
+        Output: 30 after every occurrence in the batch is indexed.
+        """
 
         label = (
             f"Worker batch for global IDs {rows[0].global_id} "
@@ -218,7 +230,16 @@ class HistoricalHandler:
         return self.batch_processor.process(rows, label)
 
     def _publish(self, tsp_id: TspId) -> None:
-        """Send the tsp_id to Sentence Similarity after indexing is complete."""
+        """Send the completed document to Sentence Similarity.
+
+        Input: tsp_id=1040
+
+        The queue receives {"reason": "HISTORICAL", "tsp_id": 1040}. When no
+        backfill queue is configured, the method returns without sending.
+
+        Raises:
+            QueueSendError: If SQS does not accept the message.
+        """
 
         queue_url = self.config.sentence_similarity_backfill_queue_url
         if not queue_url:

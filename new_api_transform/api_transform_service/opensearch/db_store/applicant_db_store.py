@@ -84,16 +84,20 @@ NO_OCR_CALCULATION_SOURCE_TYPES = {"GLOBAL", "GLOBAL_RAD"}
 
 
 class ApplicantDBStore:
-    def __init__(self, session_factory: Callable[[], Session]) -> None:
-        """Keep applicant, address, and OCR work in one readable place."""
+    """Load applicant data and convert OCR source values into API fault flags."""
 
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
     def load_applicant_details(self, application_ids: list[int], reduce_kafka_size: bool) -> dict[int, dict]:
-        """Load applicant details and add the five existing OCR fault flags.
+        """Load current applicant and address details with the five OCR fault flags.
 
-        Input: application IDs [10, 20].
-        Output: a dictionary keyed by application ID for quick payload assembly.
+        Input: application_ids=[10, 20], reduce_kafka_size=False
+        Output: {10: {"first_name": "Ana", "ocr_name_fault": False, ...},
+        20: {...}}
+
+        When reduce_kafka_size is True, unchanged applicant records can be
+        omitted by the database query.
         """
 
         if not application_ids:
@@ -114,7 +118,11 @@ class ApplicantDBStore:
         return applicant_details
 
     def _build_applicant(self, row: dict) -> dict:
-        """Remove OCR source columns after turning them into UI fault flags."""
+        """Convert OCR source columns into UI fault flags and remove private fields.
+
+        Input: row containing first_name_ocr="000100" and other applicant values.
+        Output: applicant values containing ocr_name_fault=True without OCR bit fields.
+        """
 
         source_type = row.pop("source_type")
         if source_type in NO_OCR_CALCULATION_SOURCE_TYPES:
@@ -142,9 +150,10 @@ class ApplicantDBStore:
 
     @staticmethod
     def calculate_ocr(values: object) -> bool:
-        """Return true when more than ten percent of available OCR bits are 1.
+        """Return whether more than ten percent of available OCR bits are 1.
 
-        Input: "000100". Output: true because one of six bits is above 10%.
+        Input: values="000100"
+        Output: True because one of six available bits is 1.
         """
 
         if values is None:
@@ -157,6 +166,8 @@ class ApplicantDBStore:
 
     @staticmethod
     def _empty_ocr_faults() -> dict[str, bool]:
+        """Return all five OCR fault fields set to False."""
+
         return {
             "ocr_name_fault": False,
             "ocr_residence_address_fault": False,
@@ -167,6 +178,8 @@ class ApplicantDBStore:
 
     @staticmethod
     def _residence_ocr_fields() -> list[str]:
+        """Return the OCR source columns used for the residence address flag."""
+
         return [
             "residence_address_ocr",
             "residence_apt_ocr",
@@ -177,10 +190,14 @@ class ApplicantDBStore:
 
     @staticmethod
     def _mailing_ocr_fields() -> list[str]:
+        """Return the OCR source columns used for the mailing address flag."""
+
         return ["mailing_address_ocr", "mailing_apt_ocr", "mailing_city_ocr", "mailing_state_ocr", "mailing_zip_ocr"]
 
     @classmethod
     def _all_ocr_fields(cls) -> list[str]:
+        """Return every private OCR source column removed from the API payload."""
+
         return [
             "first_name_ocr",
             "middle_name_ocr",

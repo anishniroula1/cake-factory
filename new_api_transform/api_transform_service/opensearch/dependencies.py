@@ -17,14 +17,14 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class Dependencies:
+    """Create and hold the shared clients, stores, and processors used by the worker."""
+
     def __init__(
         self,
         custom_logger: CustomLogger | None = None,
         database_connection: DatabaseConnection | None = None,
         config: Config | None = None,
     ) -> None:
-        """Create the objects shared while one SQS message is transformed."""
-
         self.logger = custom_logger or CustomLogger("api_transform")
         self.config = config or Config.from_environment()
         self.database = database_connection or self._create_database_connection()
@@ -53,12 +53,12 @@ class Dependencies:
         )
 
     def close(self) -> None:
-        """Close the PostgreSQL pool when the worker stops."""
+        """Close the PostgreSQL connection pool when the worker stops."""
 
         self.database.engine.dispose()
 
     def _create_database_connection(self) -> DatabaseConnection:
-        """Create the shared database library from Vault-backed values."""
+        """Create the shared database library from the configured PostgreSQL values."""
 
         credentials = (
             {"use_dynamic_credentials": False}
@@ -78,7 +78,11 @@ class Dependencies:
         )
 
     def _sqs(self, queue_url: str, max_messages: int = 1) -> AwsSQS:
-        """Create one queue client with the service's common AWS settings."""
+        """Create an SQS client that uses the service's common AWS settings.
+
+        Input: queue_url="http://localhost:4566/queue/api-transform-local" and max_messages=1.
+        Output: an AwsSQS client configured to read one message from that queue.
+        """
 
         return AwsSQS(
             queue_url=queue_url,
@@ -91,7 +95,11 @@ class Dependencies:
         )
 
     def _kafka_config(self) -> dict:
-        """Build the Confluent producer settings used by API events."""
+        """Build the Confluent producer settings used to publish API events.
+
+        Input: the service configuration with kafka_security_protocol="PLAINTEXT".
+        Output: producer settings containing the brokers, protocol, compression, and message-size limit.
+        """
 
         values = {
             "bootstrap.servers": self.config.kafka_bootstrap_servers,

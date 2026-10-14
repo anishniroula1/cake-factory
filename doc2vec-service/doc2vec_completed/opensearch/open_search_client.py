@@ -9,13 +9,17 @@ from doc2vec_completed.opensearch.config import Config
 
 
 class OpenSearchClient:
-    def __init__(self, config: Config) -> None:
-        """Save the settings needed to connect to OpenSearch."""
+    """Create an AWS-signed OpenSearch client for Doc2Vec indexing."""
 
+    def __init__(self, config: Config) -> None:
         self.config = config
 
     def create_client(self) -> OpenSearch:
-        """Create the OpenSearch client using the pod's AWS login."""
+        """Create a pooled OpenSearch client using the pod or assumed-role login.
+
+        Input: Config with opensearch_host="search-sentences.us-east-1.es.amazonaws.com"
+        Output: an AWS-signed OpenSearch client configured for timeout retries.
+        """
 
         session = self._session()
         credentials = session.get_credentials()
@@ -46,7 +50,11 @@ class OpenSearchClient:
         )
 
     def _session(self) -> boto3.Session:
-        """Return the pod AWS session or switch to the configured IAM role."""
+        """Resolve the AWS session used to sign OpenSearch requests.
+
+        Input: aws_region="us-east-1" and an optional IAM role ARN.
+        Output: the pod session or an assumed-role boto3 Session.
+        """
 
         base_session = boto3.Session(region_name=self.config.aws_region)
         if not self.config.opensearch_iam_access_role:

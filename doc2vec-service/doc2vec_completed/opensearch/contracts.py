@@ -4,10 +4,14 @@ type TspId = int | str
 
 
 class RawSqsAttributes(TypedDict, total=False):
+    """Delivery attributes returned by SQS."""
+
     ApproximateReceiveCount: str
 
 
 class RawSqsMessage(TypedDict, total=False):
+    """Raw boto3 SQS message before JSON decoding."""
+
     Body: str
     MessageId: str
     ReceiptHandle: str
@@ -15,6 +19,8 @@ class RawSqsMessage(TypedDict, total=False):
 
 
 class SqsMessage(TypedDict, total=False):
+    """Decoded document message and its delivery metadata."""
+
     reason: str
     tsp_id: TspId
     MessageId: str | None
@@ -23,11 +29,15 @@ class SqsMessage(TypedDict, total=False):
 
 
 class NextQueueMessage(TypedDict):
+    """Message sent to Sentence Similarity after indexing completes."""
+
     reason: Literal["HISTORICAL"]
     tsp_id: TspId
 
 
 class HistoricalResult(TypedDict):
+    """Counts returned after one historical document finishes indexing."""
+
     reason: Literal["HISTORICAL"]
     tsp_id: TspId
     source_count: int
@@ -35,6 +45,8 @@ class HistoricalResult(TypedDict):
 
 
 class CatalogDocument(TypedDict):
+    """Unique sentence document written to an analysis-group catalog."""
+
     _id: str
     sentenceKey: str
     sentenceContent: str
@@ -44,6 +56,8 @@ class CatalogDocument(TypedDict):
 
 
 class OccurrenceDocument(TypedDict):
+    """Sentence occurrence document written for one global ID."""
+
     _id: int
     globalId: int
     applicationId: int

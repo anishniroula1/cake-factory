@@ -7,13 +7,13 @@ from ta_utils.aws.sqs.AwsSQS import AwsSQS
 
 
 class SqsProcessor:
-    def __init__(self, dependencies: Dependencies) -> None:
-        """Keep the dependencies used to process one SQS message."""
+    """Read document messages and run the complete API Transform flow for each one."""
 
+    def __init__(self, dependencies: Dependencies) -> None:
         self.dependencies = dependencies
 
     def run(self) -> None:
-        """Read queue messages and process each document separately."""
+        """Keep reading queue messages and process each document separately."""
 
         while True:
             messages, source_queue = self._receive_messages()
@@ -21,10 +21,11 @@ class SqsProcessor:
                 self._process_message(message, source_queue)
 
     def _receive_messages(self) -> tuple[list[SqsMessage], AwsSQS]:
-        """Read the main queue first, then read a DLQ list when it is empty.
+        """Read the main queue first, then read the DLQ when the main queue is empty.
 
-        The main queue is configured to return one document. A DLQ receive can
-        return several messages, and every message is still processed alone.
+        Output: the received message list and the queue client that owns those
+        messages. The main queue returns one document, while the DLQ can return
+        several documents that are still processed one at a time.
         """
 
         messages = self.dependencies.aws_sqs.listen_sqs_message()
@@ -73,7 +74,11 @@ class SqsProcessor:
             self.dependencies.logger.set_generic_message(None)
 
     def _send_next_message(self, tsp_id: TspId) -> bool:
-        """Send the completed document to the next service."""
+        """Send the completed document to the next service.
+
+        Input: tsp_id=10
+        Output: True when SQS accepts the message; otherwise False.
+        """
 
         body = {"source": "P2", "tsp_id": str(tsp_id), "sent_by": "api-transform"}
         return self.dependencies.sent_sqs.send_sqs_message(
@@ -81,7 +86,7 @@ class SqsProcessor:
         )
 
     def _leave_message_for_sqs(self, reason: str) -> None:
-        """Log that SQS will retry this message and eventually route it to the DLQ."""
+        """Log why the current source message cannot be deleted."""
 
         self.dependencies.logger.error(
             f"{reason} The source message was not deleted; SQS will use its configured retry and DLQ flow."
@@ -89,7 +94,11 @@ class SqsProcessor:
 
     @staticmethod
     def _read_tsp_id(message: SqsMessage) -> TspId | None:
-        """Return tsp_id exactly as supplied, or None when it is missing."""
+        """Return tsp_id exactly as supplied, or None when it is missing.
+
+        Input: message={"tsp_id": "10"}
+        Output: "10"
+        """
 
         tsp_id = message.get("tsp_id")
         if tsp_id is None or tsp_id == "":

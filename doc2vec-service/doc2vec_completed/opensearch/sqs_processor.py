@@ -4,20 +4,25 @@ from doc2vec_completed.opensearch.errors import CriticalProcessingError
 
 
 class SqsProcessor:
-    def __init__(self, dependencies: Dependencies) -> None:
-        """Save the service objects used for every SQS message."""
+    """Receive historical document messages and coordinate Doc2Vec indexing."""
 
+    def __init__(self, dependencies: Dependencies) -> None:
         self.dependencies = dependencies
 
     def run(self) -> None:
-        """Keep reading SQS and process each message one at a time."""
+        """Continuously receive and process one SQS document message at a time."""
 
         while True:
             for message in self.dependencies.aws_sqs.listen_sqs_message():
                 self._process_message(message)
 
     def _process_message(self, raw_message: SqsMessage) -> None:
-        """Process one document message and delete it only after success."""
+        """Process one historical document and delete its message after success.
+        Unsupported or failed messages remain available for the SQS retry policy.
+
+        Input: raw_message={"reason": "HISTORICAL", "tsp_id": 1040,
+        "ReceiptHandle": "receipt-value"}
+        """
 
         if raw_message.get("reason") != "HISTORICAL":
             self.dependencies.logger.error(
@@ -38,9 +43,7 @@ class SqsProcessor:
             self.dependencies.logger.info("Starting an SQS document message.")
             result = self.dependencies.historical_handler.process(tsp_id)
             if result is None:
-                self._leave_message_for_sqs(
-                    "Sentence processing did not complete."
-                )
+                self._leave_message_for_sqs("Sentence processing did not complete.")
                 return
         except CriticalProcessingError as error:
             self.dependencies.logger.error(
@@ -59,7 +62,10 @@ class SqsProcessor:
         )
 
     def _leave_message_for_sqs(self, reason: str) -> None:
-        """Log why the message stays in SQS for another delivery."""
+        """Log the reason a message remains available for redelivery.
+
+        Input: reason="Sentence processing did not complete."
+        """
 
         self.dependencies.logger.error(
             f"{reason} The source message was not deleted; SQS will use its "
@@ -67,7 +73,13 @@ class SqsProcessor:
         )
 
     def _read_tsp_id(self, message: SqsMessage) -> TspId | None:
-        """Return the message's tsp_id, or None when it is missing or empty."""
+        """Extract tsp_id without changing the type supplied by upstream.
+
+        Input: message={"tsp_id": 1040}
+        Output: 1040
+
+        A missing or empty tsp_id returns None.
+        """
 
         tsp_id = message.get("tsp_id")
         if tsp_id is None or tsp_id == "":

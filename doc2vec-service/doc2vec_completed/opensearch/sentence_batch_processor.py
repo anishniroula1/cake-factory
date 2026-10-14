@@ -15,6 +15,8 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class SentenceBatchProcessor:
+    """Create sentence keys and write catalog and occurrence documents for one batch."""
+
     def __init__(
         self,
         config: Config,
@@ -22,17 +24,16 @@ class SentenceBatchProcessor:
         opensearch: OpenSearchHelper,
         custom_logger: CustomLogger,
     ) -> None:
-        """Save the tools used to process one small sentence batch."""
-
         self.config = config
         self.session_factory = session_factory
         self.opensearch = opensearch
         self.logger = custom_logger
 
     def process(self, rows: list[SentencesVector], label: str) -> int:
-        """Save keys, catalog documents, and occurrences for one batch.
+        """Save sentence keys, unique catalog records, and occurrence documents
+        for one worker batch.
 
-        Input: 30 sentence rows from one document.
+        Input: rows=[30 SentencesVector rows], label="global IDs 3001 through 3030"
         Output: 30 after all 30 occurrence documents are written.
         """
 
@@ -80,9 +81,10 @@ class SentenceBatchProcessor:
         return len(rows)
 
     def _save_keys(self, rows: list[SentencesVector]) -> tuple[int, int]:
-        """Keep saved sentence keys and create only missing keys.
+        """Reuse saved sentence keys and generate only missing values.
 
-        Example output: (20, 10) means 20 new keys and 10 saved keys.
+        Input: 30 rows where 10 already contain sentence_key.
+        Output: (20, 10), meaning 20 generated keys and 10 reused keys.
         """
 
         current_time = datetime.now(UTC)
@@ -131,7 +133,14 @@ class SentenceBatchProcessor:
         return len(updates), reused_count
 
     def catalog_alias(self, analysis_group: str) -> str:
-        """Choose the Asylee or Refugee catalog for the document."""
+        """Select the sentence catalog for the document analysis group.
+
+        Input: analysis_group="Asylee"
+        Output: "sentence_semantic_catalog_asylee"
+
+        Raises:
+            PermanentDataError: If the analysis group is unsupported.
+        """
 
         normalized_group = analysis_group.strip().casefold()
         if normalized_group == "asylee":
@@ -143,7 +152,9 @@ class SentenceBatchProcessor:
     def _load_embeddings(self, global_ids: list[int]) -> dict[int, list[float]]:
         """Read saved Titan vectors for the requested global IDs.
 
-        Input: [10, 20]. Output: {10: [vector values]} when only 10 has one.
+        Input: global_ids=[10, 20]
+        Output: {10: [512 vector values]} when only global ID 10 has a saved
+        Titan embedding with embedding_type=2.
         """
 
         with self.session_factory() as session:
@@ -164,10 +175,12 @@ class SentenceBatchProcessor:
         embeddings: dict[int, list[float]],
         label: str,
     ) -> tuple[int, int, int]:
-        """Add only missing sentence keys to the selected catalog.
+        """Add only missing sentence keys to the selected catalog. Saved Titan
+        vectors are reused, while the embedding pipeline creates missing vectors.
 
-        Saved vectors are reused. Bedrock creates vectors that are missing.
-        Output: existing key count, saved vector count, Bedrock vector count.
+        Input: 30 sentence rows where 5 keys exist, 10 have saved vectors, and
+        15 require Bedrock vectors.
+        Output: (5, 10, 15)
         """
 
         existing_keys = retry_operation(
@@ -227,10 +240,11 @@ class SentenceBatchProcessor:
         self,
         rows: list[SentencesVector],
     ) -> list[OccurrenceDocument]:
-        """Build one occurrence document for every sentence row.
+        """Build one occurrence document for every sentence row. Sentence fields
+        come from SentencesVector, while application fields come from its tsp row.
 
-        The sentence row gives sentence fields. Its tsp row gives application
-        fields shared by the whole document.
+        Input: rows=[SentencesVector(global_id=10, sentence_key="abc123", ...)]
+        Output: [{"_id": 10, "globalId": 10, "sentenceKey": "abc123", ...}]
         """
 
         document = rows[0].tsp
