@@ -4,7 +4,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
-from similarity_completed.opensearch.config import Config
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import MatchTarget
 from similarity_completed.opensearch.retry import retry_operation
 from ta_db_connection.atatables import SentencesVector
@@ -27,8 +27,7 @@ SAVE_MATCHES = text(
 class TitanMatchesDBStore:
     """Persist bidirectional sentence relationships in Titan match buckets."""
 
-    def __init__(self, config: Config, session_factory: Callable[[], Session], custom_logger: CustomLogger) -> None:
-        self.config = config
+    def __init__(self, session_factory: Callable[[], Session], custom_logger: CustomLogger) -> None:
         self.session_factory = session_factory
         self.logger = custom_logger
 
@@ -51,8 +50,8 @@ class TitanMatchesDBStore:
 
         items = list(matches.items())
         match_batches = [
-            dict(items[offset : offset + self.config.titan_match_write_batch_size])
-            for offset in range(0, len(items), self.config.titan_match_write_batch_size)
+            dict(items[offset : offset + constants.TITAN_MATCH_WRITE_BATCH_SIZE])
+            for offset in range(0, len(items), constants.TITAN_MATCH_WRITE_BATCH_SIZE)
         ]
         saved = 0
         for batch_number, match_batch in enumerate(match_batches, start=1):
@@ -61,7 +60,7 @@ class TitanMatchesDBStore:
                 self._save_match_batch,
                 source,
                 match_batch,
-                wait_seconds=self.config.retry_seconds,
+                wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
         return saved

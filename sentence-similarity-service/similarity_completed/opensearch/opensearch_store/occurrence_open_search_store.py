@@ -1,12 +1,11 @@
-from similarity_completed.opensearch.config import Config
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import TargetOccurrence
 
 
 class OccurrenceOpenSearchStore:
     """Query sentence occurrences and expand matched sentence keys into target records."""
 
-    def __init__(self, config: Config, client) -> None:
-        self.config = config
+    def __init__(self, client) -> None:
         self.client = client
 
     def has_occurrences_for_tsp_id(self, tsp_id: int | str) -> bool:
@@ -16,7 +15,9 @@ class OccurrenceOpenSearchStore:
         Output: True when a matching occurrence exists; otherwise False.
         """
 
-        response = self.client.count(index=self.config.occurrence_alias, body={"query": {"term": {"tspId": tsp_id}}})
+        response = self.client.count(
+            index=constants.SENTENCE_OCCURRENCE_ALIAS, body={"query": {"term": {"tspId": tsp_id}}}
+        )
         return int(response.get("count", 0)) > 0
 
     def search_matching_occurrences_outside_application(
@@ -36,7 +37,7 @@ class OccurrenceOpenSearchStore:
 
         # Split the terms list, then page every matching occurrence. One key
         # can occur more than 10,000 times, so one search response is not enough.
-        batch_size = self.config.opensearch_terms_batch_size
+        batch_size = constants.OPENSEARCH_TERMS_BATCH_SIZE
         for offset in range(0, len(sentence_keys), batch_size):
             key_batch = sentence_keys[offset : offset + batch_size]
             occurrences.extend(
@@ -68,7 +69,7 @@ class OccurrenceOpenSearchStore:
         search_after = None
         while True:
             body = {
-                "size": self.config.opensearch_terms_batch_size,
+                "size": constants.OPENSEARCH_TERMS_BATCH_SIZE,
                 "track_total_hits": False,
                 "_source": ["globalId", "tspId", "applicationId", "sentenceKey"],
                 "query": {
@@ -87,7 +88,7 @@ class OccurrenceOpenSearchStore:
             if search_after is not None:
                 body["search_after"] = search_after
 
-            response = self.client.search(index=self.config.occurrence_alias, body=body)
+            response = self.client.search(index=constants.SENTENCE_OCCURRENCE_ALIAS, body=body)
             hits = response["hits"]["hits"]
             if not hits:
                 return occurrences
@@ -105,6 +106,6 @@ class OccurrenceOpenSearchStore:
                     }
                 )
 
-            if len(hits) < self.config.opensearch_terms_batch_size:
+            if len(hits) < constants.OPENSEARCH_TERMS_BATCH_SIZE:
                 return occurrences
             search_after = hits[-1]["sort"]

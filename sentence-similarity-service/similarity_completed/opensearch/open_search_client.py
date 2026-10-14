@@ -2,6 +2,7 @@ import boto3
 from botocore.exceptions import NoCredentialsError
 from opensearchpy import AWSV4SignerAuth, OpenSearch, RequestsHttpConnection
 
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.config import Config
 
 
@@ -26,16 +27,16 @@ class OpenSearchClient:
         credentials = session.get_credentials()
         if credentials is None:
             raise NoCredentialsError()
-        auth = AWSV4SignerAuth(credentials, self.config.aws_region, self.config.opensearch_service)
+        auth = AWSV4SignerAuth(credentials, self.config.aws_region, constants.OPENSEARCH_SERVICE)
         return OpenSearch(
-            hosts=[{"host": self.config.opensearch_host, "port": self.config.opensearch_port}],
+            hosts=[{"host": self.config.opensearch_host, "port": constants.OPENSEARCH_PORT}],
             http_auth=auth,
             use_ssl=True,
             verify_certs=True,
             ssl_assert_hostname=True,
             ssl_show_warn=False,
             connection_class=RequestsHttpConnection,
-            pool_maxsize=self.config.thread_worker_count,
+            pool_maxsize=constants.THREAD_WORKER_COUNT,
             timeout=60,
             max_retries=5,
             retry_on_timeout=True,

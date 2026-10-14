@@ -1,5 +1,6 @@
 from sqlalchemy.orm import sessionmaker
 
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.handlers.sentence_similarity_handler import SentenceSimilarityHandler
 from similarity_completed.opensearch.open_search_client import OpenSearchClient
@@ -25,9 +26,9 @@ class Dependencies:
             aws_region=self.config.aws_region,
             aws_endpoint_url=self.config.aws_local_endpoint_url or None,
             max_number_of_messages=1,
-            wait_time=self.config.sqs_wait_seconds,
+            wait_time=constants.SQS_WAIT_SECONDS,
             logger=self.logger,
-            visibility_timeout=self.config.sqs_visibility_seconds,
+            visibility_timeout=constants.SQS_VISIBILITY_SECONDS,
         )
         self.sentence_similarity_handler = SentenceSimilarityHandler(
             self.config, self.session_factory, self.opensearch_client, self.aws_sqs, self.logger
@@ -52,8 +53,8 @@ class Dependencies:
             pg_db_host=self.config.pg_db_host,
             pg_db_database=self.config.pg_db_database,
             pg_db_port=self.config.pg_db_port,
-            pool_size=self.config.database_pool_size,
-            max_overflow=self.config.database_max_overflow,
+            pool_size=constants.DATABASE_POOL_SIZE,
+            max_overflow=constants.DATABASE_MAX_OVERFLOW,
             application_name="sentence_similarity",
             **credential_arguments,
         )

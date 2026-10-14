@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-from similarity_completed.opensearch.config import Config
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import CatalogRecord, Classification, MatchTarget, TargetOccurrence
 from similarity_completed.opensearch.db_store import SentenceVectorDBStore
 from similarity_completed.opensearch.opensearch_store import (
@@ -18,14 +18,12 @@ class TracerFilteringService:
 
     def __init__(
         self,
-        config: Config,
         sentence_vector_db_store: SentenceVectorDBStore,
         occurrence_open_search_store: OccurrenceOpenSearchStore,
         sentence_catalog_open_search_store: SentenceCatalogOpenSearchStore,
         tracer_open_search_store: TracerOpenSearchStore,
         custom_logger: CustomLogger,
     ) -> None:
-        self.config = config
         self.sentence_vector_db_store = sentence_vector_db_store
         self.occurrence_open_search_store = occurrence_open_search_store
         self.sentence_catalog_open_search_store = sentence_catalog_open_search_store
@@ -67,7 +65,7 @@ class TracerFilteringService:
             self.sentence_vector_db_store.update_classification_by_global_ids,
             [source.global_id],
             classification,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         return classification
@@ -97,7 +95,7 @@ class TracerFilteringService:
             self.tracer_open_search_store.classify_sentence_by_vector,
             record["vector"],
             analysis_group,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         retry_operation(
@@ -106,7 +104,7 @@ class TracerFilteringService:
             catalog_alias,
             sentence_key,
             classification,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         record["classification"] = classification
@@ -133,7 +131,7 @@ class TracerFilteringService:
             key_distances,
             source.tsp.analysis_group,
             source.tsp.application_id,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         if not occurrences:
@@ -148,7 +146,7 @@ class TracerFilteringService:
             self.sentence_catalog_open_search_store.load_records_by_sentence_keys,
             catalog_alias,
             list(occurrences_by_key),
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         records[source_record["sentence_key"]] = source_record
@@ -176,7 +174,7 @@ class TracerFilteringService:
                 self.sentence_vector_db_store.update_classification_by_global_ids,
                 target_global_ids,
                 classification,
-                wait_seconds=self.config.retry_seconds,
+                wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
             if self.should_skip_sentence_catalog_search(classification):

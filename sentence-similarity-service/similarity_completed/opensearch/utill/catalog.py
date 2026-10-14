@@ -1,8 +1,8 @@
-from similarity_completed.opensearch.config import Config
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.errors import PermanentDataError
 
 
-def select_catalog_alias(config: Config, analysis_group: str) -> str:
+def select_catalog_alias(analysis_group: str) -> str:
     """Select the sentence catalog alias for an analysis group.
 
     Input: analysis_group="Asylee"
@@ -17,7 +17,7 @@ def select_catalog_alias(config: Config, analysis_group: str) -> str:
     # Normalize values such as ASYLEE, asylee, and Asylee to the same group.
     normalized_group = analysis_group.strip().casefold()
     if normalized_group == "asylee":
-        return config.asylee_catalog_alias
+        return constants.ASYLEE_CATALOG_ALIAS
     if normalized_group == "refugee":
-        return config.refugee_catalog_alias
+        return constants.REFUGEE_CATALOG_ALIAS
     raise PermanentDataError(f"unsupported analysis_group {analysis_group!r}")

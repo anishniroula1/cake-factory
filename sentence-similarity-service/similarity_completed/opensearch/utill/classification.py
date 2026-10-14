@@ -1,5 +1,5 @@
+from similarity_completed.opensearch.constants import CLASSIFICATION_FIELDS
 from similarity_completed.opensearch.contracts import Classification
-from similarity_completed.opensearch.utill.constants import CLASSIFICATION_FIELDS
 
 
 def saved_classification(source: dict) -> Classification | None:

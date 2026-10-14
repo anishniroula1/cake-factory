@@ -1,19 +1,13 @@
-from similarity_completed.opensearch.config import Config
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import Classification
-from similarity_completed.opensearch.utill.constants import VECTOR_FIELD
 from similarity_completed.opensearch.utill.score import cosine_similarity
 from similarity_completed.opensearch.utill.vector import validate_vector
-
-# Search the 100 closest tracer references. Only results meeting the configured
-# 70% similarity threshold contribute to the sentence classification.
-TRACER_TOP_K = 100
 
 
 class TracerOpenSearchStore:
     """Classify sentence vectors against tracer and form-language reference records."""
 
-    def __init__(self, config: Config, client) -> None:
-        self.config = config
+    def __init__(self, client) -> None:
         self.client = client
 
     def classify_sentence_by_vector(self, vector: list[float], analysis_group: str) -> Classification:
@@ -29,22 +23,28 @@ class TracerOpenSearchStore:
         configured classification threshold.
         """
 
-        validate_vector(vector, self.config.vector_dimension)
+        validate_vector(vector, constants.VECTOR_DIMENSION)
         response = self.client.search(
-            index=self.config.tracer_alias,
+            index=constants.TRACER_ALIAS,
             body={
-                "size": TRACER_TOP_K,
+                "size": constants.TRACER_TOP_K,
                 "track_total_hits": False,
                 "_source": ["isNonMatcher", "isFormLanguage"],
                 "query": {
                     "bool": {
                         "filter": [{"term": {"analysisGroup": analysis_group}}],
-                        "must": [{"knn": {VECTOR_FIELD: {"vector": vector, "k": TRACER_TOP_K}}}],
+                        "must": [
+                            {
+                                "knn": {
+                                    constants.VECTOR_FIELD: {"vector": vector, "k": constants.TRACER_TOP_K}
+                                }
+                            }
+                        ],
                     }
                 },
             },
         )
-        minimum_similarity = self.config.tracer_threshold / 100.0
+        minimum_similarity = constants.TRACER_THRESHOLD / 100.0
         qualifying_hits = [
             hit for hit in response["hits"]["hits"] if cosine_similarity(float(hit["_score"])) >= minimum_similarity
         ]

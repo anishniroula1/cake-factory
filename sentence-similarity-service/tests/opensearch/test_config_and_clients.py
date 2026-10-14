@@ -54,7 +54,7 @@ def required_environment(monkeypatch):
     monkeypatch.setattr("similarity_completed.opensearch.config.VaultSecrets", Secrets)
 
 
-def test_config_reads_service_defaults(monkeypatch):
+def test_config_reads_vault_and_environment_values(monkeypatch):
     required_environment(monkeypatch)
 
     config = Config.from_environment()
@@ -62,12 +62,9 @@ def test_config_reads_service_defaults(monkeypatch):
     assert (
         config.environment,
         config.opensearch_host,
-        config.occurrence_alias,
-        config.match_threshold,
-        config.tracer_threshold,
         config.receive_sqs_endpoint,
         config.sent_sqs_endpoint,
-    ) == ("local", "search.example.com", "sentence_occurrences", 76, 70, "source.fifo", "next.fifo")
+    ) == ("local", "search.example.com", "source.fifo", "next.fifo")
 
     invalid_values = [
         replace(config, pg_db_user=""),

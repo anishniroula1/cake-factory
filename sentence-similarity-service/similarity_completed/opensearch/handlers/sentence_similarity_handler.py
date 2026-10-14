@@ -5,7 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 from opensearchpy import OpenSearch
 from sqlalchemy.orm import Session
 
-from similarity_completed.opensearch.config import OCCURRENCE_READINESS_WAIT_SECONDS, Config
+from similarity_completed.opensearch import constants
+from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.contracts import CatalogRecord, ProcessResult, SentenceResult, TspId
 from similarity_completed.opensearch.db_store import SentenceVectorDBStore, TitanMatchesDBStore
 from similarity_completed.opensearch.errors import QueueSendError
@@ -37,13 +38,12 @@ class SentenceSimilarityHandler:
         self.opensearch_client = opensearch_client
         self.aws_sqs = aws_sqs
         self.logger = custom_logger
-        self.sentence_vector_db_store = SentenceVectorDBStore(config, session_factory)
-        self.titan_matches_db_store = TitanMatchesDBStore(config, session_factory, custom_logger)
-        self.occurrence_open_search_store = OccurrenceOpenSearchStore(config, opensearch_client)
-        self.sentence_catalog_open_search_store = SentenceCatalogOpenSearchStore(config, opensearch_client)
-        self.tracer_open_search_store = TracerOpenSearchStore(config, opensearch_client)
+        self.sentence_vector_db_store = SentenceVectorDBStore(session_factory)
+        self.titan_matches_db_store = TitanMatchesDBStore(session_factory, custom_logger)
+        self.occurrence_open_search_store = OccurrenceOpenSearchStore(opensearch_client)
+        self.sentence_catalog_open_search_store = SentenceCatalogOpenSearchStore(opensearch_client)
+        self.tracer_open_search_store = TracerOpenSearchStore(opensearch_client)
         self.tracer_filtering_service = TracerFilteringService(
-            config,
             self.sentence_vector_db_store,
             self.occurrence_open_search_store,
             self.sentence_catalog_open_search_store,
@@ -71,7 +71,7 @@ class SentenceSimilarityHandler:
             "Count source sentences",
             self.sentence_vector_db_store.count_sentences_by_tsp_id,
             tsp_id,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         if total == 0:
@@ -89,7 +89,7 @@ class SentenceSimilarityHandler:
         batch_number = 0
 
         with ThreadPoolExecutor(
-            max_workers=self.config.thread_worker_count, thread_name_prefix="sentence-similarity"
+            max_workers=constants.THREAD_WORKER_COUNT, thread_name_prefix="sentence-similarity"
         ) as executor:
             while True:
                 batch_number += 1
@@ -98,19 +98,19 @@ class SentenceSimilarityHandler:
                     self.sentence_vector_db_store.load_sentence_batch_by_tsp_id,
                     tsp_id,
                     after_global_id,
-                    wait_seconds=self.config.retry_seconds,
+                    wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
                 if not rows:
                     break
 
-                catalog_alias = select_catalog_alias(self.config, rows[0].tsp.analysis_group)
+                catalog_alias = select_catalog_alias(rows[0].tsp.analysis_group)
                 source_records = retry_operation(
                     f"Load catalog vectors for sentence batch {batch_number}",
                     self.sentence_catalog_open_search_store.load_records_by_sentence_keys,
                     catalog_alias,
                     [row.sentence_key for row in rows],
-                    wait_seconds=self.config.retry_seconds,
+                    wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
                 missing_sources = [row for row in rows if row.sentence_key not in source_records]
@@ -152,7 +152,7 @@ class SentenceSimilarityHandler:
             "Send completed document to the next queue",
             self._send_to_next_queue,
             tsp_id,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         self.logger.info(
@@ -209,7 +209,7 @@ class SentenceSimilarityHandler:
             catalog_alias,
             source.sentence_key,
             source_record["vector"],
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
 
@@ -247,9 +247,9 @@ class SentenceSimilarityHandler:
         # index time to refresh and gives both services a short breathing point.
         self.logger.warning(
             "Sentence occurrence records are not searchable yet. "
-            f"Waiting {OCCURRENCE_READINESS_WAIT_SECONDS} seconds before checking once more."
+            f"Waiting {constants.OCCURRENCE_READINESS_WAIT_SECONDS} seconds before checking once more."
         )
-        time.sleep(OCCURRENCE_READINESS_WAIT_SECONDS)
+        time.sleep(constants.OCCURRENCE_READINESS_WAIT_SECONDS)
 
         if self._has_searchable_occurrences(tsp_id):
             self.logger.info("Sentence occurrence records became searchable. Continuing processing.")
@@ -257,7 +257,7 @@ class SentenceSimilarityHandler:
 
         message = (
             "Sentence occurrence records are still not searchable after the "
-            f"{OCCURRENCE_READINESS_WAIT_SECONDS}-second wait."
+            f"{constants.OCCURRENCE_READINESS_WAIT_SECONDS}-second wait."
         )
         self.logger.error(message)
         return False
@@ -273,7 +273,7 @@ class SentenceSimilarityHandler:
             "Check sentence occurrence readiness",
             self.occurrence_open_search_store.has_occurrences_for_tsp_id,
             tsp_id,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
 

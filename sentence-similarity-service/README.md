@@ -135,7 +135,8 @@ similarity_completed/opensearch/
   handlers/              One-document processing flow
   opensearch_store/      Occurrence, catalog, and tracer OpenSearch operations
   utill/                 Score, vector, catalog, and classification helpers
-  config.py              Environment values and processing constants
+  config.py              Environment and Vault configuration
+  constants.py           Fixed database, OpenSearch, processing, and SQS values
   dependencies.py        Database, OpenSearch, SQS, and handler construction
   sqs_processor.py       Receive, process, and delete SQS messages
 tests/opensearch/        OpenSearch-flow unit tests

@@ -1,9 +1,8 @@
 from datetime import UTC, datetime
 
-from similarity_completed.opensearch.config import Config
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import CatalogRecord, Classification
 from similarity_completed.opensearch.utill.classification import saved_classification
-from similarity_completed.opensearch.utill.constants import VECTOR_FIELD
 from similarity_completed.opensearch.utill.score import cosine_distance, minimum_opensearch_score
 from similarity_completed.opensearch.utill.vector import decode_vector, validate_vector
 
@@ -11,8 +10,7 @@ from similarity_completed.opensearch.utill.vector import decode_vector, validate
 class SentenceCatalogOpenSearchStore:
     """Read vectors, search semantic matches, and update sentence catalog classifications."""
 
-    def __init__(self, config: Config, client) -> None:
-        self.config = config
+    def __init__(self, client) -> None:
         self.client = client
 
     def load_records_by_sentence_keys(self, catalog_alias: str, sentence_keys: list[str]) -> dict[str, CatalogRecord]:
@@ -31,7 +29,7 @@ class SentenceCatalogOpenSearchStore:
         unique_keys = list(dict.fromkeys(sentence_keys))
         records: dict[str, CatalogRecord] = {}
 
-        batch_size = self.config.opensearch_terms_batch_size
+        batch_size = constants.OPENSEARCH_TERMS_BATCH_SIZE
         for offset in range(0, len(unique_keys), batch_size):
             key_batch = unique_keys[offset : offset + batch_size]
             if not key_batch:
@@ -45,19 +43,19 @@ class SentenceCatalogOpenSearchStore:
                     "size": len(key_batch),
                     "track_total_hits": False,
                     "_source": ["sentenceKey", "isNonMatcher", "isTracer", "isFormLanguage"],
-                    "docvalue_fields": [{"field": VECTOR_FIELD, "format": "binary"}],
+                    "docvalue_fields": [{"field": constants.VECTOR_FIELD, "format": "binary"}],
                     "query": {"ids": {"values": key_batch}},
                 },
             )
             for hit in response["hits"]["hits"]:
                 source = hit.get("_source", {})
-                vector_values = hit.get("fields", {}).get(VECTOR_FIELD)
+                vector_values = hit.get("fields", {}).get(constants.VECTOR_FIELD)
                 if not vector_values:
                     continue
                 sentence_key = source["sentenceKey"]
                 records[sentence_key] = {
                     "sentence_key": sentence_key,
-                    "vector": decode_vector(vector_values[0], self.config.vector_dimension),
+                    "vector": decode_vector(vector_values[0], constants.VECTOR_DIMENSION),
                     "classification": saved_classification(source),
                 }
         return records
@@ -76,7 +74,7 @@ class SentenceCatalogOpenSearchStore:
         returned only when they satisfy the configured similarity threshold.
         """
 
-        validate_vector(vector, self.config.vector_dimension)
+        validate_vector(vector, constants.VECTOR_DIMENSION)
         matches = {source_key: 0.0}
         after_key = None
         while True:
@@ -124,7 +122,7 @@ class SentenceCatalogOpenSearchStore:
         """
 
         composite = {
-            "size": self.config.opensearch_terms_batch_size,
+            "size": constants.OPENSEARCH_TERMS_BATCH_SIZE,
             "sources": [{"sentenceKey": {"terms": {"field": "sentenceKey"}}}],
         }
         if after_key:
@@ -137,10 +135,10 @@ class SentenceCatalogOpenSearchStore:
                 "track_total_hits": False,
                 "query": {
                     "knn": {
-                        VECTOR_FIELD: {
+                        constants.VECTOR_FIELD: {
                             "vector": vector,
-                            "min_score": minimum_opensearch_score(self.config.match_threshold),
-                            "method_parameters": {"nprobes": self.config.ivf_nprobes},
+                            "min_score": minimum_opensearch_score(constants.MATCH_THRESHOLD),
+                            "method_parameters": {"nprobes": constants.IVF_NPROBES},
                         }
                     }
                 },

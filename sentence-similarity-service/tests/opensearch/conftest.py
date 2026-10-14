@@ -2,46 +2,36 @@ from datetime import UTC, datetime
 
 import pytest
 
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.config import Config
 from ta_db_connection.atatables import SentencesVector, TextSimilarityInput
 
 
 @pytest.fixture
-def service_config():
+def service_config(monkeypatch):
+    # Keep unit-test vectors and worker pools small while production code reads
+    # every fixed value from the shared constants module.
+    monkeypatch.setattr(constants, "VECTOR_DIMENSION", 2)
+    monkeypatch.setattr(constants, "THREAD_WORKER_COUNT", 1)
+    monkeypatch.setattr(constants, "RETRY_SECONDS", 0)
+    monkeypatch.setattr(constants, "SENTENCE_OCCURRENCE_ALIAS", "occurrence")
+    monkeypatch.setattr(constants, "ASYLEE_CATALOG_ALIAS", "catalog-asylee")
+    monkeypatch.setattr(constants, "REFUGEE_CATALOG_ALIAS", "catalog-refugee")
+    monkeypatch.setattr(constants, "TRACER_ALIAS", "tracer")
     return Config(
         pg_db_user="user",
         pg_db_password="password",
         pg_db_host="database",
         pg_db_database="sentence",
         pg_db_port=5432,
-        database_pool_size=30,
-        database_max_overflow=10,
         dynamic_credential_file="",
         environment="local",
         aws_region="us-east-1",
         aws_local_endpoint_url="",
         opensearch_iam_access_role="",
         opensearch_host="search.example.com",
-        opensearch_port=443,
-        opensearch_service="es",
-        occurrence_alias="occurrence",
-        asylee_catalog_alias="catalog-asylee",
-        refugee_catalog_alias="catalog-refugee",
-        tracer_alias="tracer",
-        vector_dimension=2,
-        match_threshold=76,
-        tracer_threshold=70,
-        ivf_nprobes=64,
         receive_sqs_endpoint="source.fifo",
         sent_sqs_endpoint="next.fifo",
-        sqs_wait_seconds=10,
-        sqs_visibility_seconds=7200,
-        source_sentence_batch_size=30,
-        thread_worker_count=1,
-        titan_match_write_batch_size=500,
-        opensearch_terms_batch_size=1000,
-        database_classification_batch_size=1000,
-        retry_seconds=0,
     )
 
 

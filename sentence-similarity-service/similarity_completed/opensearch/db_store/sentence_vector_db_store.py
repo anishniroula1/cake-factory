@@ -3,7 +3,7 @@ from collections.abc import Callable
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, joinedload, load_only
 
-from similarity_completed.opensearch.config import Config
+from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import Classification, TspId
 from ta_db_connection.atatables import SentencesVector, TextSimilarityInput
 
@@ -11,8 +11,7 @@ from ta_db_connection.atatables import SentencesVector, TextSimilarityInput
 class SentenceVectorDBStore:
     """Provide database operations for sentence-vector records and classifications."""
 
-    def __init__(self, config: Config, session_factory: Callable[[], Session]) -> None:
-        self.config = config
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
     def count_sentences_by_tsp_id(self, tsp_id: TspId) -> int:
@@ -51,7 +50,7 @@ class SentenceVectorDBStore:
                 )
                 .where(SentencesVector.tsp_id == tsp_id, SentencesVector.global_id > after_global_id)
                 .order_by(SentencesVector.global_id)
-                .limit(self.config.source_sentence_batch_size)
+                .limit(constants.SOURCE_SENTENCE_BATCH_SIZE)
             )
             return list(session.scalars(statement))
 
@@ -73,7 +72,7 @@ class SentenceVectorDBStore:
         # largest. FOR NO KEY UPDATE keeps classification writers ordered but
         # stays compatible with foreign-key checks made by titan_matches.
         ordered_global_ids = sorted(set(global_ids))
-        batch_size = self.config.database_classification_batch_size
+        batch_size = constants.DATABASE_CLASSIFICATION_BATCH_SIZE
         for offset in range(0, len(ordered_global_ids), batch_size):
             id_batch = ordered_global_ids[offset : offset + batch_size]
             with self.session_factory() as session, session.begin():
