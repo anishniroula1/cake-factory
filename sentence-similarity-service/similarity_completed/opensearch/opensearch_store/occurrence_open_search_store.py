@@ -3,17 +3,17 @@ from similarity_completed.opensearch.contracts import TargetOccurrence
 
 
 class OccurrenceOpenSearchStore:
-    def __init__(self, config: Config, client) -> None:
-        """Keep OpenSearch operations for the sentence occurrence index."""
+    """Query sentence occurrences and expand matched sentence keys into target records."""
 
+    def __init__(self, config: Config, client) -> None:
         self.config = config
         self.client = client
 
     def has_occurrences_for_tsp_id(self, tsp_id: int | str) -> bool:
-        """Return whether Doc2Vec occurrence rows are searchable for a document.
+        """Determine whether at least one occurrence is searchable for a document.
 
-        Input: tsp_id=100
-        Output: True when at least one occurrence is visible in OpenSearch.
+        Input: tsp_id=8205
+        Output: True when a matching occurrence exists; otherwise False.
         """
 
         response = self.client.count(index=self.config.occurrence_alias, body={"query": {"term": {"tspId": tsp_id}}})
@@ -22,11 +22,13 @@ class OccurrenceOpenSearchStore:
     def search_matching_occurrences_outside_application(
         self, key_distances: dict[str, float], analysis_group: str, source_application_id: int
     ) -> list[TargetOccurrence]:
-        """Find matching occurrences outside the source application.
+        """Expand matching sentence keys into target occurrence records. Results
+        stay within the requested analysis group and exclude the source application.
 
-        Input: key_distances={KEY-A: 0.0, KEY-B: 0.08},
-        analysis_group=Asylee, and source_application_id=100
-        Output: occurrences for KEY-A and KEY-B outside application 100.
+        Input: key_distances={"abc123": 0.0, "def456": 0.08},
+        analysis_group="Asylee", source_application_id=100
+        Output: target occurrences such as {"global_id": 50001,
+        "application_id": 200, "sentence_key": "def456", "distance": 0.08}.
         """
 
         sentence_keys = list(key_distances)
@@ -47,7 +49,17 @@ class OccurrenceOpenSearchStore:
     def _search_matching_occurrences_for_key_batch(
         self, sentence_keys: list[str], key_distances: dict[str, float], analysis_group: str, source_application_id: int
     ) -> list[TargetOccurrence]:
-        """Read all occurrence pages for one sentence-key batch."""
+        """Retrieve every paginated occurrence for one sentence-key batch.
+        search_after is used because one key can exceed one response page.
+
+        Input: sentence_keys=["abc123", "def456"],
+        key_distances={"abc123": 0.0, "def456": 0.08},
+        analysis_group="Refugee", source_application_id=100
+        Output: one combined list containing target occurrences from every page.
+
+        The method returns an empty list when none of the supplied keys occurs
+        outside the source application.
+        """
 
         if not sentence_keys:
             return []

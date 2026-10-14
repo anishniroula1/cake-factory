@@ -14,6 +14,8 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class TracerFilteringService:
+    """Classify source and target sentences and exclude ineligible semantic matches."""
+
     def __init__(
         self,
         config: Config,
@@ -23,8 +25,6 @@ class TracerFilteringService:
         tracer_open_search_store: TracerOpenSearchStore,
         custom_logger: CustomLogger,
     ) -> None:
-        """Keep sentence classification and match-filtering logic together."""
-
         self.config = config
         self.sentence_vector_db_store = sentence_vector_db_store
         self.occurrence_open_search_store = occurrence_open_search_store
@@ -34,10 +34,14 @@ class TracerFilteringService:
 
     @staticmethod
     def should_skip_sentence_catalog_search(classification: Classification) -> bool:
-        """Stop normal matching for tracer, form-language, or non-matcher text.
+        """Determine whether a classification is ineligible for semantic matching.
+        Any exclusion flag prevents the sentence from creating Titan matches.
 
-        Input: any one of isTracer, isFormLanguage, or isNonMatcher is true.
-        Output: True, so the sentence does not search the sentence catalog.
+        Input: classification={"is_non_matcher": True, "is_tracer": False,
+        "is_form_language": False}
+        Output: True because is_non_matcher is set.
+
+        The method returns False only when all three flags are False.
         """
 
         return classification["is_tracer"] or classification["is_non_matcher"] or classification["is_form_language"]
@@ -45,7 +49,15 @@ class TracerFilteringService:
     def classify_and_update_source(
         self, source: SentencesVector, catalog_alias: str, source_record: CatalogRecord
     ) -> Classification:
-        """Classify one source sentence and save the flags by global ID."""
+        """Classify a source sentence and persist the result. The catalog stores
+        the reusable key classification, while occurrence records store it by ID.
+
+        Input: source.global_id=39205,
+        catalog_alias="sentence_semantic_catalog_asylee", and a source_record
+        containing a vector and optional cached classification.
+        Output: {"is_non_matcher": False, "is_tracer": True,
+        "is_form_language": False}
+        """
 
         classification = self.get_sentence_classification(
             catalog_alias, source_record, source.tsp.analysis_group, source.global_id
@@ -63,7 +75,15 @@ class TracerFilteringService:
     def get_sentence_classification(
         self, catalog_alias: str, record: CatalogRecord, analysis_group: str, source_global_id: int
     ) -> Classification:
-        """Reuse an allowed decision or search and save a tracer decision."""
+        """Resolve a sentence classification from cache or tracer search. A new
+        result is saved on the catalog for future occurrences of the same key.
+
+        Input: catalog_alias="sentence_semantic_catalog_refugee",
+        record.sentence_key="abc123", analysis_group="Refugee",
+        source_global_id=39205
+        Output: {"is_non_matcher": True, "is_tracer": False,
+        "is_form_language": True}
+        """
 
         saved = record["classification"]
         # A saved excluded sentence is searched again because only the three
@@ -95,7 +115,17 @@ class TracerFilteringService:
     def find_eligible_match_targets(
         self, source: SentencesVector, catalog_alias: str, key_distances: dict[str, float], source_record: CatalogRecord
     ) -> dict[str, MatchTarget] | None:
-        """Expand matching keys and remove every excluded target occurrence."""
+        """Expand semantic matches and retain eligible target occurrences. New
+        target classifications are saved, and ineligible targets are removed.
+
+        Input: source.global_id=39205, catalog_alias="sentence_semantic_catalog_asylee",
+        key_distances={"abc123": 0.0, "def456": 0.08}
+        Output: {"50001": {"tsp_id": 9001, "application_id": 200,
+        "distance": 0.08}}
+
+        The method returns an empty mapping when no target qualifies or None
+        when a required target catalog record is missing.
+        """
 
         occurrences = retry_operation(
             f"Expand matching occurrences for source global_id={source.global_id}",

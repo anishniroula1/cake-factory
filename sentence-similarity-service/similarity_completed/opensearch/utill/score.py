@@ -17,7 +17,7 @@ def minimum_opensearch_score(threshold: int) -> float:
 
 
 def cosine_distance(opensearch_score: float) -> float:
-    """Convert an OpenSearch score into the distance saved in titan_matches.
+    """Convert an OpenSearch score to the distance stored in titan_matches.
 
     Input: opensearch_score=0.95
     Output: 0.10, which means the sentences are 90% similar.

@@ -6,17 +6,16 @@ from similarity_completed.opensearch.errors import PermanentDataError
 
 
 def decode_vector(encoded_vector: str, vector_dimension: int) -> list[float]:
-    """Convert one Base64 binary OpenSearch vector into Python float values.
+    """Decode a Base64 OpenSearch doc-value vector into float32 values. The
+    decoded value must contain four bytes for every expected float.
 
-    Input:
-        encoded_vector=Base64 binary returned by docvalue_fields
-        vector_dimension=512
+    Input: encoded_vector="AACAPwAAAL8=", vector_dimension=2
+    Output: [1.0, -0.5]
 
-    Output:
-        A list containing exactly 512 float values.
+    Production Titan vectors use vector_dimension=512.
 
-    Each float uses four bytes. Invalid Base64 or the wrong byte count stops
-    processing before an invalid vector is sent into another search.
+    Raises:
+        PermanentDataError: If the value is invalid Base64 or has an invalid size.
     """
 
     try:
@@ -31,13 +30,13 @@ def decode_vector(encoded_vector: str, vector_dimension: int) -> list[float]:
 
 
 def validate_vector(vector: list[float], vector_dimension: int) -> None:
-    """Confirm that a vector has the dimension required by OpenSearch.
+    """Validate a vector against the configured OpenSearch dimension. This
+    produces a clear service error before an invalid vector reaches OpenSearch.
 
-    Input: vector has 512 values and vector_dimension=512
-    Output: No value is returned; processing continues.
+    Input: vector=[512 float values], vector_dimension=512
 
-    Input: vector has 1,024 values and vector_dimension=512
-    Output: PermanentDataError because OpenSearch would reject the query.
+    Raises:
+        PermanentDataError: If the vector dimension does not match the index mapping.
     """
 
     if len(vector) != vector_dimension:

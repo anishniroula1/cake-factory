@@ -9,21 +9,23 @@ from similarity_completed.opensearch.utill.vector import decode_vector, validate
 
 
 class SentenceCatalogOpenSearchStore:
-    def __init__(self, config: Config, client) -> None:
-        """Keep OpenSearch operations for an Asylee or Refugee catalog."""
+    """Read vectors, search semantic matches, and update sentence catalog classifications."""
 
+    def __init__(self, config: Config, client) -> None:
         self.config = config
         self.client = client
 
     def load_records_by_sentence_keys(self, catalog_alias: str, sentence_keys: list[str]) -> dict[str, CatalogRecord]:
-        """Load vectors and saved flags for requested sentence keys.
+        """Load vectors and classifications for unique sentence keys. Binary doc
+        values avoid loading vectors from _source, and duplicate keys are read once.
 
-        Input: catalog_alias=sentence_semantic_catalog_asylee and
-        sentence_keys=[KEY-A, KEY-B, KEY-A]
-        Output: KEY-A and KEY-B mapped to vectors and saved classifications.
+        Input: catalog_alias="sentence_semantic_catalog_asylee",
+        sentence_keys=["abc123", "def456", "abc123"]
+        Output: {"abc123": {"sentence_key": "abc123", "vector": [...],
+        "classification": None}, "def456": {...}}
 
-        The sentence key is the document ID. Duplicate keys are searched once,
-        and a document without a vector is not returned.
+        Duplicate keys are loaded once. Documents without vector doc values are
+        omitted from the returned mapping.
         """
 
         unique_keys = list(dict.fromkeys(sentence_keys))
@@ -63,12 +65,15 @@ class SentenceCatalogOpenSearchStore:
     def search_semantic_matches_by_vector(
         self, catalog_alias: str, source_key: str, vector: list[float]
     ) -> dict[str, float]:
-        """Find every sentence key meeting the similarity threshold.
+        """Find sentence keys whose vectors satisfy the similarity threshold.
+        Radial search and composite aggregation return every qualifying key.
 
-        Input: source_key=KEY-A and vector=[512 Titan values]
-        Output: {KEY-A: 0.0, KEY-B: 0.08}
+        Input: catalog_alias="sentence_semantic_catalog_refugee",
+        source_key="abc123", vector=[512 Titan float values]
+        Output: {"abc123": 0.0, "def456": 0.08}
 
-        Distance 0.0 is exact. Distance 0.08 means 92% similarity.
+        The source key is always included with distance 0.0. Other keys are
+        returned only when they satisfy the configured similarity threshold.
         """
 
         validate_vector(vector, self.config.vector_dimension)
@@ -83,10 +88,12 @@ class SentenceCatalogOpenSearchStore:
     def update_classification_by_sentence_key(
         self, catalog_alias: str, sentence_key: str, classification: Classification
     ) -> None:
-        """Save reusable classification flags on one catalog document.
+        """Persist reusable classification flags on a catalog document. This
+        prevents repeated tracer searches for the same sentence key.
 
-        Input: sentence_key=KEY-A and classification is a tracer.
-        Output: KEY-A contains the flags and a new updatedAt value.
+        Input: catalog_alias="sentence_semantic_catalog_asylee",
+        sentence_key="abc123", classification={"is_non_matcher": True,
+        "is_tracer": False, "is_form_language": False}
         """
 
         self.client.update(
@@ -105,7 +112,16 @@ class SentenceCatalogOpenSearchStore:
     def _search_semantic_match_batch(
         self, catalog_alias: str, vector: list[float], after_key: dict | None
     ) -> tuple[dict[str, float], dict | None]:
-        """Read one page of unique matching keys and its next-page token."""
+        """Retrieve one composite-aggregation page of semantic matches. The
+        returned token is passed to the next request until no after_key remains.
+
+        Input: catalog_alias="sentence_semantic_catalog_asylee",
+        vector=[512 Titan float values], after_key={"sentenceKey": "def456"}
+        Output: ({"ghi789": 0.06}, {"sentenceKey": "ghi789"})
+
+        Pass after_key=None for the first page. The returned token is None on
+        the final page.
+        """
 
         composite = {
             "size": self.config.opensearch_terms_batch_size,

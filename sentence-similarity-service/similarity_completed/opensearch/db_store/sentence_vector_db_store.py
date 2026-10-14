@@ -9,17 +9,17 @@ from ta_db_connection.atatables import SentencesVector, TextSimilarityInput
 
 
 class SentenceVectorDBStore:
-    def __init__(self, config: Config, session_factory: Callable[[], Session]) -> None:
-        """Keep database operations for the sentences_vector table."""
+    """Provide database operations for sentence-vector records and classifications."""
 
+    def __init__(self, config: Config, session_factory: Callable[[], Session]) -> None:
         self.config = config
         self.session_factory = session_factory
 
     def count_sentences_by_tsp_id(self, tsp_id: TspId) -> int:
-        """Count sentence rows belonging to one document.
+        """Count all sentence rows that belong to one document.
 
-        Input: tsp_id=100
-        Output: 30
+        Input: tsp_id=8205
+        Output: 30, which means the document contains 30 sentence rows.
         """
 
         with self.session_factory() as session:
@@ -27,10 +27,15 @@ class SentenceVectorDBStore:
             return int(session.scalar(statement) or 0)
 
     def load_sentence_batch_by_tsp_id(self, tsp_id: TspId, after_global_id: int) -> list[SentencesVector]:
-        """Load the next sentence batch and its shared document values.
+        """Load the next ordered page of sentences for a document. The global_id
+        cursor limits memory use and keeps every page in deterministic order.
 
-        Input: tsp_id=100 and after_global_id=500
-        Output: up to 30 sentences with global_id greater than 500.
+        Input: tsp_id=8205, after_global_id=39234
+        Output: ordered SentencesVector rows beginning after global ID 39234,
+        such as a page containing global IDs 39235 through 39264.
+
+        Pass after_global_id=0 for the first page. The related
+        TextSimilarityInput record is loaded with each sentence row.
         """
 
         with self.session_factory() as session:
@@ -51,10 +56,14 @@ class SentenceVectorDBStore:
             return list(session.scalars(statement))
 
     def update_classification_by_global_ids(self, global_ids: list[int], classification: Classification) -> None:
-        """Save one tracer decision to the matching sentence rows.
+        """Persist one classification on the specified sentence rows. Rows are
+        locked in global_id order and updated in batches to reduce deadlock risk.
 
-        Input: global_ids=[100, 200] and one tracer classification.
-        Output: both sentences_vector rows contain the same decision.
+        Input: global_ids=[39205, 39206], classification={"is_non_matcher": True,
+        "is_tracer": False, "is_form_language": False}
+
+        Both sentence rows receive the same classification flags and an updated
+        last_modified timestamp.
         """
 
         if not global_ids:

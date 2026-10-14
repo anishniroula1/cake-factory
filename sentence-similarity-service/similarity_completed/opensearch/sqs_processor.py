@@ -4,20 +4,25 @@ from similarity_completed.opensearch.errors import OperationFailedError, Permane
 
 
 class SqsProcessor:
-    def __init__(self, dependencies: Dependencies) -> None:
-        """Keep the dependencies used to process one SQS message."""
+    """Receive document messages and coordinate their sentence-similarity processing."""
 
+    def __init__(self, dependencies: Dependencies) -> None:
         self.dependencies = dependencies
 
     def run(self) -> None:
-        """Read and process one message at a time."""
+        """Continuously receive and process one SQS document message at a time."""
 
         while True:
             for message in self.dependencies.aws_sqs.listen_sqs_message():
                 self._process_message(message)
 
     def _process_message(self, message: SqsMessage) -> None:
-        """Process and delete one message only after every step succeeds."""
+        """Process a document message and delete it after successful completion.
+        Failures are logged without deleting the message so SQS can redeliver it
+        and eventually route it to the DLQ.
+
+        Input: message={"tsp_id": 8205, "ReceiptHandle": "receipt-value"}
+        """
 
         try:
             tsp_id = self._read_tsp_id(message)
@@ -42,14 +47,24 @@ class SqsProcessor:
         self.dependencies.logger.info("Sentence Similarity completed and deleted the source SQS message.")
 
     def _leave_message_for_sqs(self, reason: str) -> None:
-        """Log the one standard message used for normal SQS retry handling."""
+        """Log the reason a message remains available for redelivery.
+
+        Input: reason="Catalog vector data is unavailable."
+        """
 
         self.dependencies.logger.error(
             f"{reason} The source message was not deleted; SQS will use its configured retry and DLQ flow."
         )
 
     def _read_tsp_id(self, message: SqsMessage) -> TspId | None:
-        """Return tsp_id exactly as supplied, or None when it is missing."""
+        """Extract the document identifier from an SQS message.
+
+        Input: message={"tsp_id": 8205}
+        Output: 8205
+
+        The original integer or string value is preserved. A missing or empty
+        tsp_id returns None.
+        """
 
         tsp_id = message.get("tsp_id")
         if tsp_id is None or tsp_id == "":

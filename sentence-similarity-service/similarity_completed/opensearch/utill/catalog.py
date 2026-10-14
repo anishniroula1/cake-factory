@@ -3,16 +3,15 @@ from similarity_completed.opensearch.errors import PermanentDataError
 
 
 def select_catalog_alias(config: Config, analysis_group: str) -> str:
-    """Select the catalog that belongs to one analysis group.
+    """Select the sentence catalog alias for an analysis group.
 
-    Input: analysis_group=Asylee
-    Output: sentence_semantic_catalog_asylee
+    Input: analysis_group="Asylee"
+    Output: "sentence_semantic_catalog_asylee"
 
-    Input: analysis_group=Refugee
-    Output: sentence_semantic_catalog_refugee
+    Asylee and Refugee sentences use separate trained IVF-SQ16 catalogs.
 
-    Letter case and outside spaces do not change the result. Any other group
-    is rejected because its vectors must not be searched in the wrong catalog.
+    Raises:
+        PermanentDataError: If the analysis group is unsupported.
     """
 
     # Normalize values such as ASYLEE, asylee, and Asylee to the same group.

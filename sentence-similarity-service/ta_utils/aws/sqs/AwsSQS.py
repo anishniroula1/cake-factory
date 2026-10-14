@@ -9,6 +9,8 @@ from similarity_completed.opensearch.contracts import NextQueueMessage, RawSqsMe
 
 
 class AwsSQS:
+    """Provide the SQS receive, send, and delete operations used by the service."""
+
     def __init__(
         self,
         queue_url: str | None,
@@ -19,8 +21,6 @@ class AwsSQS:
         logger=None,
         visibility_timeout: int = 7200,
     ) -> None:
-        """Create the SQS wrapper shared by real-time and backfill pods."""
-
         self._logger = logger
         self._sqs = boto3.client("sqs", region_name=aws_region, endpoint_url=aws_endpoint_url)
         self._queue_url = queue_url
@@ -29,7 +29,16 @@ class AwsSQS:
         self._visibility_timeout = visibility_timeout
 
     def receive_messages(self) -> list[RawSqsMessage]:
-        """Receive one message and return an empty list after a temporary error."""
+        """Receive raw messages from the configured queue. boto3 delivery
+        metadata remains attached so completed messages can be deleted by their
+        receipt handles.
+
+        Output: raw boto3 messages containing MessageId, Body, ReceiptHandle,
+        and delivery attributes.
+
+        An empty list is returned when no message is available or the receive
+        request fails.
+        """
 
         try:
             response = self._sqs.receive_message(
@@ -46,7 +55,14 @@ class AwsSQS:
         return response.get("Messages", [])
 
     def sqs_message_to_json(self, message: RawSqsMessage) -> SqsMessage:
-        """Decode one SQS body and retain the values needed for deletion."""
+        """Decode an SQS body and attach delivery metadata.
+
+        Input: message.Body="{\"tsp_id\": 8205}"
+        Output: {"tsp_id": 8205, "MessageId": "abc",
+        "ReceiptHandle": "receipt", "message_receive_count": 1}
+
+        An invalid body returns an empty mapping and writes an error log.
+        """
 
         if not message:
             return {}
@@ -68,7 +84,11 @@ class AwsSQS:
             return {}
 
     def listen_sqs_message(self) -> list[SqsMessage]:
-        """Return only SQS messages containing valid JSON objects."""
+        """Receive raw SQS records and retain valid JSON object messages.
+
+        Output: decoded messages ready for processing, such as
+        [{"tsp_id": 8205, "ReceiptHandle": "receipt"}].
+        """
 
         messages = []
         for raw_message in self.receive_messages():
@@ -78,7 +98,11 @@ class AwsSQS:
         return messages
 
     def delete_messages(self, message: SqsMessage) -> bool:
-        """Delete one source message after all processing succeeds."""
+        """Delete a processed source message from the configured queue.
+
+        Input: message={"ReceiptHandle": "receipt-value"}
+        Output: True when SQS accepts the delete request; otherwise False.
+        """
 
         try:
             self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=message["ReceiptHandle"])
@@ -95,7 +119,15 @@ class AwsSQS:
         retries: int = 0,
         is_fifo: bool = True,
     ) -> bool:
-        """Send one next-step message and retry when requested."""
+        """Send a message to a downstream queue with optional retries. FIFO
+        destinations receive generated group and deduplication identifiers.
+
+        Input: send_queue_url="https://sqs.../next.fifo",
+        message_body={"tsp_id": "8205"}, wait_time=5, retries=2, is_fifo=True
+        Output: True when SQS returns HTTP 200; otherwise False after all attempts.
+
+        retries=2 permits three total send attempts.
+        """
 
         body = message_body if isinstance(message_body, str) else json.dumps(message_body)
         for attempt in range(retries + 1):

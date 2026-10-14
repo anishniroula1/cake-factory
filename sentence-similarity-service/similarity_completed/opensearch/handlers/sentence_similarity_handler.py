@@ -23,6 +23,8 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class SentenceSimilarityHandler:
+    """Coordinate sentence classification, similarity search, and match storage for one document."""
+
     def __init__(
         self,
         config: Config,
@@ -31,8 +33,6 @@ class SentenceSimilarityHandler:
         aws_sqs: AwsSQS,
         custom_logger: CustomLogger,
     ) -> None:
-        """Keep everything required to process one document message."""
-
         self.config = config
         self.opensearch_client = opensearch_client
         self.aws_sqs = aws_sqs
@@ -52,7 +52,17 @@ class SentenceSimilarityHandler:
         )
 
     def process(self, tsp_id: TspId) -> ProcessResult | None:
-        """Classify and match every sentence belonging to one document."""
+        """Process every source sentence associated with one document. The flow
+        waits for occurrences, loads catalog vectors, processes sentences in
+        parallel, and publishes the completed document to the next queue.
+
+        Input: tsp_id=8205
+        Output: {"tsp_id": 8205, "source_count": 30, "processed_count": 30,
+        "non_matcher_count": 2, "tracer_count": 1, "form_language_count": 1,
+        "matched_sentence_count": 20, "saved_relationship_count": 125}
+
+        The method returns None when occurrence or catalog data is not ready.
+        """
 
         self.logger.info("Sentence Similarity processing started.")
         if not self._wait_for_searchable_occurrences(tsp_id):
@@ -164,7 +174,18 @@ class SentenceSimilarityHandler:
     def _process_sentence(
         self, source: SentencesVector, catalog_alias: str, source_record: CatalogRecord
     ) -> SentenceResult | None:
-        """Classify one source, find eligible occurrences, and save matches."""
+        """Classify one source sentence and persist its eligible relationships.
+        Ineligible classifications stop immediately; eligible sentences continue
+        through catalog search, target filtering, and Titan match storage.
+
+        Input: source.global_id=39205,
+        catalog_alias="sentence_semantic_catalog_asylee", and a source_record
+        containing a 512-value vector.
+        Output: {"is_non_matcher": False, "is_tracer": False,
+        "is_form_language": False, "saved_relationships": 12}
+
+        The method returns None when a required target catalog record is missing.
+        """
 
         classification = self.tracer_filtering_service.classify_and_update_source(source, catalog_alias, source_record)
 
@@ -207,7 +228,14 @@ class SentenceSimilarityHandler:
         }
 
     def _wait_for_searchable_occurrences(self, tsp_id: TspId) -> bool:
-        """Return whether occurrence rows are searchable after one optional wait."""
+        """Wait once for Doc2Vec occurrence records to become searchable.
+        OpenSearch refreshes asynchronously, so a message can arrive before its
+        occurrence records become visible.
+
+        Input: tsp_id=8205
+        Output: True when at least one occurrence is searchable, or False when
+        both readiness checks return zero records.
+        """
 
         self.logger.info("Checking whether sentence occurrence records are searchable.")
         if self._has_searchable_occurrences(tsp_id):
@@ -235,7 +263,11 @@ class SentenceSimilarityHandler:
         return False
 
     def _has_searchable_occurrences(self, tsp_id: TspId) -> bool:
-        """Check occurrence readiness and retry only OpenSearch request errors."""
+        """Check occurrence-index readiness with transient-error retries.
+
+        Input: tsp_id=8205
+        Output: True when OpenSearch contains at least one occurrence; otherwise False.
+        """
 
         return retry_operation(
             "Check sentence occurrence readiness",
@@ -246,7 +278,17 @@ class SentenceSimilarityHandler:
         )
 
     def _send_to_next_queue(self, tsp_id: TspId) -> None:
-        """Send the completed document to the configured next service."""
+        """Publish the completed document to the downstream queue. The outgoing
+        message identifies P2 as the source and Sentence Similarity as the sender.
+
+        Input: tsp_id=8205
+
+        The queue receives {"source": "P2", "tsp_id": "8205",
+        "sent_by": "sentence_similarity"}.
+
+        Raises:
+            QueueSendError: If SQS does not accept the message.
+        """
 
         sent = self.aws_sqs.send_sqs_message(
             send_queue_url=self.config.sent_sqs_endpoint,

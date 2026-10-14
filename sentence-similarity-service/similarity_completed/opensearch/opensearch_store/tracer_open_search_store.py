@@ -10,18 +10,23 @@ TRACER_TOP_K = 100
 
 
 class TracerOpenSearchStore:
-    def __init__(self, config: Config, client) -> None:
-        """Keep OpenSearch operations for the tracer/form-language catalog."""
+    """Classify sentence vectors against tracer and form-language reference records."""
 
+    def __init__(self, config: Config, client) -> None:
         self.config = config
         self.client = client
 
     def classify_sentence_by_vector(self, vector: list[float], analysis_group: str) -> Classification:
-        """Classify one sentence using matching tracer references.
+        """Derive classification flags from qualifying tracer-catalog hits. The
+        100 closest references are checked, and every qualifying type contributes
+        to the result.
 
-        Input: analysis_group=Asylee and vector=[512 Titan values]
-        Output: flags combined from every top-K result meeting the configured
-        70% similarity threshold. Different hits can make all flags true.
+        Input: vector=[512 Titan float values], analysis_group="Asylee"
+        Output: {"is_non_matcher": True, "is_tracer": False,
+        "is_form_language": True}
+
+        All three flags are False when no tracer-catalog hit reaches the
+        configured classification threshold.
         """
 
         validate_vector(vector, self.config.vector_dimension)

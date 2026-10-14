@@ -20,7 +20,23 @@ def retry_operation[Result](
     custom_logger: CustomLogger,
     max_attempts: int = 3,
 ) -> Result:
-    """Retry one complete operation up to the requested attempt limit."""
+    """Execute an operation with bounded retries for transient failures.
+    Non-retryable data errors stop immediately; supported transient failures
+    retry until the operation succeeds or reaches the configured maximum.
+
+    Input: label="Save Titan match batch 1", operation=save_match_batch,
+    wait_seconds=5, max_attempts=3
+    Output: the operation result without modification. For example, an operation
+    returning 500 makes this function return 500.
+
+    max_attempts=3 means one initial execution and two retries. Positional
+    arguments supplied after operation are forwarded directly to that callable.
+
+    Raises:
+        ValueError: If max_attempts is less than one.
+        PermanentDataError: If the operation reports non-retryable data.
+        OperationFailedError: If all retry attempts fail.
+    """
 
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")

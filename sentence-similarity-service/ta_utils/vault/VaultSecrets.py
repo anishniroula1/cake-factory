@@ -5,19 +5,34 @@ import yaml
 
 
 class VaultSecrets:
-    def __init__(self, secret_file: str | None = None) -> None:
-        """Read the Vault YAML file mounted for this service."""
+    """Read service secrets from the Vault YAML file mounted in the runtime."""
 
+    def __init__(self, secret_file: str | None = None) -> None:
         self.secret_file = secret_file or os.getenv("VAULT_YAML_PATH", "").strip()
         self.secrets = self._read_secrets()
 
     def get(self, name: str, default=None):
-        """Return one Vault value or the supplied default value."""
+        """Retrieve a value from the loaded Vault secret mapping.
+
+        Input: name="pgHost", default=None
+        Output: "database.internal" when pgHost exists, or None when it does not.
+        """
 
         return self.secrets.get(name, default)
 
     def _read_secrets(self) -> dict:
-        """Load the mounted YAML file into a simple dictionary."""
+        """Read and validate the configured YAML secret file. The file must
+        contain a mapping with keys such as pgUser, pgPassword, and pgHost.
+
+        Input: a YAML file containing pgHost: database.internal
+        Output: {"pgHost": "database.internal"}
+
+        No configured file or an empty file returns an empty mapping.
+
+        Raises:
+            FileNotFoundError: If the configured file does not exist.
+            TypeError: If the YAML root is not a mapping.
+        """
 
         if not self.secret_file:
             return {}

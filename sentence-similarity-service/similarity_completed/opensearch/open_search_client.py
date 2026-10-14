@@ -6,13 +6,21 @@ from similarity_completed.opensearch.config import Config
 
 
 class OpenSearchClient:
-    def __init__(self, config: Config) -> None:
-        """Save the AWS and OpenSearch connection settings."""
+    """Create an AWS-signed OpenSearch client for the sentence-similarity service."""
 
+    def __init__(self, config: Config) -> None:
         self.config = config
 
     def create_client(self) -> OpenSearch:
-        """Create the AWS-signed client used by all sentence workers."""
+        """Create an AWS-signed OpenSearch client with connection pooling. The
+        shared client supports concurrent workers and timeout retries.
+
+        Input: Config with opensearch_host="search-sentences.us-east-1.es.amazonaws.com"
+        Output: a thread-safe, AWS-signed OpenSearch client with connection pooling.
+
+        Raises:
+            NoCredentialsError: If AWS credentials cannot be resolved.
+        """
 
         session = self._session()
         credentials = session.get_credentials()
@@ -34,7 +42,12 @@ class OpenSearchClient:
         )
 
     def _session(self) -> boto3.Session:
-        """Use pod credentials or assume the configured OpenSearch role."""
+        """Resolve the AWS session used to sign OpenSearch requests. Pod
+        credentials are used unless an IAM role ARN is configured.
+
+        Input: aws_region="us-east-1" and an optional IAM role ARN.
+        Output: a boto3 Session using pod credentials or assumed-role credentials.
+        """
 
         base_session = boto3.Session(region_name=self.config.aws_region)
         if not self.config.opensearch_iam_access_role:

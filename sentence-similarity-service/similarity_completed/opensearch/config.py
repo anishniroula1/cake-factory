@@ -44,7 +44,18 @@ SQS_VISIBILITY_SECONDS = 7200  # Two-hour message visibility timeout.
 
 
 def _aws_hostname(value: str) -> str:
-    """Check the OpenSearch address and return its host name."""
+    """Normalize an Amazon OpenSearch endpoint to the host expected by the client.
+
+    Input: value="https://search-sentences.us-east-1.es.amazonaws.com"
+    Output: "search-sentences.us-east-1.es.amazonaws.com"
+
+    The OpenSearch client requires a host name without the HTTPS scheme. An
+    empty input returns an empty string so normal configuration validation can
+    report the missing host.
+
+    Raises:
+        ValueError: If the endpoint is not a valid HTTPS host.
+    """
 
     if not value:
         return ""
@@ -145,7 +156,17 @@ class Config:
         return config
 
     def validate(self) -> None:
-        """Validate values loaded from Vault or the environment."""
+        """Validate settings required by PostgreSQL, OpenSearch, and SQS.
+
+        Input: the current Config instance, such as pg_db_port=5432 and
+        vector_dimension=512.
+
+        Validation runs during configuration creation so invalid deployment
+        values fail before the SQS processing loop starts.
+
+        Raises:
+            ValueError: If a required setting is missing or invalid.
+        """
 
         if not self.pg_db_user:
             raise ValueError("pgUser is required in Vault")

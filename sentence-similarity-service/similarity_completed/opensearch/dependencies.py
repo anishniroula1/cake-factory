@@ -9,11 +9,11 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class Dependencies:
+    """Build and own the shared resources required by the SQS processor."""
+
     def __init__(
         self, custom_logger: CustomLogger | None = None, database_connection: DatabaseConnection | None = None
     ) -> None:
-        """Create everything used while processing an SQS message."""
-
         self.logger = custom_logger or CustomLogger("sentence_similarity")
         self.config = Config.from_environment()
         self.database = database_connection or self._create_database_connection()

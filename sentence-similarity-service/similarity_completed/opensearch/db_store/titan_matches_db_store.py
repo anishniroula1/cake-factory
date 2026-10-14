@@ -25,18 +25,24 @@ SAVE_MATCHES = text(
 
 
 class TitanMatchesDBStore:
-    def __init__(self, config: Config, session_factory: Callable[[], Session], custom_logger: CustomLogger) -> None:
-        """Keep database operations for the titan_matches table."""
+    """Persist bidirectional sentence relationships in Titan match buckets."""
 
+    def __init__(self, config: Config, session_factory: Callable[[], Session], custom_logger: CustomLogger) -> None:
         self.config = config
         self.session_factory = session_factory
         self.logger = custom_logger
 
     def save_bidirectional_matches(self, source: SentencesVector, matches: dict[str, MatchTarget]) -> int:
-        """Save compact bidirectional matches through the bucket function.
+        """Persist bidirectional relationships through the PostgreSQL bucket
+        function. Large results use bounded writes, and each call stores both
+        relationship directions.
 
-        Input: source global_id=100 and matches={200: {distance: 0.08}}.
-        Output: number of relationships processed by PostgreSQL.
+        Input: source.global_id=39205, matches={"50001": {"tsp_id": 9001,
+        "application_id": 200, "distance": 0.08}}
+        Output: 1, the number of target relationships processed.
+
+        The output counts the supplied targets. PostgreSQL also writes the
+        reverse 50001-to-39205 relationship without increasing this count.
         """
 
         # No database row is needed when no relationship was found.
@@ -61,7 +67,12 @@ class TitanMatchesDBStore:
         return saved
 
     def _save_match_batch(self, source: SentencesVector, match_batch: dict[str, MatchTarget]) -> int:
-        """Write one match batch so only this batch is repeated after failure."""
+        """Persist one relationship batch in a dedicated transaction. This is
+        the retry boundary for transient PostgreSQL errors such as deadlocks.
+
+        Input: source.global_id=39205 and a match_batch containing 500 targets.
+        Output: 500, the count reported by the PostgreSQL function.
+        """
 
         with self.session_factory() as session:
             processed = session.execute(

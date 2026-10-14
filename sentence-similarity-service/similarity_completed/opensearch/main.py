@@ -9,7 +9,16 @@ def run_opensearch_flow(
     database_connection: DatabaseConnection | None = None,
     dependencies: Dependencies | None = None,
 ) -> None:
-    """Build one dependency container and start the SQS processor."""
+    """Build service dependencies and start the Sentence Similarity processing loop.
+
+    Input: optional custom_logger, database_connection, or prebuilt dependencies.
+
+    When no objects are supplied, the function builds production dependencies
+    from Vault and environment configuration. Tests can pass a prebuilt
+    Dependencies object to run the same entry point with controlled resources.
+
+    Resources are closed when the processing loop exits.
+    """
 
     service_dependencies = dependencies or Dependencies(custom_logger, database_connection)
     processor = SqsProcessor(service_dependencies)

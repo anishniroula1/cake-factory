@@ -3,16 +3,15 @@ from similarity_completed.opensearch.utill.constants import CLASSIFICATION_FIELD
 
 
 def saved_classification(source: dict) -> Classification | None:
-    """Read the three reusable flags from a sentence catalog document.
+    """Extract a complete classification from a catalog document. All three
+    flags must exist before the classification can be reused.
 
-    Input:
-        {isNonMatcher: True, isTracer: True, isFormLanguage: False}
+    Input: source={"isNonMatcher": True, "isTracer": False,
+    "isFormLanguage": False}
+    Output: {"is_non_matcher": True, "is_tracer": False,
+    "is_form_language": False}
 
-    Output:
-        The same flags using Python names.
-
-    Output is None when any flag is missing. That tells Sentence Similarity to
-    run the tracer search and complete the classification first.
+    The method returns None when any required field is missing.
     """
 
     # All three fields must exist before this catalog decision can be reused.
