@@ -9,6 +9,8 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class CaseSimilarityHandler:
+    """Coordinate summary rebuilding, TAH publishing, and downstream SQS delivery."""
+
     def __init__(
         self,
         config: Config,
@@ -17,8 +19,6 @@ class CaseSimilarityHandler:
         aws_sqs: AwsSQS,
         custom_logger: CustomLogger,
     ) -> None:
-        """Connect the database, Kafka, and SQS steps used for one tsp_id."""
-
         self.config = config
         self.case_similarity_db_store = case_similarity_db_store
         self.kafka_processor = kafka_processor
@@ -26,15 +26,17 @@ class CaseSimilarityHandler:
         self.logger = custom_logger
 
     def process(self, tsp_id: TspId) -> ProcessResult:
-        """Process the case connected to one tsp_id.
+        """Process the application connected to one tsp_id. The source summary
+        is rebuilt, reverse relationships are mirrored, changed TAH values are
+        published, and the document is sent to the next queue.
 
-        Input: tsp_id=100 from the SQS message.
-        Output: counts showing how many application summaries, similar cases,
-        TAH cases, and Kafka events were handled.
+        Input: tsp_id=100
+        Output: {"tsp_id": 100, "source_application_id": 20,
+        "rebuilt_application_count": 3, "similar_case_count": 2,
+        "tah_case_count": 1, "kafka_event_count": 1}
 
-        The database function rebuilds the source application. On connected
-        applications, it changes only the relationship back to the source.
-        Kafka receives only TAH values that are new or changed.
+        Connected applications keep their unrelated relationships. Kafka receives
+        only TAH values that are new or different from the last confirmed value.
         """
 
         # First find the application and analysis group that own this document.
@@ -86,8 +88,13 @@ class CaseSimilarityHandler:
     def _send_next_message(self, tsp_id: TspId) -> None:
         """Send the processed tsp_id to the configured next SQS queue.
 
-        Input: tsp_id=100.
-        Message: {"source": "P2", "tsp_id": "100", "sent_by": "case-similarity"}.
+        Input: tsp_id=100
+
+        The queue receives {"source": "P2", "tsp_id": "100",
+        "sent_by": "case-similarity"}.
+
+        Raises:
+            QueueSendError: If SQS does not accept the message.
         """
 
         sent = self.aws_sqs.send_sqs_message(

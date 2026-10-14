@@ -19,7 +19,18 @@ def retry_operation[Result](
     custom_logger: CustomLogger,
     max_attempts: int = 3,
 ) -> Result:
-    """Retry one operation without repeating earlier completed work."""
+    """Retry one operation without repeating earlier completed work. Supported
+    transient failures retry until the operation succeeds or reaches the limit.
+
+    Input: label="Refresh Titan case summaries", operation=refresh_case_summaries,
+    wait_seconds=5, max_attempts=3
+    Output: the operation result without modification.
+
+    max_attempts=3 means one initial execution and two retries.
+
+    Raises:
+        OperationFailedError: If all retry attempts fail.
+    """
 
     for attempt in range(1, max_attempts + 1):
         try:

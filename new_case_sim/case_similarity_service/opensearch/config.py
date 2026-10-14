@@ -28,7 +28,14 @@ DEFAULT_APPLICATION_URL = "https://ui.rfs-ata.uscis.dhs.gov/ui/main/"
 
 
 def read_boolean(name: str, default: bool) -> bool:
-    """Read an environment toggle written as true or false."""
+    """Read an environment toggle written as true or false.
+
+    Input: name="SEND_TAH_KAFKA_EVENTS", default=False
+    Output: True when the environment value is "true"; otherwise False.
+
+    Raises:
+        ValueError: If the configured value is not true or false.
+    """
 
     value = os.getenv(name, str(default)).strip().lower()
     if value not in {"true", "false"}:
@@ -76,7 +83,7 @@ class Config:
 
     @classmethod
     def from_environment(cls) -> Self:
-        """Build configuration from Vault secrets and deployment values."""
+        """Build the worker configuration from Vault and environment values."""
 
         secrets = VaultSecrets()
         config = cls(
@@ -113,7 +120,7 @@ class Config:
         return config
 
     def validate(self) -> None:
-        """Stop startup when a required deployment value is missing."""
+        """Validate settings required by PostgreSQL, SQS, and optional Kafka publishing."""
 
         required_values = {
             "pgUser": self.pg_db_user,

@@ -12,6 +12,8 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class KafkaProcessor:
+    """Publish changed TAH values and save confirmed Kafka delivery details."""
+
     def __init__(
         self,
         config: Config,
@@ -19,21 +21,21 @@ class KafkaProcessor:
         kafka_event_db_store: KafkaEventDBStore,
         custom_logger: CustomLogger,
     ) -> None:
-        """Publish changed TAH values and record successful Kafka deliveries."""
-
         self.config = config
         self.kafka_producer = kafka_producer
         self.kafka_event_db_store = kafka_event_db_store
         self.logger = custom_logger
 
     def publish_changed_tah_events(self, application_ids: list[int]) -> int:
-        """Publish only TAH values that are new or different from the last delivery.
+        """Publish only TAH values that are new or different from the last
+        confirmed delivery.
 
-        Input: application IDs [10, 20].
-        Output: the number of Kafka messages confirmed by the broker.
+        Input: application_ids=[10, 20]
+        Output: 1 when application 10 changed from false to true and application
+        20 remained false.
 
-        Example: application 10 changed from false to true while application 20
-        stayed false. Only application 10 is published, so this method returns 1.
+        Historical processing returns 0 without connecting to Kafka when TAH
+        publishing is disabled.
         """
 
         # Historical processing can update case summaries without publishing TAH
@@ -73,11 +75,14 @@ class KafkaProcessor:
         return len(events)
 
     def _publish_event(self, event: KafkaEvent) -> None:
-        """Publish one TAH event and save Kafka's delivery information.
+        """Publish one TAH event and save its confirmed broker location.
 
-        Input: KafkaEvent for application 100 with is_tah=true.
-        Kafka value: is_tah, application_url, primary_a_number, and analysis_group.
-        Database result: the confirmed timestamp, partition, and offset are saved.
+        Input: KafkaEvent(receipt_number="A123456789", application_id=100,
+        a_number=900001, analysis_group="Asylee", is_tah=True)
+
+        Kafka receives is_tah, application_url, primary_a_number, and
+        analysis_group. The confirmed timestamp, partition, and offset are then
+        saved in kafka_ta_hit_lookup.
         """
 
         # The receipt number is used as the Kafka key below. The payload contains
@@ -92,8 +97,14 @@ class KafkaProcessor:
         delivery_error: str | None = None
 
         def delivery_callback(error: KafkaError | None, message: Message) -> None:
-            """Capture Kafka's success details or its delivery error."""
+            """Capture Kafka's delivery result for the event being published.
 
+            Input: error=None and a message with partition=2 and offset=500, or
+            a KafkaError when delivery fails.
+            """
+
+            # Update the values created by _publish_event() so the code after
+            # flush() can read Kafka's confirmed delivery or failure.
             nonlocal delivery, delivery_error
             if error is not None:
                 delivery_error = str(error)
@@ -130,8 +141,10 @@ class KafkaProcessor:
     def _delivery_timestamp(message: Message) -> str:
         """Return Kafka's timestamp as UTC text.
 
-        Example: 1760123456000 milliseconds becomes an ISO UTC timestamp. When
-        Kafka does not provide a timestamp, use the current UTC time.
+        Input: message timestamp=1760123456000 milliseconds
+        Output: the equivalent ISO-8601 UTC timestamp.
+
+        The current UTC time is returned when Kafka does not provide a timestamp.
         """
 
         timestamp_milliseconds = message.timestamp()[1]

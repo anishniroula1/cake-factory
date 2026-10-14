@@ -47,22 +47,22 @@ REFRESH_CASE_SUMMARIES = text(
 
 
 class CaseSimilarityDBStore:
-    def __init__(self, config: Config, session_factory: Callable[[], Session], custom_logger: CustomLogger) -> None:
-        """Keep all database work for reading a document and rebuilding case summaries."""
+    """Read document ownership and rebuild application-level case summaries."""
 
+    def __init__(self, config: Config, session_factory: Callable[[], Session], custom_logger: CustomLogger) -> None:
         self.config = config
         self.session_factory = session_factory
         self.logger = custom_logger
 
     def load_document_context(self, tsp_id: TspId) -> DocumentContext:
-        """Load the case information needed to process one document.
+        """Load the application, receipt number, and analysis group for one document.
 
-        Input: tsp_id=100.
+        Input: tsp_id=100
         Output: DocumentContext(tsp_id=100, application_id=20, a_number=900001,
-        analysis_group="Asylee").
+        analysis_group="Asylee")
 
-        A missing row is a permanent data problem because the service cannot
-        determine which application owns the document.
+        A missing row stops processing because the service cannot determine
+        which application owns the document.
         """
 
         with self.session_factory() as session:
@@ -81,18 +81,17 @@ class CaseSimilarityDBStore:
         )
 
     def refresh_case_summaries(self, source_application_id: int, analysis_group: str) -> list[CaseSummary]:
-        """Rebuild the source summary and mirror its connected relationships.
+        """Rebuild the source summary and mirror its relationships on connected
+        applications without rebuilding their unrelated matches.
 
-        Input: source application 100 in Asylee.
-        Output: application 100's rebuilt summary and the connected rows where
-        only application 100 was added, moved, or removed.
+        Input: source_application_id=100, analysis_group="Asylee"
+        Output: CaseSummary rows for application 100 and each connected
+        application whose relationship to 100 changed.
 
-        The configured thresholds decide each list. With thresholds 2 and 3,
-        an application with one matching sentence is only similar_application_ids,
-        two matches also puts it in similar_case_ids, and three matches also puts
-        it in tah_case_ids. An application with no match is returned with empty
-        values but is not stored in titan_similar_cases. The function does not
-        read and rebuild all matches owned by every connected application.
+        With thresholds 2 and 3, one matching sentence adds the target only to
+        similar_application_ids, two also add it to similar_case_ids, and three
+        also add it to tah_case_ids. A source with no matches is returned with
+        empty lists but is not stored in titan_similar_cases.
         """
 
         with self.session_factory() as session:

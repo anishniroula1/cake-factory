@@ -4,19 +4,23 @@ from case_similarity_service.opensearch.errors import CaseSimilarityError
 
 
 class SqsProcessor:
-    def __init__(self, dependencies: Dependencies) -> None:
-        """Keep the dependencies used for one document message."""
+    """Receive document messages and coordinate their Case Similarity processing."""
 
+    def __init__(self, dependencies: Dependencies) -> None:
         self.dependencies = dependencies
 
     def run(self) -> None:
-        """Continue listening while the worker pod is running."""
+        """Continuously receive and process one SQS document message at a time."""
 
         while True:
             self.run_once()
 
     def run_once(self) -> int:
-        """Process one received SQS batch and return its message count."""
+        """Receive and process one SQS response.
+
+        Output: 1 when one document message was received, or 0 when the queue
+        returned no message.
+        """
 
         messages = self.dependencies.aws_sqs.listen_sqs_message()
         for message in messages:
@@ -24,7 +28,11 @@ class SqsProcessor:
         return len(messages)
 
     def _process_message(self, message: SqsMessage) -> None:
-        """Delete one source message only after the entire flow succeeds."""
+        """Process one document and delete its message only after completion.
+        Failures remain available for the configured SQS retry and DLQ policy.
+
+        Input: message={"tsp_id": 100, "ReceiptHandle": "receipt-value"}
+        """
 
         tsp_id = self._read_tsp_id(message)
         if tsp_id is None:
@@ -47,7 +55,13 @@ class SqsProcessor:
             self.dependencies.logger.set_generic_message(None)
 
     def _read_tsp_id(self, message: SqsMessage) -> TspId | None:
-        """Return tsp_id as supplied because upstream may send a number or string."""
+        """Return tsp_id without changing the type supplied by upstream.
+
+        Input: message={"tsp_id": 100}
+        Output: 100
+
+        A missing or empty tsp_id returns None.
+        """
 
         tsp_id = message.get("tsp_id")
         return None if tsp_id is None or tsp_id == "" else tsp_id

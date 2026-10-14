@@ -5,6 +5,8 @@ TspId = int | str
 
 
 class SqsMessage(TypedDict, total=False):
+    """Source SQS message and its delivery metadata."""
+
     tsp_id: TspId
     MessageId: str
     ReceiptHandle: str
@@ -12,6 +14,8 @@ class SqsMessage(TypedDict, total=False):
 
 
 class NextQueueMessage(TypedDict):
+    """Message sent after Case Similarity finishes a document."""
+
     source: str
     tsp_id: TspId
 
@@ -38,19 +42,28 @@ class CaseSummary:
 
     @property
     def similar_case_count(self) -> int:
-        """Return the number of applications that pass the similar-case rule."""
+        """Return the number of applications that pass the similar-case rule.
+
+        Output: 2 when similar_case_ids=[200, 300].
+        """
 
         return len(self.similar_case_ids)
 
     @property
     def tah_case_count(self) -> int:
-        """Return the number of applications that pass the TAH rule."""
+        """Return the number of applications that pass the TAH rule.
+
+        Output: 1 when tah_case_ids=[200].
+        """
 
         return len(self.tah_case_ids)
 
     @property
     def is_tah(self) -> bool:
-        """Return true when at least one target application passes the TAH rule."""
+        """Return whether at least one target application passes the TAH rule.
+
+        Output: True when tah_case_ids=[200], or False when the list is empty.
+        """
 
         return bool(self.tah_case_ids)
 
@@ -76,6 +89,8 @@ class KafkaDelivery:
 
 
 class ProcessResult(TypedDict):
+    """Counts returned after one document completes Case Similarity."""
+
     tsp_id: TspId
     source_application_id: int
     rebuilt_application_count: int

@@ -95,17 +95,20 @@ SAVE_KAFKA_DELIVERY = text(
 
 
 class KafkaEventDBStore:
-    def __init__(self, session_factory: Callable[[], Session]) -> None:
-        """Keep the database reads and writes used by TAH Kafka publishing."""
+    """Load changed TAH values and record successful Kafka deliveries."""
 
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
     def load_changed_tah_events(self, application_ids: list[int], kafka_environment: str) -> list[KafkaEvent]:
-        """Return only applications whose TAH value needs a Kafka event.
+        """Return applications whose current TAH value differs from the last
+        Kafka-confirmed value.
 
-        Input: application_ids=[100, 200], kafka_environment="prod".
-        Output: KafkaEvent objects for new or changed values. An unchanged value
-        is not included.
+        Input: application_ids=[100, 200], kafka_environment="prod"
+        Output: [KafkaEvent(application_id=100, is_tah=True, ...)] when 100
+        changed and 200 stayed the same.
+
+        Applications with unchanged values are omitted from the result.
         """
 
         if not application_ids:
@@ -136,11 +139,13 @@ class KafkaEventDBStore:
             ]
 
     def save_kafka_delivery(self, event: KafkaEvent, delivery: KafkaDelivery, kafka_environment: str) -> None:
-        """Save one Kafka-confirmed TAH value and its broker location.
+        """Save one Kafka-confirmed TAH value and its broker delivery location.
 
-        Input: a TAH event plus Kafka timestamp, partition, and offset.
-        Result: the lookup row is inserted or replaced for this receipt number
-        and environment.
+        Input: event.receipt_number="A123456789", delivery.partition=2,
+        delivery.offset=500, kafka_environment="prod"
+
+        The lookup row is inserted or replaced for this receipt number and
+        environment only after Kafka confirms delivery.
         """
 
         with self.session_factory() as session:

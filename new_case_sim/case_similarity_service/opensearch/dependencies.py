@@ -12,14 +12,14 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class Dependencies:
+    """Build and own the shared resources used by the Case Similarity worker."""
+
     def __init__(
         self,
         custom_logger: CustomLogger | None = None,
         database_connection: DatabaseConnection | None = None,
         config: Config | None = None,
     ) -> None:
-        """Create the objects shared while one SQS message is processed."""
-
         self.logger = custom_logger or CustomLogger("case_similarity")
         self.config = config or Config.from_environment()
         self.database = database_connection or self._create_database_connection()
@@ -44,12 +44,12 @@ class Dependencies:
         )
 
     def close(self) -> None:
-        """Close the PostgreSQL pool when the worker stops."""
+        """Close the database pool when the process stops."""
 
         self.database.engine.dispose()
 
     def _create_database_connection(self) -> DatabaseConnection:
-        """Create the shared database library from Vault-backed values."""
+        """Create the database connection from Vault-backed configuration."""
 
         credential_arguments = (
             {"use_dynamic_credentials": False}
@@ -69,7 +69,12 @@ class Dependencies:
         )
 
     def _kafka_config(self) -> dict:
-        """Build the settings used by the Confluent Kafka producer."""
+        """Build the settings used by the Confluent Kafka producer.
+
+        Input: kafka_security_protocol="SSL"
+        Output: bootstrap server and SSL certificate settings accepted by
+        confluent_kafka.Producer.
+        """
 
         values = {
             "bootstrap.servers": self.config.kafka_bootstrap_servers,
