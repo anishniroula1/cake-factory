@@ -31,6 +31,8 @@ def dependency_config():
         occurrence_alias="sentence_occurrences",
         asylee_catalog_alias="sentence_semantic_catalog_asylee",
         refugee_catalog_alias="sentence_semantic_catalog_refugee",
+        training_alias="sentence_semantic_training",
+        tracer_alias="tracer_form_language_catalog",
         vector_dimension=512,
         doc2vec_queue_url="https://sqs.example.com/doc2vec.fifo",
         sqs_wait_seconds=10,
@@ -41,6 +43,7 @@ def dependency_config():
         ),
         worker_batch_size=30,
         thread_worker_count=100,
+        train_model_worker_count=16,
         titan_embedding_type=2,
     )
 
@@ -52,11 +55,14 @@ def service_config():
         opensearch_bulk_retry_count=15,
         worker_batch_size=30,
         thread_worker_count=2,
+        train_model_worker_count=2,
         retry_seconds=1,
         vector_dimension=2,
         titan_embedding_type=2,
         asylee_catalog_alias="catalog-asylee",
         refugee_catalog_alias="catalog-refugee",
+        training_alias="training",
+        tracer_alias="tracer",
         occurrence_alias="occurrence",
         sentence_similarity_backfill_queue_url=(
             "https://sqs.us-east-1.amazonaws.com/1/next.fifo"

@@ -106,3 +106,27 @@ class Embeddings(Base):
     global_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     embedding_type: Mapped[int] = mapped_column(Integer, primary_key=True)
     embeddings: Mapped[list[float]] = mapped_column(ARRAY(Float))
+
+
+class TracerSentence(Base):
+    """Map one tracer, form-language, or non-matcher reference sentence."""
+
+    __tablename__ = "tracer_sentence"
+    __table_args__: ClassVar[dict[str, object]] = {
+        "extend_existing": True,
+        "schema": "tsp",
+    }
+
+    tracer_sentence_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sentence_content: Mapped[str] = mapped_column(Text, nullable=False)
+    analysis_group: Mapped[str] = mapped_column(String(50), nullable=False)
+    is_non_matcher: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_form_language: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    embedding: Mapped[list[float] | bytes | None] = mapped_column(PickleType)
+    last_modified: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )

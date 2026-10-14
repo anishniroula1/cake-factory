@@ -15,6 +15,7 @@ OPENSEARCH_BATCH_SIZE = 1_000
 OPENSEARCH_BULK_RETRY_COUNT = 15  # Retries after the original bulk request.
 WORKER_BATCH_SIZE = 30
 THREAD_WORKER_COUNT = 100
+TRAIN_MODEL_WORKER_COUNT = 16
 RETRY_SECONDS = 5
 TITAN_EMBEDDING_TYPE = 2
 
@@ -59,6 +60,8 @@ class Config:
     occurrence_alias: str
     asylee_catalog_alias: str
     refugee_catalog_alias: str
+    training_alias: str
+    tracer_alias: str
     opensearch_batch_size: int
     opensearch_bulk_retry_count: int
 
@@ -73,6 +76,7 @@ class Config:
     # Historical processing
     worker_batch_size: int
     thread_worker_count: int
+    train_model_worker_count: int
     retry_seconds: int
     vector_dimension: int
     titan_embedding_type: int
@@ -116,6 +120,14 @@ class Config:
                 "OPENSEARCH_REFUGEE_CATALOG_ALIAS",
                 "sentence_semantic_catalog_refugee",
             ).strip(),
+            training_alias=os.getenv(
+                "OPENSEARCH_TRAINING_ALIAS",
+                "sentence_semantic_training",
+            ).strip(),
+            tracer_alias=os.getenv(
+                "OPENSEARCH_TRACER_FORM_LANGUAGE_ALIAS",
+                "tracer_form_language_catalog",
+            ).strip(),
             opensearch_batch_size=OPENSEARCH_BATCH_SIZE,
             opensearch_bulk_retry_count=OPENSEARCH_BULK_RETRY_COUNT,
             # Read the source and next-step SQS queue values.
@@ -139,6 +151,7 @@ class Config:
             # Use the fixed batch, worker, retry, and Titan settings above.
             worker_batch_size=WORKER_BATCH_SIZE,
             thread_worker_count=THREAD_WORKER_COUNT,
+            train_model_worker_count=TRAIN_MODEL_WORKER_COUNT,
             retry_seconds=RETRY_SECONDS,
             vector_dimension=read_integer("VECTOR_DIMENSION", 512),
             titan_embedding_type=TITAN_EMBEDDING_TYPE,
@@ -157,8 +170,14 @@ class Config:
             raise ValueError("OPENSEARCH_ASYLEE_CATALOG_ALIAS is required")
         if not self.refugee_catalog_alias:
             raise ValueError("OPENSEARCH_REFUGEE_CATALOG_ALIAS is required")
+        if not self.training_alias:
+            raise ValueError("OPENSEARCH_TRAINING_ALIAS is required")
+        if not self.tracer_alias:
+            raise ValueError("OPENSEARCH_TRACER_FORM_LANGUAGE_ALIAS is required")
         if self.thread_worker_count > 100:
             raise ValueError("THREAD_WORKER_COUNT cannot be greater than 100")
+        if self.train_model_worker_count > 100:
+            raise ValueError("TRAIN_MODEL_WORKER_COUNT cannot be greater than 100")
         if self.vector_dimension != 512:
             raise ValueError("VECTOR_DIMENSION must be 512 for Titan embeddings")
         if not 1 <= self.sqs_wait_seconds <= 20:

@@ -2,6 +2,8 @@ from sqlalchemy.orm import sessionmaker
 
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.handlers.historical_handler import HistoricalHandler
+from doc2vec_completed.opensearch.handlers.tracer_handler import TracerHandler
+from doc2vec_completed.opensearch.handlers.train_model_handler import TrainModelHandler
 from doc2vec_completed.opensearch.open_search_client import OpenSearchClient
 from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
 from ta_db_connection.database_connection import DatabaseConnection
@@ -49,6 +51,18 @@ class Dependencies:
             self.aws_sqs,
             self.logger,
         )
+        self.tracer_handler = TracerHandler(
+            self.config,
+            self.session_factory,
+            self.opensearch,
+            self.logger,
+        )
+        self.train_model_handler = TrainModelHandler(
+            self.config,
+            self.session_factory,
+            self.opensearch,
+            self.logger,
+        )
 
     def close(self) -> None:
         """Close the database pool when the process stops."""
@@ -67,6 +81,6 @@ class Dependencies:
             pool_size=self.config.database_pool_size,
             max_overflow=self.config.database_max_overflow,
             dynamic_credentials_file=self.config.dynamic_credential_file or None,
-            application_name="doc2vec_historical",
+            application_name="doc2vec_opensearch",
             logger=self.logger,
         )

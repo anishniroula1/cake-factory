@@ -63,6 +63,7 @@ class OpenSearchFake:
         self.existing_id_calls = []
         self.bulk_calls = []
         self.refresh_calls = []
+        self.refresh_alias_calls = []
 
     def existing_ids(self, alias, document_ids):
         self.existing_id_calls.append((alias, document_ids))
@@ -78,6 +79,9 @@ class OpenSearchFake:
 
     def refresh_indices(self, catalog_alias):
         self.refresh_calls.append(catalog_alias)
+
+    def refresh_alias(self, alias):
+        self.refresh_alias_calls.append(alias)
 
 
 class SqsFake:

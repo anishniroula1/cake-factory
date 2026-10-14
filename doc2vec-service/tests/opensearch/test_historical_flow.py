@@ -247,9 +247,7 @@ def test_refugee_document_uses_only_the_refugee_catalog(
         custom_logger,
     )
 
-    assert {call[0] for call in opensearch.existing_id_calls} == {
-        "catalog-refugee"
-    }
+    assert {call[0] for call in opensearch.existing_id_calls} == {"catalog-refugee"}
     occurrence_calls = [
         call for call in opensearch.bulk_calls if call[0] == "occurrence"
     ]
@@ -303,7 +301,7 @@ def test_unsupported_analysis_group_does_not_delete_the_message(
     assert sqs.sent == []
 
 
-@pytest.mark.parametrize("reason", [None, "TRAIN", "TRACER"])
+@pytest.mark.parametrize("reason", [None, "TRAIN", "UNKNOWN"])
 def test_only_historical_messages_enter_the_handler(
     reason,
     service_config,

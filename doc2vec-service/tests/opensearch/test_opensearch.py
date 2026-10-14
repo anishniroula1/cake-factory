@@ -75,6 +75,9 @@ def test_refresh_makes_catalog_and_occurrences_searchable(
         for message in custom_logger.info_messages
     )
 
+    helper.refresh_alias("training")
+    assert client.refreshed_indices[-1] == "training"
+
 
 def test_bulk_reports_temporary_failed_documents_to_the_caller(
     monkeypatch,

@@ -4,7 +4,7 @@ from doc2vec_completed.opensearch.errors import CriticalProcessingError
 
 
 class SqsProcessor:
-    """Receive historical document messages and coordinate Doc2Vec indexing."""
+    """Route historical, tracer, and model-training messages to Doc2Vec handlers."""
 
     def __init__(self, dependencies: Dependencies) -> None:
         self.dependencies = dependencies
@@ -17,49 +17,68 @@ class SqsProcessor:
                 self._process_message(message)
 
     def _process_message(self, raw_message: SqsMessage) -> None:
-        """Process one historical document and delete its message after success.
-        Unsupported or failed messages remain available for the SQS retry policy.
+        """Route one supported message and delete it only after the handler succeeds.
 
         Input: raw_message={"reason": "HISTORICAL", "tsp_id": 1040,
         "ReceiptHandle": "receipt-value"}
         """
 
-        if raw_message.get("reason") != "HISTORICAL":
+        reason = str(raw_message.get("reason") or "").strip().upper()
+        if reason not in {"HISTORICAL", "TRAIN_MODEL", "TRACER"}:
             self.dependencies.logger.error(
                 "Cannot process the SQS message because its reason is missing "
                 "or not supported."
             )
             return
 
-        tsp_id = self._read_tsp_id(raw_message)
-        if tsp_id is None:
-            self._leave_message_for_sqs(
-                "The SQS message is missing the required tsp_id."
-            )
-            return
+        tsp_id = None
+        tracer_sentence_ids = None
+        if reason == "TRACER":
+            tracer_sentence_ids = self._read_tracer_sentence_ids(raw_message)
+            if tracer_sentence_ids is None:
+                self._leave_message_for_sqs(
+                    "The TRACER message requires tracer_sentence_ids."
+                )
+                return
+            context = f"reason={reason}"
+        else:
+            tsp_id = self._read_tsp_id(raw_message)
+            if tsp_id is None:
+                self._leave_message_for_sqs(
+                    f"The {reason} message is missing the required tsp_id."
+                )
+                return
+            context = f"tsp_id={tsp_id}"
 
-        self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}")
+        self.dependencies.logger.set_generic_message(context)
         try:
             self.dependencies.logger.info("Starting an SQS document message.")
-            result = self.dependencies.historical_handler.process(tsp_id)
+            if reason == "HISTORICAL":
+                result = self.dependencies.historical_handler.process(tsp_id)
+            elif reason == "TRAIN_MODEL":
+                result = self.dependencies.train_model_handler.process(tsp_id)
+            else:
+                result = self.dependencies.tracer_handler.process(tracer_sentence_ids)
             if result is None:
-                self._leave_message_for_sqs("Sentence processing did not complete.")
+                self._leave_message_for_sqs(f"{reason} processing did not complete.")
                 return
+
+            if not self.dependencies.aws_sqs.delete_messages(raw_message):
+                self.dependencies.logger.error(
+                    "Processing completed, but source message deletion failed."
+                )
+                return
+            self.dependencies.logger.info(
+                "Processing completed and deleted the source SQS message."
+            )
         except CriticalProcessingError as error:
             self.dependencies.logger.error(
                 f"Sentence processing stopped because of "
                 f"{type(error).__name__}: {str(error)[:500]}"
             )
             return
-
-        if not self.dependencies.aws_sqs.delete_messages(raw_message):
-            self.dependencies.logger.error(
-                "Processing completed, but source message deletion failed."
-            )
-            return
-        self.dependencies.logger.info(
-            "Processing completed and deleted the source SQS message."
-        )
+        finally:
+            self.dependencies.logger.set_generic_message(None)
 
     def _leave_message_for_sqs(self, reason: str) -> None:
         """Log the reason a message remains available for redelivery.
@@ -85,3 +104,20 @@ class SqsProcessor:
         if tsp_id is None or tsp_id == "":
             return None
         return tsp_id
+
+    @staticmethod
+    def _read_tracer_sentence_ids(message: SqsMessage) -> list[int] | None:
+        """Validate and deduplicate tracer_sentence_ids from a TRACER message.
+
+        Input: message={"tracer_sentence_ids": [10, 20, 10]}
+        Output: [10, 20]
+        """
+
+        values = message.get("tracer_sentence_ids")
+        if not isinstance(values, list) or not values:
+            return None
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) for value in values
+        ):
+            return None
+        return list(dict.fromkeys(values))

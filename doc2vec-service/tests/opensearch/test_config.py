@@ -56,6 +56,9 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
     assert config.vector_dimension == 512
     assert config.asylee_catalog_alias == "sentence_semantic_catalog_asylee"
     assert config.refugee_catalog_alias == "sentence_semantic_catalog_refugee"
+    assert config.training_alias == "sentence_semantic_training"
+    assert config.tracer_alias == "tracer_form_language_catalog"
+    assert config.train_model_worker_count == 16
 
     with pytest.raises(ValueError):
         replace(config, thread_worker_count=101).validate()
@@ -71,6 +74,12 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
         replace(config, asylee_catalog_alias="").validate()
     with pytest.raises(ValueError):
         replace(config, refugee_catalog_alias="").validate()
+    with pytest.raises(ValueError):
+        replace(config, training_alias="").validate()
+    with pytest.raises(ValueError):
+        replace(config, tracer_alias="").validate()
+    with pytest.raises(ValueError):
+        replace(config, train_model_worker_count=101).validate()
 
 
 def test_environment_integer_reader_rejects_bad_values(monkeypatch):

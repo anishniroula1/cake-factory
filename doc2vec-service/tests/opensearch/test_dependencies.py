@@ -21,6 +21,8 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     opensearch_helper = object()
     aws_sqs = object()
     historical_handler = object()
+    tracer_handler = object()
+    train_model_handler = object()
     session_factory = object()
     captured = {}
 
@@ -86,6 +88,22 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
 
     monkeypatch.setattr(dependencies_module, "HistoricalHandler", build_handler)
 
+    def build_tracer_handler(*arguments):
+        captured["tracer_handler"] = arguments
+        return tracer_handler
+
+    monkeypatch.setattr(dependencies_module, "TracerHandler", build_tracer_handler)
+
+    def build_train_model_handler(*arguments):
+        captured["train_model_handler"] = arguments
+        return train_model_handler
+
+    monkeypatch.setattr(
+        dependencies_module,
+        "TrainModelHandler",
+        build_train_model_handler,
+    )
+
     dependencies = Dependencies()
 
     assert dependencies.logger is logger
@@ -94,6 +112,8 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     assert dependencies.opensearch is opensearch_helper
     assert dependencies.aws_sqs is aws_sqs
     assert dependencies.historical_handler is historical_handler
+    assert dependencies.tracer_handler is tracer_handler
+    assert dependencies.train_model_handler is train_model_handler
     assert captured["database"] == {
         "pg_db_user": "database-user",
         "pg_db_password": "database-password",
@@ -103,7 +123,7 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
         "pool_size": 20,
         "max_overflow": 10,
         "dynamic_credentials_file": None,
-        "application_name": "doc2vec_historical",
+        "application_name": "doc2vec_opensearch",
         "logger": logger,
     }
     assert captured["session_factory"] == {
@@ -117,6 +137,18 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
         session_factory,
         opensearch_helper,
         aws_sqs,
+        logger,
+    )
+    assert captured["tracer_handler"] == (
+        config,
+        session_factory,
+        opensearch_helper,
+        logger,
+    )
+    assert captured["train_model_handler"] == (
+        config,
+        session_factory,
+        opensearch_helper,
         logger,
     )
 

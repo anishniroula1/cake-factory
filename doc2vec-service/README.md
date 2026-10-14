@@ -1,20 +1,18 @@
-# Doc2Vec Historical Sentence Ingestion
+# Doc2Vec OpenSearch Ingestion
 
-This is a standalone SQS worker for historical sentence backfill. It reads
-already-split sentences from PostgreSQL and writes them to the sentence
-catalog selected by `analysis_group` and the occurrence alias in AWS
-OpenSearch.
+This standalone SQS worker supports historical sentence backfill, IVF training
+data, and tracer or form-language reference data. Each message is routed by its
+`reason` to a separate handler.
 
 It is not an API or FastAPI application. It processes one SQS message at a
-time. `historical_handler.py` coordinates pages, worker threads, retries, and
-queue handoff. `sentence_batch_processor.py` contains the reusable batch work:
-sentence keys, saved embeddings, catalog writes, and occurrence writes.
+time. `historical_handler.py`, `train_model_handler.py`, and
+`tracer_handler.py` contain the three independent flows.
 
 All OpenSearch flow code lives under `doc2vec_completed/opensearch`. All tests
 for this flow live under `tests/opensearch`.
 
 `dependencies.py` creates the configuration, database connection, OpenSearch
-helper, SQS helper, and historical handler. The SQS processor receives only
+helper, SQS helper, and all three handlers. The SQS processor receives only
 this one dependency object.
 `doc2vec_completed.opensearch.main.run_opensearch_flow(custom_logger=...)` can
 still receive the team's logger, while `ta_utils/logger/CustomLogger.py`
@@ -23,7 +21,7 @@ remains the standalone default.
 `ta_utils/aws/sqs/AwsSQS.py` mirrors the shared SQS library used by the
 application. It creates the AWS client from the pod credentials, receives and
 formats messages, keeps the receipt handle and receive count, deletes completed
-messages, and sends the next FIFO or standard message. The historical code uses only
+messages, and sends the next FIFO or standard message. The worker uses only
 `listen_sqs_message`, `send_sqs_message`, and `delete_messages`; unused batch
 operations are intentionally not included.
 
@@ -50,29 +48,73 @@ awsSqsSendEventQueueEndpoint: state-machine-queue-url
 
 ## Message
 
-Input:
+Supported messages are:
 
 ```json
 {"reason": "HISTORICAL", "tsp_id": 1040}
 ```
 
-The SQS processor requires `reason=HISTORICAL` and a `tsp_id`. A message without
-that reason is logged and is not sent into the historical handler. The worker
-keeps `tsp_id` exactly as received, so both a number and a string are valid. It
-does not accept the alternate name `tspId` in an SQS message.
+```json
+{"reason": "TRAIN_MODEL", "tsp_id": 1040}
+```
 
-The SQS value is used only for the database lookup and next message. The
-OpenSearch occurrence uses the numeric `tsp_id` loaded from
-`text_similarity_input`.
+```json
+{"reason": "TRACER", "tracer_sentence_ids": [10, 20, 30]}
+```
 
-The main code types are defined in `contracts.py`. The processing flow is:
+Historical and training messages keep `tsp_id` exactly as received, so both a
+number and a string are valid. The alternate name `tspId` is not accepted.
+Tracer IDs must be integers. An unsupported or incomplete message is logged and
+is not deleted.
+
+The main code types are defined in `contracts.py`. The three processing flows
+are:
 
 ```text
 SqsMessage -> TspId -> list[SentencesVector] -> HistoricalResult
+SqsMessage -> TspId -> list[SentencesVector] -> TrainModelResult
+SqsMessage -> list[tracer_sentence_ids] -> list[TracerSentence] -> TracerResult
 ```
 
 OpenSearch catalog and occurrence documents also have separate named types, so
 the expected fields are visible before a document is sent for bulk indexing.
+
+## Model-training flow
+
+1. Count the `sentences_vector` rows for the supplied `tsp_id`.
+2. Load 1000 rows at a time in `global_id` order.
+3. Exclude sentences marked `is_non_matcher`, `is_tracer`, or
+   `is_form_language`. These sentences never enter the IVF training index.
+4. Generate SHA-256 sentence keys in memory. The training flow does not update
+   `sentences_vector.sentence_key`.
+5. Remove duplicate sentence keys across the complete document.
+6. Load Titan vectors from `embeddings` where `embedding_type = 2`.
+7. Split unique documents into groups of 30 and use up to 16 workers.
+8. Skip keys that already exist in `sentence_semantic_training`.
+9. Reuse valid saved vectors and let the Bedrock pipeline create only missing
+   vectors.
+10. Refresh the training alias and delete the source SQS message after all
+   batches finish.
+
+The sentence key is the stable OpenSearch document ID. Reprocessing the same
+training message therefore updates or skips the same document instead of
+creating a duplicate.
+
+## Tracer flow
+
+1. Deduplicate the requested `tracer_sentence_ids`.
+2. Load tracer-table rows in batches of 1000.
+3. Build the strict tracer document containing `tracerId`, sentence text,
+   analysis group, `isNonMatcher`, and `isFormLanguage`.
+4. Reuse a valid saved vector when one exists. List, JSON-byte, raw float-byte,
+   and NumPy-like saved values are supported.
+5. Omit the vector when it is missing so the Bedrock pipeline creates it.
+6. Use `tracerId` as the stable OpenSearch document ID, refresh the tracer
+   alias, and delete the source message only after every requested row is
+   indexed.
+
+The flow stops without deleting the SQS message when a requested tracer ID does
+not exist in PostgreSQL.
 
 ## Historical flow
 
@@ -130,6 +172,7 @@ The worker uses:
 - `text_similarity_input`, joined by `tsp_id` to read `application_id`,
   `analysis_group`, `section_name`, and `is_current`
 - `embeddings`, joined by `global_id`
+- `tracer_sentence`, loaded by `tracer_sentence_id`
 
 The historical page query does not load `sentences_vector.embedding_list`.
 That legacy column is not used by this flow and may contain NumPy arrays that
@@ -150,6 +193,8 @@ The worker writes to:
 - `sentence_occurrences`
 - `sentence_semantic_catalog_asylee`
 - `sentence_semantic_catalog_refugee`
+- `sentence_semantic_training`
+- `tracer_form_language_catalog`
 
 Both catalogs use the same trained 512-dimension Faiss IVF-SQ16 model. Their
 default Bedrock pipeline creates a vector when the field is missing. A saved
@@ -179,14 +224,12 @@ make test
 make dev
 ```
 
-`make dev` runs the historical worker in Docker. `make local` runs it without
-Docker. There is no HTTP port, health endpoint, or Swagger page.
+`make dev` runs the worker in Docker. `make local` runs it without Docker.
+There is no HTTP port, health endpoint, or Swagger page.
 
-The main tests start at `main.run_opensearch_flow()` and execute the real SQS
-processor, historical handler, and sentence batch processor. Only database
-sessions, OpenSearch, and SQS transport are replaced at the external boundary.
-The batch processor does not have a duplicate test file; its behavior is
-covered by the historical flow test.
+The tests cover the SQS routing and the complete historical, training, and
+tracer handler behavior. Database sessions, OpenSearch, and SQS transports are
+replaced only at their external boundaries.
 
 ## Portable copy
 
@@ -196,5 +239,5 @@ Copy `generate_project.py` to another machine and run:
 python3 generate_project.py /path/to/parent-folder
 ```
 
-It creates `/path/to/parent-folder/doc2vec-completed` with the complete
-historical-only project and a safe `.env` copied from `.env.example`.
+It creates `/path/to/parent-folder/doc2vec-completed` with all three handlers
+and a safe `.env` copied from `.env.example`.

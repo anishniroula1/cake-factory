@@ -160,6 +160,15 @@ class OpenSearchHelper:
             "available to Sentence Similarity."
         )
 
+    def refresh_alias(self, alias: str) -> None:
+        """Refresh one alias after all of its bulk writes finish.
+
+        Input: alias="sentence_semantic_training"
+        """
+
+        self.client.indices.refresh(index=alias)
+        self.logger.info(f"OpenSearch refresh completed for alias {alias}.")
+
     def _retryable_documents(
         self,
         failures: list,

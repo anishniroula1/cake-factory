@@ -23,6 +23,7 @@ class SqsMessage(TypedDict, total=False):
 
     reason: str
     tsp_id: TspId
+    tracer_sentence_ids: list[int]
     MessageId: str | None
     ReceiptHandle: str | None
     message_receive_count: int
@@ -40,6 +41,24 @@ class HistoricalResult(TypedDict):
 
     reason: Literal["HISTORICAL"]
     tsp_id: TspId
+    source_count: int
+    indexed_count: int
+
+
+class TrainModelResult(TypedDict):
+    """Counts returned after one document's training sentences are indexed."""
+
+    reason: Literal["TRAIN_MODEL"]
+    tsp_id: TspId
+    source_count: int
+    unique_count: int
+    indexed_count: int
+
+
+class TracerResult(TypedDict):
+    """Counts returned after requested tracer references are indexed."""
+
+    reason: Literal["TRACER"]
     source_count: int
     indexed_count: int
 
@@ -73,4 +92,31 @@ class OccurrenceDocument(TypedDict):
     updatedAt: str
 
 
-type OpenSearchDocument = CatalogDocument | OccurrenceDocument
+class TrainingDocument(TypedDict):
+    """Unique sentence document written to the IVF model training index."""
+
+    _id: str
+    sentenceKey: str
+    sentenceContent: str
+    createdAt: str
+    updatedAt: str
+    sentenceContentVector: NotRequired[list[float]]
+
+
+class TracerDocument(TypedDict):
+    """Reference sentence written to the tracer and form-language catalog."""
+
+    _id: int
+    tracerId: int
+    sentenceContent: str
+    analysisGroup: str
+    isNonMatcher: bool
+    isFormLanguage: bool
+    createdAt: str
+    updatedAt: str
+    sentenceContentVector: NotRequired[list[float]]
+
+
+type OpenSearchDocument = (
+    CatalogDocument | OccurrenceDocument | TrainingDocument | TracerDocument
+)
