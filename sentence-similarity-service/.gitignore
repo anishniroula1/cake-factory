@@ -1,5 +1,5 @@
 .env
-vault-secrets.local.yaml
+localVaultSecret.yaml
 .venv/
 .pytest_cache/
 .ruff_cache/

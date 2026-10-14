@@ -21,7 +21,7 @@ services:
       AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT: http://localstack:4566/000000000000/case-similarity-local.fifo
       VAULT_YAML_PATH: /run/secrets/vault-secrets.yaml
     volumes:
-      - ./vault-secrets.local.yaml:/run/secrets/vault-secrets.yaml:ro
+      - ./localVaultSecret.yaml:/run/secrets/vault-secrets.yaml:ro
       - ${HOME}/.aws:/root/.aws:ro
     depends_on:
       localstack:

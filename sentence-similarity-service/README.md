@@ -157,7 +157,7 @@ addresses and credentials supplied in the local configuration.
 Create the local environment file:
 
 ```bash
-cp .env.example .env
+cp example.env .env
 ```
 
 Set `OPENSEARCH_HOST` and `OPENSEARCH_IAM_ACCESS_ROLE` in `.env`. The host can
@@ -168,20 +168,20 @@ ARN can be left empty.
 Create the local Vault file:
 
 ```bash
-cp vault-secrets.local.example.yaml vault-secrets.local.yaml
+cp example.localVaultSecret.yaml localVaultSecret.yaml
 ```
 
 Add the local database values:
 
 ```yaml
-pgUser: your-database-user
-pgPassword: your-database-password
-pgHost: your-database-host
-pgDatabase: your-database-name
+pgUser: database-user
+pgPassword: database-password
+pgHost: database-host
+pgDatabase: database-name
 pgPort: 5432
 ```
 
-The real `.env` and `vault-secrets.local.yaml` files are ignored by Git.
+The real `.env` and `localVaultSecret.yaml` files are ignored by Git.
 
 ## Run locally — recommended
 
@@ -214,7 +214,7 @@ make sos TSP_ID=12345
 
 ## Run in Docker
 
-Create `.env` and `vault-secrets.local.yaml` first, then run:
+Create `.env` and `localVaultSecret.yaml` first, then run:
 
 ```bash
 make run
@@ -288,8 +288,8 @@ The values below are constants in `similarity_completed/opensearch/config.py`:
 
 - **Local SQS connection fails:** run `make localstack` and confirm
   `AWS_LOCAL_ENDPOINT_URL=http://localhost:4566` in `.env`.
-- **Vault file is missing:** create `vault-secrets.local.yaml` and keep
-  `VAULT_YAML_PATH=./vault-secrets.local.yaml`.
+- **Vault file is missing:** create `localVaultSecret.yaml` and keep
+  `VAULT_YAML_PATH=./localVaultSecret.yaml`.
 - **OpenSearch returns 403:** confirm the active AWS credentials and the role
   configured by `OPENSEARCH_IAM_ACCESS_ROLE` can access the domain.
 - **The document is not processed:** confirm Doc2Vec already indexed the
