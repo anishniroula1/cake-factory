@@ -3,7 +3,7 @@ from collections.abc import Callable
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from case_similarity_service.opensearch.contracts import KafkaDelivery, KafkaEvent
+from case_similarity_completed.opensearch.contracts import KafkaDelivery, KafkaEvent
 
 # Build Kafka events only when an application has a new TAH value.
 # Example: the saved value is false and the current value is true, so one event

@@ -1,5 +1,5 @@
-from case_similarity_service.opensearch.contracts import CaseSummary, DocumentContext, KafkaEvent
-from case_similarity_service.opensearch.errors import OperationFailedError
+from case_similarity_completed.opensearch.contracts import CaseSummary, DocumentContext, KafkaEvent
+from case_similarity_completed.opensearch.errors import OperationFailedError
 
 
 class LoggerFake:

@@ -1,7 +1,7 @@
 import pytest
 
-from case_similarity_service.opensearch import constants
-from case_similarity_service.opensearch.config import Config
+from case_similarity_completed.opensearch import constants
+from case_similarity_completed.opensearch.config import Config
 
 
 @pytest.fixture

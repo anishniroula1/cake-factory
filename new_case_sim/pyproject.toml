@@ -25,12 +25,12 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["case_similarity_service*", "ta_db_connection*", "ta_utils*"]
+include = ["case_similarity_completed*", "ta_db_connection*", "ta_utils*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/opensearch"]
 pythonpath = ["."]
-addopts = "--cov=case_similarity_service.opensearch --cov-report=term-missing --cov-fail-under=99"
+addopts = "--cov=case_similarity_completed.opensearch --cov-report=term-missing --cov-fail-under=99"
 
 [tool.ruff]
 line-length = 120

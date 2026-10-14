@@ -4,10 +4,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from case_similarity_service.opensearch.errors import KafkaPublishError, QueueSendError
-from case_similarity_service.opensearch.handlers.case_similarity_handler import CaseSimilarityHandler
-from case_similarity_service.opensearch.kafka_processor import KafkaProcessor
-from case_similarity_service.opensearch.sqs_processor import SqsProcessor
+from case_similarity_completed.opensearch.errors import KafkaPublishError, QueueSendError
+from case_similarity_completed.opensearch.handlers.case_similarity_handler import CaseSimilarityHandler
+from case_similarity_completed.opensearch.kafka_processor import KafkaProcessor
+from case_similarity_completed.opensearch.sqs_processor import SqsProcessor
 from tests.opensearch.fakes import (
     AwsSqsFake,
     CaseSimilarityDBStoreFake,

@@ -8,11 +8,11 @@ setup:
 	uv sync --extra dev
 
 test: setup
-	uv run ruff check case_similarity_service ta_db_connection tests generate_project.py
+	uv run ruff check case_similarity_completed ta_db_connection tests generate_project.py
 	uv run pytest -q
 
 local: setup kafka
-	uv run python -m case_similarity_service.opensearch.main
+	uv run python -m case_similarity_completed.opensearch.main
 
 kafka:
 	docker compose up -d --wait kafka

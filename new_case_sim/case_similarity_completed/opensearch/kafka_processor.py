@@ -3,12 +3,12 @@ from datetime import UTC, datetime
 
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
-from case_similarity_service.opensearch import constants
-from case_similarity_service.opensearch.config import Config
-from case_similarity_service.opensearch.contracts import KafkaDelivery, KafkaEvent
-from case_similarity_service.opensearch.db_store.kafka_event_db_store import KafkaEventDBStore
-from case_similarity_service.opensearch.errors import KafkaPublishError
-from case_similarity_service.opensearch.retry import retry_operation
+from case_similarity_completed.opensearch import constants
+from case_similarity_completed.opensearch.config import Config
+from case_similarity_completed.opensearch.contracts import KafkaDelivery, KafkaEvent
+from case_similarity_completed.opensearch.db_store.kafka_event_db_store import KafkaEventDBStore
+from case_similarity_completed.opensearch.errors import KafkaPublishError
+from case_similarity_completed.opensearch.retry import retry_operation
 from ta_utils.logger.CustomLogger import CustomLogger
 
 

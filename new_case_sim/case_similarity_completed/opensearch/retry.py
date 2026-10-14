@@ -5,8 +5,8 @@ from typing import Any
 from botocore.exceptions import BotoCoreError
 from sqlalchemy.exc import SQLAlchemyError
 
-from case_similarity_service.opensearch import constants
-from case_similarity_service.opensearch.errors import KafkaPublishError, OperationFailedError, QueueSendError
+from case_similarity_completed.opensearch import constants
+from case_similarity_completed.opensearch.errors import KafkaPublishError, OperationFailedError, QueueSendError
 from ta_utils.logger.CustomLogger import CustomLogger
 
 RETRYABLE_ERRORS = (BotoCoreError, SQLAlchemyError, TimeoutError, ConnectionError, KafkaPublishError, QueueSendError)

@@ -94,7 +94,7 @@ Those responsibilities belong to earlier services. Case Similarity treats
 The entry point is:
 
 ```text
-case_similarity_service.opensearch.main.run_opensearch_flow
+case_similarity_completed.opensearch.main.run_opensearch_flow
 ```
 
 Startup performs these steps:

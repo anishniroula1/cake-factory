@@ -1,6 +1,6 @@
-from case_similarity_service.opensearch.contracts import SqsMessage, TspId
-from case_similarity_service.opensearch.dependencies import Dependencies
-from case_similarity_service.opensearch.errors import CaseSimilarityError
+from case_similarity_completed.opensearch.contracts import SqsMessage, TspId
+from case_similarity_completed.opensearch.dependencies import Dependencies
+from case_similarity_completed.opensearch.errors import CaseSimilarityError
 
 
 class SqsProcessor:

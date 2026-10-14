@@ -1,5 +1,5 @@
-from case_similarity_service.opensearch.dependencies import Dependencies
-from case_similarity_service.opensearch.sqs_processor import SqsProcessor
+from case_similarity_completed.opensearch.dependencies import Dependencies
+from case_similarity_completed.opensearch.sqs_processor import SqsProcessor
 from ta_db_connection.database_connection import DatabaseConnection
 from ta_utils.logger.CustomLogger import CustomLogger
 

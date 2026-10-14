@@ -3,9 +3,9 @@ from collections.abc import Callable
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from case_similarity_service.opensearch import constants
-from case_similarity_service.opensearch.contracts import CaseSummary, DocumentContext, TspId
-from case_similarity_service.opensearch.errors import PermanentDataError
+from case_similarity_completed.opensearch import constants
+from case_similarity_completed.opensearch.contracts import CaseSummary, DocumentContext, TspId
+from case_similarity_completed.opensearch.errors import PermanentDataError
 from ta_utils.logger.CustomLogger import CustomLogger
 
 # Load the case information connected to the tsp_id from the SQS message.

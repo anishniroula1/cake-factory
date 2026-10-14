@@ -1,10 +1,10 @@
-from case_similarity_service.opensearch import constants
-from case_similarity_service.opensearch.config import Config
-from case_similarity_service.opensearch.contracts import ProcessResult, TspId
-from case_similarity_service.opensearch.db_store.case_similarity_db_store import CaseSimilarityDBStore
-from case_similarity_service.opensearch.errors import QueueSendError
-from case_similarity_service.opensearch.kafka_processor import KafkaProcessor
-from case_similarity_service.opensearch.retry import retry_operation
+from case_similarity_completed.opensearch import constants
+from case_similarity_completed.opensearch.config import Config
+from case_similarity_completed.opensearch.contracts import ProcessResult, TspId
+from case_similarity_completed.opensearch.db_store.case_similarity_db_store import CaseSimilarityDBStore
+from case_similarity_completed.opensearch.errors import QueueSendError
+from case_similarity_completed.opensearch.kafka_processor import KafkaProcessor
+from case_similarity_completed.opensearch.retry import retry_operation
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
 

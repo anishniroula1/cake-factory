@@ -3,15 +3,15 @@ from dataclasses import replace
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from case_similarity_service.opensearch import config as config_module
-from case_similarity_service.opensearch import dependencies as dependencies_module
-from case_similarity_service.opensearch import main as main_module
-from case_similarity_service.opensearch.contracts import KafkaDelivery
-from case_similarity_service.opensearch.db_store.case_similarity_db_store import CaseSimilarityDBStore
-from case_similarity_service.opensearch.db_store.kafka_event_db_store import KafkaEventDBStore
-from case_similarity_service.opensearch.dependencies import Dependencies
-from case_similarity_service.opensearch.errors import OperationFailedError, PermanentDataError
-from case_similarity_service.opensearch.retry import retry_operation
+from case_similarity_completed.opensearch import config as config_module
+from case_similarity_completed.opensearch import dependencies as dependencies_module
+from case_similarity_completed.opensearch import main as main_module
+from case_similarity_completed.opensearch.contracts import KafkaDelivery
+from case_similarity_completed.opensearch.db_store.case_similarity_db_store import CaseSimilarityDBStore
+from case_similarity_completed.opensearch.db_store.kafka_event_db_store import KafkaEventDBStore
+from case_similarity_completed.opensearch.dependencies import Dependencies
+from case_similarity_completed.opensearch.errors import OperationFailedError, PermanentDataError
+from case_similarity_completed.opensearch.retry import retry_operation
 from tests.opensearch.fakes import (
     AwsSqsFake,
     DatabaseConnectionFake,
