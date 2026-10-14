@@ -1,5 +1,29 @@
 services:
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4566/_localstack/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   worker:
     build: .
     env_file: .env
+    environment:
+      AWS_LOCAL_ENDPOINT_URL: http://localstack:4566
+      AWS_RECEIVE_SQS_ENDPOINT: http://localstack:4566/000000000000/sentence-similarity-local.fifo
+      AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT: http://localstack:4566/000000000000/case-similarity-local.fifo
+      VAULT_YAML_PATH: /run/secrets/vault-secrets.yaml
+    volumes:
+      - ./vault-secrets.local.yaml:/run/secrets/vault-secrets.yaml:ro
+      - ${HOME}/.aws:/root/.aws:ro
+    depends_on:
+      localstack:
+        condition: service_healthy
     restart: unless-stopped

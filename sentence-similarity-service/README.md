@@ -1,117 +1,296 @@
 # Sentence Similarity Service
 
-This is a standalone SQS worker. The same image is used for real-time and
-historical processing; Harness gives each deployment a different source queue.
+Sentence Similarity is an SQS worker that processes one document (`tsp_id`) at
+a time. It classifies every sentence, finds exact and semantic matches in
+OpenSearch, and saves the relationships in PostgreSQL.
 
-## Flow
+The same application supports real-time and historical processing. Each
+deployment can listen to a different SQS queue, but the processing logic stays
+the same.
 
-```text
-Receive one SQS message with tsp_id
-    -> Load 30 sentences from sentences_vector
-    -> Read application_id and analysis_group from text_similarity_input
-    -> Load their vectors from the selected Asylee or Refugee catalog
-    -> Process up to 30 sentences with 30 workers
-    -> Reuse saved catalog classification or search the tracer catalog
-    -> Update classification in the group catalog and sentences_vector
-    -> Skip normal matching for tracer, form-language, or non-matcher sentences
-    -> Search the selected sentence catalog for exact and similar keys
-    -> Expand keys through sentence_occurrences for other applications
-    -> Verify target classifications before saving either direction
-    -> Save bidirectional global_id matches in tsp.titan_matches
-    -> Repeat until every sentence is complete
-    -> Send tsp_id to the next service queue
-    -> Delete the source SQS message
+## What the service does
+
+For each SQS message, the service:
+
+1. Reads `tsp_id` from the message.
+2. Confirms the document's sentence occurrences are searchable in OpenSearch.
+3. Loads source sentences from `sentences_vector` in pages of 30.
+4. Uses the document's `analysis_group` to select the Asylee or Refugee catalog.
+5. Loads each source vector from that catalog by `sentenceKey`.
+6. Processes up to 30 source sentences at the same time.
+7. Checks each vector against the tracer and form-language catalog.
+8. Updates the sentence classification in PostgreSQL and the sentence catalog.
+9. Skips normal matching when a sentence is a tracer, non-matcher, or form language.
+10. Searches the sentence catalog for every exact and semantic key at or above 76%.
+11. Expands those keys through `sentence_occurrences` and excludes occurrences
+    from the source application.
+12. Classifies target sentences and removes ineligible targets.
+13. Saves the remaining relationships in both directions in `tsp.titan_matches`.
+14. Sends the completed `tsp_id` to the next SQS queue.
+15. Deletes the source message only after all work completes successfully.
+
+If processing fails, the source message is not deleted. The SQS redrive policy
+controls retries and eventual delivery to the DLQ.
+
+## Message format
+
+The source queue accepts one document message:
+
+```json
+{
+  "tsp_id": 8205
+}
 ```
 
-The tracer table and tracer index do not contain `is_tracer`. Sentence
-Similarity reads the top-K tracer results, keeps only results at or above 70%,
-and combines the result types:
+After processing, the next queue receives:
 
-```text
-one result with both flags false -> is_tracer=true
-any result with is_non_matcher   -> is_non_matcher=true
-any result with is_form_language -> is_form_language=true
-no result at or above 70%        -> search sentence catalog
+```json
+{
+  "source": "P2",
+  "tsp_id": "8205",
+  "sent_by": "sentence-similarity"
+}
 ```
 
-The three flags are independent. They can all be true when different qualifying
-tracer results represent all three types. Any true flag skips the normal
-sentence-catalog search.
+## Sentence classification
+
+The tracer search reads the 100 closest references for the same analysis group.
+Only results with at least 70% cosine similarity affect the classification.
+
+```text
+isNonMatcher=false and isFormLanguage=false -> tracer
+isNonMatcher=true                           -> non-matcher
+isFormLanguage=true                         -> form language
+no qualifying result                        -> eligible for sentence matching
+```
+
+All three flags are independent. Different qualifying reference records can
+make more than one flag true. A sentence is excluded from normal sentence
+matching when any flag is true.
+
+The result is stored on the sentence catalog. Eligible classifications can be
+reused by another occurrence with the same `sentenceKey`; excluded results are
+checked again against the tracer catalog. Occurrence-level flags are stored in
+`sentences_vector`.
+
+## Sentence matching
+
+Eligible sentences are searched in one of these catalogs:
+
+- `sentence_semantic_catalog_asylee`
+- `sentence_semantic_catalog_refugee`
+
+The semantic search uses the 512-dimension Titan vector, a 76% threshold, and
+`nprobes=64`. Every matching sentence key is expanded through
+`sentence_occurrences`. The occurrence search stays inside the analysis group
+and excludes the source `applicationId`.
 
 ## Titan match buckets
 
-`tsp.titan_matches` uses 16 buckets per source `global_id`. The matching
-global ID selects its stable bucket:
+PostgreSQL stores relationships in `tsp.titan_matches`. Each source
+`global_id` can have 16 smaller JSONB bucket rows instead of one very large
+row:
 
 ```text
 bucket = matching global_id % 16
 ```
 
-The JSONB object stores only the matching ID and cosine distance:
+One bucket can look like this:
 
 ```json
-{"200": 0.10, "232": 0.0}
+{
+  "200": {
+    "tsp_id": 9001,
+    "application_id": 300,
+    "distance": 0.1
+  },
+  "232": {
+    "tsp_id": 9002,
+    "application_id": 301,
+    "distance": 0.0
+  }
+}
 ```
 
-PostgreSQL creates the reverse relationship in the same transaction. It also
-calculates `match_count` and `verbatim`. Smaller bucket rows reduce the
-amount of JSONB rewritten and reduce row-lock contention between workers.
+Distance `0.0` is an exact vector match. Smaller distances are better. The
+PostgreSQL function writes both directions in one transaction and calculates
+`match_count` and `verbatim`. Buckets keep JSONB updates smaller and reduce
+lock contention between sentence workers.
 
-The table and bidirectional upsert function are managed by the shared Flyway
-migration.
+The shared Flyway migration owns the table and the
+`tsp.upsert_bidirectional_titan_matches` function.
 
-Database access is separated by table under
-`similarity_completed/opensearch/db_store`:
-
-- `SentenceVectorDBStore` loads sentence batches by `tsp_id` and updates
-  classifications by `global_id`.
-- `TitanMatchesDBStore` saves bidirectional matches through the bucket function.
-
-The handler only controls the order of database and OpenSearch operations.
-`TracerFilteringService` owns tracer decisions, source classification, target
-classification, and removal of ineligible matches.
-
-The local `ta_utils` and `ta_db_connection` folders copy the import paths used
-by the team libraries. They let this standalone project run by itself. When
-the code is moved into the main service, delete those two local folders and
-the same imports will use the installed libraries.
-
-OpenSearch access is also separated by index under
-`similarity_completed/opensearch/opensearch_store`:
-
-- `OccurrenceOpenSearchStore` finds matching occurrences outside the source application.
-- `TracerOpenSearchStore` classifies a sentence using its vector.
-- `SentenceCatalogOpenSearchStore` loads records by sentence key, searches semantic
-  matches by vector, and updates reusable classification flags by sentence key.
-
-## Configuration
-
-Copy `.env.example` and provide the Vault file, OpenSearch host and role,
-receive queue, next-service queue, and optional local AWS endpoint.
-
-Processing constants are kept in
-`similarity_completed/opensearch/config.py`:
+## Project layout
 
 ```text
-Source sentence batch: 30 sentences
-Workers: 30
-Titan vector: 512 dimensions
-Retry wait: 5 seconds
-Match write batch: 500 occurrences
-Occurrence alias: sentence_occurrences
-Asylee catalog alias: sentence_semantic_catalog_asylee
-Refugee catalog alias: sentence_semantic_catalog_refugee
-Tracer alias: tracer_form_language_catalog
+similarity_completed/opensearch/
+  db_store/              PostgreSQL reads, classification updates, and match writes
+  handlers/              One-document processing flow
+  opensearch_store/      Occurrence, catalog, and tracer OpenSearch operations
+  utill/                 Score, vector, catalog, and classification helpers
+  config.py              Environment values and processing constants
+  dependencies.py        Database, OpenSearch, SQS, and handler construction
+  sqs_processor.py       Receive, process, and delete SQS messages
+ta_db_connection/        Local copy of the shared database library imports
+ta_utils/                Local copy of shared SQS, logging, and Vault imports
+tests/opensearch/        OpenSearch-flow unit tests
 ```
 
-## Run
+The local `ta_utils` and `ta_db_connection` folders use the same import paths as
+the team libraries. They let this project run by itself. When copying the
+service into the main application, those local folders can be removed so the
+installed libraries provide the imports.
+
+## Local prerequisites
+
+- Python 3.12
+- `uv`
+- Docker with Docker Compose
+- Access to the PostgreSQL database used for testing
+- AWS credentials that can access the configured OpenSearch domain
+
+LocalStack is used only for SQS. OpenSearch and PostgreSQL still use the
+addresses and credentials supplied in the local configuration.
+
+## Configure the service
+
+Create the local environment file:
+
+```bash
+cp .env.example .env
+```
+
+Set `OPENSEARCH_HOST` and `OPENSEARCH_IAM_ACCESS_ROLE` in `.env`. The host can
+include `https://`; the application removes the scheme before creating the
+client. If the current AWS credentials can access OpenSearch directly, the role
+ARN can be left empty.
+
+Create the local Vault file:
+
+```bash
+cp vault-secrets.local.example.yaml vault-secrets.local.yaml
+```
+
+Add the local database values:
+
+```yaml
+pgUser: your-database-user
+pgPassword: your-database-password
+pgHost: your-database-host
+pgDatabase: your-database-name
+pgPort: 5432
+```
+
+The real `.env` and `vault-secrets.local.yaml` files are ignored by Git.
+
+## Run locally — recommended
+
+Running the Python process locally is faster than rebuilding the Docker image
+after every code change.
+
+Start LocalStack and create the source and next-service FIFO queues:
+
+```bash
+make localstack
+```
+
+In a second terminal, start the worker:
 
 ```bash
 make local
 ```
 
-## Test
+In a third terminal, send the sample message from the Makefile:
+
+```bash
+make sos
+```
+
+The sample uses `tsp_id=8205`. Pass another document ID when needed:
+
+```bash
+make sos TSP_ID=12345
+```
+
+## Run in Docker
+
+Create `.env` and `vault-secrets.local.yaml` first, then run:
+
+```bash
+make run
+```
+
+This starts LocalStack, creates both FIFO queues, builds the worker image, and
+runs the worker. Follow its logs with:
+
+```bash
+make logs
+```
+
+Stop the worker and LocalStack with:
+
+```bash
+make down
+```
+
+## Run tests
+
+Run only the OpenSearch flow tests:
+
+```bash
+make ostest
+```
+
+`ostest` installs the development dependencies and runs
+`tests/opensearch`. These tests use controlled database, OpenSearch, and SQS
+boundaries; they do not require the real OpenSearch domain or PostgreSQL
+database.
+
+Run lint plus the complete test suite with the configured coverage requirement:
 
 ```bash
 make test
 ```
+
+## Make commands
+
+| Command | Purpose |
+|---|---|
+| `make localstack` | Start LocalStack and create both local FIFO queues. |
+| `make local` | Run the worker directly with `uv`; recommended for development. |
+| `make sos` | Send the default sample `tsp_id` to the source queue. |
+| `make sos TSP_ID=12345` | Send a specific `tsp_id`. |
+| `make run` | Build and run the worker and LocalStack in Docker. |
+| `make ostest` | Run only `tests/opensearch`. |
+| `make test` | Run Ruff and the full test suite with coverage. |
+| `make logs` | Follow Docker worker logs. |
+| `make down` | Stop Docker services. |
+
+## Main processing settings
+
+The values below are constants in `similarity_completed/opensearch/config.py`:
+
+| Setting | Value |
+|---|---:|
+| Source sentence page | 30 |
+| Sentence worker threads | 30 |
+| Titan vector dimensions | 512 |
+| Sentence match threshold | 76% |
+| Tracer classification threshold | 70% |
+| Tracer top K | 100 |
+| IVF nprobes | 64 |
+| Titan match write batch | 500 |
+| Retry wait | 5 seconds |
+| Occurrence readiness wait | 30 seconds |
+| SQS visibility timeout | 2 hours |
+
+## Common local issues
+
+- **Local SQS connection fails:** run `make localstack` and confirm
+  `AWS_LOCAL_ENDPOINT_URL=http://localhost:4566` in `.env`.
+- **Vault file is missing:** create `vault-secrets.local.yaml` and keep
+  `VAULT_YAML_PATH=./vault-secrets.local.yaml`.
+- **OpenSearch returns 403:** confirm the active AWS credentials and the role
+  configured by `OPENSEARCH_IAM_ACCESS_ROLE` can access the domain.
+- **The document is not processed:** confirm Doc2Vec already indexed the
+  document's sentence occurrences and catalog vectors.
