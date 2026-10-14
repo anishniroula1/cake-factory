@@ -1,9 +1,12 @@
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 
+from api_transform_service.opensearch import dependencies as dependencies_module
 from api_transform_service.opensearch.config import Config, read_boolean
 from api_transform_service.opensearch.dependencies import Dependencies
 from api_transform_service.opensearch.errors import OperationFailedError
@@ -46,6 +49,10 @@ def test_boolean_and_validation_reject_bad_values(monkeypatch, service_config):
 
     with pytest.raises(ValueError, match="Missing required"):
         replace(service_config, receive_sqs_endpoint="").validate()
+    with pytest.raises(ValueError, match="VAULT_YAML_PATH"):
+        replace(service_config, environment="dev", dynamic_credential_file="").validate()
+    with pytest.raises(ValueError, match="Kafka SSL certificate"):
+        replace(service_config, kafka_security_protocol="SSL").validate()
 
 
 def test_retry_reports_success_and_final_failure():
@@ -105,3 +112,34 @@ def test_dependency_kafka_config_adds_ssl_files(service_config):
     values = dependency._kafka_config()
 
     assert values["ssl.ca.location"] == "ca.pem"
+
+
+def test_dependencies_build_the_complete_worker(monkeypatch, service_config):
+    source_sqs = Mock()
+    dlq_sqs = Mock()
+    sent_sqs = Mock()
+    sqs_constructor = Mock(side_effect=[source_sqs, dlq_sqs, sent_sqs])
+    producer_constructor = Mock(return_value=Mock())
+    monkeypatch.setattr(dependencies_module, "AwsSQS", sqs_constructor)
+    monkeypatch.setattr(dependencies_module, "Producer", producer_constructor)
+    database = SimpleNamespace(engine=create_engine("sqlite://"))
+
+    dependencies = Dependencies(LoggerFake(), database, service_config)
+
+    assert (dependencies.aws_sqs, dependencies.dlq_sqs, dependencies.sent_sqs) == (source_sqs, dlq_sqs, sent_sqs)
+    assert sqs_constructor.call_args_list[1].kwargs["max_number_of_messages"] == 10
+    dependencies.close()
+
+
+def test_database_connection_uses_local_or_dynamic_credentials(monkeypatch, service_config):
+    database_constructor = Mock(return_value=Mock())
+    monkeypatch.setattr(dependencies_module, "DatabaseConnection", database_constructor)
+    dependencies = object.__new__(Dependencies)
+
+    dependencies.config = service_config
+    dependencies._create_database_connection()
+    dependencies.config = replace(service_config, environment="dev", dynamic_credential_file="vault.yaml")
+    dependencies._create_database_connection()
+
+    assert database_constructor.call_args_list[0].kwargs["use_dynamic_credentials"] is False
+    assert database_constructor.call_args_list[1].kwargs["dynamic_credentials_file"] == "vault.yaml"

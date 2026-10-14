@@ -36,10 +36,10 @@ class ApiTransformHandler:
         self.kafka_processor = kafka_processor
         self.logger = custom_logger
 
-    def process(self, tsp_id: TspId) -> TransformResult:
+    def process(self, tsp_id: TspId, historical: bool = False) -> TransformResult:
         """Rebuild and publish the application affected by one document.
 
-        Input: tsp_id=10 from one SQS message.
+        Input: tsp_id=10 and historical=True for a historical SQS message.
         Output: counts for that source message, its application, and Kafka events.
         """
 
@@ -50,7 +50,7 @@ class ApiTransformHandler:
             if reference is None:
                 raise PermanentDataError(f"No current application was found for tsp_id={tsp_id}")
 
-            published_count = self._process_application(reference)
+            published_count = self._process_application(reference, historical)
             self.logger.info(
                 f"API Transform completed one document, one application, and {published_count} Kafka event(s)."
             )
@@ -59,7 +59,7 @@ class ApiTransformHandler:
             self.transmission_db_store.save_etl_error("API Transform failed", error)
             raise
 
-    def _process_application(self, reference) -> int:
+    def _process_application(self, reference, historical: bool) -> int:
         """Load every related section and publish one affected application."""
 
         application_ids = [reference.application_id]
@@ -95,6 +95,7 @@ class ApiTransformHandler:
             documents.get(application_id, []),
             sentences.get(application_id, []),
             templates.get(application_id),
+            historical,
         )
         return self._publish_with_buffer_limit(events)
 

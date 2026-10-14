@@ -47,7 +47,8 @@ class SqsProcessor:
         self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}")
         self.dependencies.logger.info("Starting an API Transform document message.")
         try:
-            result = self.dependencies.api_transform_handler.process(tsp_id)
+            historical = str(message.get("reason") or "").strip().upper() == "HISTORICAL"
+            result = self.dependencies.api_transform_handler.process(tsp_id, historical)
             if not result:
                 self._leave_message_for_sqs("API Transform did not complete the document.")
                 return False

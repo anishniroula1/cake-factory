@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -88,6 +89,33 @@ def test_transmission_store_commits_confirmed_delivery():
     store.save_deliveries([delivery], 60)
 
     assert (session.commits, len(session.executions)) == (1, 3)
+
+
+def test_transmission_store_saves_errors_and_builds_small_audit_values():
+    session = SessionFake()
+    store = TransmissionDBStore(SessionFactoryFake([session]), "local")
+    event = {"after": {"payload": json.dumps({"sentences": [{"global_id": 1}, {"global_id": 2}]})}}
+
+    store.save_deliveries([], 60)
+    store.save_etl_error("API Transform failed", RuntimeError("database unavailable"))
+    compact = json.loads(store.audit_value(event, verbose_logging=False))
+    verbose = json.loads(store.audit_value(event, verbose_logging=True))
+
+    assert (session.commits, compact["after"]["payload"]["sentences"]) == (1, 2)
+    assert len(verbose["after"]["payload"]["sentences"]) == 2
+
+
+def test_content_store_returns_empty_results_without_database_calls():
+    store = ContentDBStore(SessionFactoryFake([]), 3000)
+
+    results = (
+        store.load_sentences([], False),
+        store.load_documents([]),
+        store.load_public_templates([]),
+        store._is_match_only_update(None, None),
+    )
+
+    assert results == ({}, {}, {}, False)
 
 
 @pytest.mark.parametrize(

@@ -20,6 +20,9 @@ payload, and publishes the payload to `rfs.ata.data_migration.api.events`.
 7. Split only the sentence list when one application event is too large.
 8. Publish to Kafka and wait for every delivery acknowledgement.
 9. Save confirmed Kafka audit rows and update `api.transform_status`.
+
+The Kafka event includes `historical=true` when the incoming SQS message has
+`reason=HISTORICAL`. Messages without that reason use `historical=false`.
 10. Forward the completed `tsp_id` to the next queue, then delete that source
     message. A failed step leaves the source message undeleted. SQS retries it
     and moves it to the configured DLQ after the queue's receive limit.

@@ -29,7 +29,7 @@ include = ["api_transform_service*", "ta_db_connection*", "ta_utils*"]
 [tool.pytest.ini_options]
 testpaths = ["tests/opensearch"]
 pythonpath = ["."]
-addopts = "--cov=api_transform_service.opensearch --cov-report=term-missing --cov-fail-under=90"
+addopts = "--cov=api_transform_service.opensearch --cov-report=term-missing --cov-fail-under=95"
 
 [tool.ruff]
 line-length = 120
