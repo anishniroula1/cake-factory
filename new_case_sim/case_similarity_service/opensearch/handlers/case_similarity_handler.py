@@ -1,3 +1,4 @@
+from case_similarity_service.opensearch import constants
 from case_similarity_service.opensearch.config import Config
 from case_similarity_service.opensearch.contracts import ProcessResult, TspId
 from case_similarity_service.opensearch.db_store.case_similarity_db_store import CaseSimilarityDBStore
@@ -44,8 +45,8 @@ class CaseSimilarityHandler:
             "Load Case Similarity document values",
             self.case_similarity_db_store.load_document_context,
             tsp_id,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.max_attempts,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.MAX_ATTEMPTS,
             custom_logger=self.logger,
         )
 
@@ -55,8 +56,8 @@ class CaseSimilarityHandler:
             self.case_similarity_db_store.refresh_case_summaries,
             context.application_id,
             context.analysis_group,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.max_attempts,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.MAX_ATTEMPTS,
             custom_logger=self.logger,
         )
 
@@ -100,8 +101,8 @@ class CaseSimilarityHandler:
         sent = self.aws_sqs.send_sqs_message(
             send_queue_url=self.config.sent_sqs_endpoint,
             message_body={"source": "P2", "tsp_id": str(tsp_id), "sent_by": "case-similarity"},
-            wait_time=self.config.retry_seconds,
-            retries=self.config.max_attempts - 1,
+            wait_time=constants.RETRY_SECONDS,
+            retries=constants.MAX_ATTEMPTS - 1,
         )
         if not sent:
             raise QueueSendError("The next-step SQS message could not be sent")

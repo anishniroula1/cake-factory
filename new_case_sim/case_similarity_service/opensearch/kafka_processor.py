@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
+from case_similarity_service.opensearch import constants
 from case_similarity_service.opensearch.config import Config
 from case_similarity_service.opensearch.contracts import KafkaDelivery, KafkaEvent
 from case_similarity_service.opensearch.db_store.kafka_event_db_store import KafkaEventDBStore
@@ -52,8 +53,8 @@ class KafkaProcessor:
             self.kafka_event_db_store.load_changed_tah_events,
             application_ids,
             self.config.kafka_environment,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.max_attempts,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.MAX_ATTEMPTS,
             custom_logger=self.logger,
         )
 
@@ -64,8 +65,8 @@ class KafkaProcessor:
                 f"Publish TAH event for application_id={event.application_id}",
                 self._publish_event,
                 event,
-                wait_seconds=self.config.retry_seconds,
-                max_attempts=self.config.max_attempts,
+                wait_seconds=constants.RETRY_SECONDS,
+                max_attempts=constants.MAX_ATTEMPTS,
                 custom_logger=self.logger,
             )
         if events:
@@ -89,7 +90,8 @@ class KafkaProcessor:
         # the values read by the Global consumer.
         payload = {
             "is_tah": event.is_tah,
-            "application_url": f"{self.config.application_url}{event.application_id}",
+            "application_url": f"{self.config.application_url or constants.DEFAULT_APPLICATION_URL}"
+            f"{event.application_id}",
             "primary_a_number": str(event.a_number),
             "analysis_group": event.analysis_group,
         }
@@ -117,7 +119,7 @@ class KafkaProcessor:
             # produce() queues the message. poll() serves callbacks, and flush()
             # waits for Kafka to confirm whether the queued message was delivered.
             self.kafka_producer.produce(
-                topic=self.config.tah_topic,
+                topic=constants.TAH_TOPIC,
                 key=event.receipt_number,
                 value=json.dumps(payload),
                 on_delivery=delivery_callback,

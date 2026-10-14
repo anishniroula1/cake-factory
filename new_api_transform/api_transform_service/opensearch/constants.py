@@ -1,0 +1,22 @@
+"""Fixed values shared by the API Transform OpenSearch flow."""
+
+# Database
+DATABASE_POOL_SIZE = 20
+DATABASE_MAX_OVERFLOW = 10
+
+# SQS
+SQS_WAIT_SECONDS = 10
+SQS_VISIBILITY_SECONDS = 7200
+
+# Payload and Kafka
+SENTENCE_MATCH_LIMIT = 3000  # Maximum matching sentences returned for one source sentence.
+UNCOMPRESSED_MAX_EVENT_BYTES = 4718592
+COMPRESSED_MAX_EVENT_BYTES = 18155776
+KAFKA_BUFFER_LIMIT_BYTES = 450000000
+KAFKA_TOPIC = "rfs.ata.data_migration.api.events"
+KAFKA_MESSAGE_MAX_BYTES = 100 * 1024 * 1024
+KAFKA_AUDIT_RETENTION_DAYS = 60
+
+# Retry
+RETRY_SECONDS = 5
+MAX_ATTEMPTS = 3

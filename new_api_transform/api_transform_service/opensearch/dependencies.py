@@ -1,6 +1,7 @@
 from confluent_kafka import Producer
 from sqlalchemy.orm import sessionmaker
 
+from api_transform_service.opensearch import constants
 from api_transform_service.opensearch.config import Config
 from api_transform_service.opensearch.db_store import (
     ApplicantDBStore,
@@ -37,7 +38,7 @@ class Dependencies:
         self.sent_sqs = self._sqs(self.config.sent_sqs_endpoint)
         application_store = ApplicationDBStore(self.session_factory)
         applicant_store = ApplicantDBStore(self.session_factory)
-        content_store = ContentDBStore(self.session_factory, self.config.sentence_match_limit)
+        content_store = ContentDBStore(self.session_factory, constants.SENTENCE_MATCH_LIMIT)
         transmission_store = TransmissionDBStore(self.session_factory, self.config.kafka_environment)
         payload_builder = PayloadBuilder(self.config)
         kafka_processor = KafkaProcessor(self.config, Producer(self._kafka_config()), transmission_store, self.logger)
@@ -71,8 +72,8 @@ class Dependencies:
             pg_db_host=self.config.pg_db_host,
             pg_db_database=self.config.pg_db_database,
             pg_db_port=self.config.pg_db_port,
-            pool_size=self.config.database_pool_size,
-            max_overflow=self.config.database_max_overflow,
+            pool_size=constants.DATABASE_POOL_SIZE,
+            max_overflow=constants.DATABASE_MAX_OVERFLOW,
             application_name="api_transform",
             **credentials,
         )
@@ -89,9 +90,9 @@ class Dependencies:
             aws_region=self.config.aws_region,
             aws_endpoint_url=self.config.aws_local_endpoint_url or None,
             max_number_of_messages=max_messages,
-            wait_time=self.config.sqs_wait_seconds,
+            wait_time=constants.SQS_WAIT_SECONDS,
             logger=self.logger,
-            visibility_timeout=self.config.sqs_visibility_seconds,
+            visibility_timeout=constants.SQS_VISIBILITY_SECONDS,
         )
 
     def _kafka_config(self) -> dict:
@@ -104,7 +105,7 @@ class Dependencies:
         values = {
             "bootstrap.servers": self.config.kafka_bootstrap_servers,
             "security.protocol": self.config.kafka_security_protocol,
-            "message.max.bytes": 100 * 1024 * 1024,
+            "message.max.bytes": constants.KAFKA_MESSAGE_MAX_BYTES,
             "compression.type": self.config.kafka_compression,
         }
         if self.config.kafka_security_protocol == "SSL":

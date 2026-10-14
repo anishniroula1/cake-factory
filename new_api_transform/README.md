@@ -38,6 +38,14 @@ The compatibility copies under `ta_utils` and `ta_db_connection` mimic the
 shared libraries. They can be removed when this folder is moved into the real
 service repository that already provides those packages.
 
+## Configuration
+
+`config.py` reads values that can change between environments, including
+database credentials, queue URLs, Kafka connection values, the analysis group,
+and feature toggles. `constants.py` holds fixed service behavior such as queue
+timing, payload limits, the Kafka topic, database pool sizes, and retry timing.
+Fixed values do not need to be repeated in deployment environment variables.
+
 ## Run
 
 Copy `.env.example` to `.env`, supply working PostgreSQL, SQS, and Kafka values,

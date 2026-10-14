@@ -5,6 +5,7 @@ from typing import Any
 from botocore.exceptions import BotoCoreError
 from sqlalchemy.exc import SQLAlchemyError
 
+from case_similarity_service.opensearch import constants
 from case_similarity_service.opensearch.errors import KafkaPublishError, OperationFailedError, QueueSendError
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -17,7 +18,7 @@ def retry_operation[Result](
     *arguments: Any,
     wait_seconds: int,
     custom_logger: CustomLogger,
-    max_attempts: int = 3,
+    max_attempts: int = constants.MAX_ATTEMPTS,
 ) -> Result:
     """Retry one operation without repeating earlier completed work. Supported
     transient failures retry until the operation succeeds or reaches the limit.

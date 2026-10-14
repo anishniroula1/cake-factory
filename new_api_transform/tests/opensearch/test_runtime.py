@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 
+from api_transform_service.opensearch import constants
 from api_transform_service.opensearch import dependencies as dependencies_module
 from api_transform_service.opensearch.config import Config, read_boolean
 from api_transform_service.opensearch.dependencies import Dependencies
@@ -35,11 +36,8 @@ def test_config_reads_environment(monkeypatch):
 
     config = Config.from_environment()
 
-    assert (config.analysis_group, config.pg_db_port, config.kafka_topic) == (
-        "Asylee",
-        5432,
-        "rfs.ata.data_migration.api.events",
-    )
+    assert (config.analysis_group, config.pg_db_port) == ("Asylee", 5432)
+    assert constants.KAFKA_TOPIC == "rfs.ata.data_migration.api.events"
 
 
 def test_boolean_and_validation_reject_bad_values(monkeypatch, service_config):

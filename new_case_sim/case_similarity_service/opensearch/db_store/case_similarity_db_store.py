@@ -3,7 +3,7 @@ from collections.abc import Callable
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from case_similarity_service.opensearch.config import Config
+from case_similarity_service.opensearch import constants
 from case_similarity_service.opensearch.contracts import CaseSummary, DocumentContext, TspId
 from case_similarity_service.opensearch.errors import PermanentDataError
 from ta_utils.logger.CustomLogger import CustomLogger
@@ -49,8 +49,7 @@ REFRESH_CASE_SUMMARIES = text(
 class CaseSimilarityDBStore:
     """Read document ownership and rebuild application-level case summaries."""
 
-    def __init__(self, config: Config, session_factory: Callable[[], Session], custom_logger: CustomLogger) -> None:
-        self.config = config
+    def __init__(self, session_factory: Callable[[], Session], custom_logger: CustomLogger) -> None:
         self.session_factory = session_factory
         self.logger = custom_logger
 
@@ -104,8 +103,8 @@ class CaseSimilarityDBStore:
                     {
                         "source_application_id": source_application_id,
                         "analysis_group": analysis_group,
-                        "similar_case_threshold": self.config.min_similar_case_count,
-                        "tah_case_threshold": self.config.min_tah_case_count,
+                        "similar_case_threshold": constants.MIN_SIMILAR_CASE_COUNT,
+                        "tah_case_threshold": constants.MIN_TAH_CASE_COUNT,
                     },
                 )
                 .mappings()

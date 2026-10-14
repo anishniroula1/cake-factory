@@ -1,3 +1,4 @@
+from api_transform_service.opensearch import constants
 from api_transform_service.opensearch.config import Config
 from api_transform_service.opensearch.contracts import TransformResult, TspId
 from api_transform_service.opensearch.db_store import (
@@ -116,7 +117,7 @@ class ApiTransformHandler:
         buffered_events = []
         for event in events:
             event_size = self.payload_builder.serialized_size(event)
-            if buffered_events and buffered_size + event_size > self.config.kafka_buffer_limit_bytes:
+            if buffered_events and buffered_size + event_size > constants.KAFKA_BUFFER_LIMIT_BYTES:
                 published_count += self._retry(
                     "Publish API events to Kafka", self.kafka_processor.publish, buffered_events
                 )
@@ -139,7 +140,7 @@ class ApiTransformHandler:
             label,
             operation,
             *arguments,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.max_attempts,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.MAX_ATTEMPTS,
             custom_logger=self.logger,
         )

@@ -1,6 +1,7 @@
 from confluent_kafka import Producer
 from sqlalchemy.orm import sessionmaker
 
+from case_similarity_service.opensearch import constants
 from case_similarity_service.opensearch.config import Config
 from case_similarity_service.opensearch.db_store.case_similarity_db_store import CaseSimilarityDBStore
 from case_similarity_service.opensearch.db_store.kafka_event_db_store import KafkaEventDBStore
@@ -29,11 +30,11 @@ class Dependencies:
             aws_region=self.config.aws_region,
             aws_endpoint_url=self.config.aws_local_endpoint_url or None,
             max_number_of_messages=1,
-            wait_time=self.config.sqs_wait_seconds,
+            wait_time=constants.SQS_WAIT_SECONDS,
             logger=self.logger,
-            visibility_timeout=self.config.sqs_visibility_seconds,
+            visibility_timeout=constants.SQS_VISIBILITY_SECONDS,
         )
-        self.case_similarity_db_store = CaseSimilarityDBStore(self.config, self.session_factory, self.logger)
+        self.case_similarity_db_store = CaseSimilarityDBStore(self.session_factory, self.logger)
         self.kafka_event_db_store = KafkaEventDBStore(self.session_factory)
         # Historical deployments keep Kafka disabled, so they do not create a
         # broker connection or require Kafka credentials.
@@ -62,8 +63,8 @@ class Dependencies:
             pg_db_host=self.config.pg_db_host,
             pg_db_database=self.config.pg_db_database,
             pg_db_port=self.config.pg_db_port,
-            pool_size=self.config.database_pool_size,
-            max_overflow=self.config.database_max_overflow,
+            pool_size=constants.DATABASE_POOL_SIZE,
+            max_overflow=constants.DATABASE_MAX_OVERFLOW,
             application_name="case_similarity",
             **credential_arguments,
         )

@@ -2,6 +2,7 @@ import json
 import math
 import re
 
+from api_transform_service.opensearch import constants
 from api_transform_service.opensearch.config import Config
 from api_transform_service.opensearch.errors import PermanentDataError
 
@@ -48,9 +49,9 @@ class PayloadBuilder:
 
         full_event = {"after": event, "op": "c"}
         maximum_size = (
-            self.config.uncompressed_max_event_bytes
+            constants.UNCOMPRESSED_MAX_EVENT_BYTES
             if self.config.kafka_compression == "none"
-            else self.config.compressed_max_event_bytes
+            else constants.COMPRESSED_MAX_EVENT_BYTES
         )
         if self.serialized_size(full_event) < maximum_size:
             return [full_event]

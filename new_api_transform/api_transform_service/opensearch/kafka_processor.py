@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
+from api_transform_service.opensearch import constants
 from api_transform_service.opensearch.config import Config
 from api_transform_service.opensearch.contracts import KafkaDelivery
 from api_transform_service.opensearch.db_store.transmission_db_store import TransmissionDBStore
@@ -42,7 +43,7 @@ class KafkaProcessor:
                 kafka_event = self._serialize_payload(event)
                 kafka_value = json.dumps(kafka_event, default=str)
                 self.producer.produce(
-                    topic=self.config.kafka_topic,
+                    topic=constants.KAFKA_TOPIC,
                     key=str(event["after"]["application_id"]),
                     value=kafka_value,
                     on_delivery=self._delivery_callback(event, kafka_value, deliveries, delivery_errors),
@@ -59,7 +60,7 @@ class KafkaProcessor:
         if len(deliveries) != len(events):
             raise KafkaPublishError(f"Kafka confirmed {len(deliveries)} of {len(events)} event(s)")
 
-        self.transmission_db_store.save_deliveries(deliveries, self.config.kafka_audit_retention_days)
+        self.transmission_db_store.save_deliveries(deliveries, constants.KAFKA_AUDIT_RETENTION_DAYS)
         self.logger.info(f"Published and confirmed {len(deliveries)} API event(s) to Kafka.")
         return len(deliveries)
 

@@ -6,6 +6,7 @@ from botocore.exceptions import BotoCoreError
 from confluent_kafka import KafkaException
 from sqlalchemy.exc import SQLAlchemyError
 
+from api_transform_service.opensearch import constants
 from api_transform_service.opensearch.errors import KafkaPublishError, OperationFailedError
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -18,7 +19,7 @@ def retry_operation[Result](
     *arguments: Any,
     wait_seconds: int,
     custom_logger: CustomLogger,
-    max_attempts: int = 3,
+    max_attempts: int = constants.MAX_ATTEMPTS,
 ) -> Result:
     """Retry only the failed operation and report when a later attempt succeeds.
 

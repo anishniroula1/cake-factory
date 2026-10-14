@@ -840,7 +840,8 @@ Kafka topic              = rfs.ata.text_analytics.hit
 |---|---|
 | `main.py` | Starts and closes the worker |
 | `dependencies.py` | Builds database, SQS, Kafka, stores, and handler |
-| `config.py` | Loads and validates deployment values |
+| `config.py` | Loads and validates values supplied by Vault or the environment |
+| `constants.py` | Holds fixed thresholds, retry timing, queue timing, and Kafka defaults |
 | `sqs_processor.py` | Receives and conditionally deletes source messages |
 | `case_similarity_handler.py` | Runs the steps for one `tsp_id` |
 | `case_similarity_db_store.py` | Loads document context and calls the refresh function |

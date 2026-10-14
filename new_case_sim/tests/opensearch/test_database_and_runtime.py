@@ -61,7 +61,7 @@ def test_database_store_loads_document_and_refreshes_case_summaries(service_conf
             ]
         )
     )
-    store = CaseSimilarityDBStore(service_config, SessionFactoryFake([document_session, summary_session]), LoggerFake())
+    store = CaseSimilarityDBStore(SessionFactoryFake([document_session, summary_session]), LoggerFake())
 
     context = store.load_document_context(10)
     summaries = store.refresh_case_summaries(100, "Asylee")
@@ -109,7 +109,7 @@ def test_kafka_database_store_reads_and_saves_delivery():
 
 def test_database_stores_return_empty_results_and_report_missing_documents(service_config):
     empty_document_session = SessionFake(ResultFake())
-    case_store = CaseSimilarityDBStore(service_config, SessionFactoryFake([empty_document_session]), LoggerFake())
+    case_store = CaseSimilarityDBStore(SessionFactoryFake([empty_document_session]), LoggerFake())
     kafka_store = KafkaEventDBStore(SessionFactoryFake([]))
 
     with pytest.raises(PermanentDataError, match="tsp_id=999"):
