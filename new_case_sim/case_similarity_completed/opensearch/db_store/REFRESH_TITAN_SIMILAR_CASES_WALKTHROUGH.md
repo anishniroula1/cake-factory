@@ -1,4 +1,4 @@
-# Refresh Titan Similar Cases: Step-by-Step Walkthrough
+# Refresh Titan Similar Cases: Step-by-step Walkthrough
 
 This guide shows what `tsp.refresh_titan_similar_cases` does without requiring
 someone to understand the full function at once. Run each query separately in
