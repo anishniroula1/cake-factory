@@ -68,14 +68,17 @@ class CaseSimilarityDBStoreFake:
 
 
 class HandlerFake:
-    def __init__(self, failure: bool = False) -> None:
+    def __init__(self, failure: bool = False, completed: bool = True) -> None:
         self.calls = []
         self.failure = failure
+        self.completed = completed
 
     def process(self, tsp_id):
         self.calls.append(tsp_id)
         if self.failure:
             raise OperationFailedError("temporary database failure")
+        if not self.completed:
+            return None
         return {"tsp_id": tsp_id}
 
 

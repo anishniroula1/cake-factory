@@ -1,6 +1,6 @@
 from case_similarity_completed.opensearch.contracts import SqsMessage, TspId
 from case_similarity_completed.opensearch.dependencies import Dependencies
-from case_similarity_completed.opensearch.errors import CaseSimilarityError
+from case_similarity_completed.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
 
 
 class SqsProcessor:
@@ -13,19 +13,8 @@ class SqsProcessor:
         """Continuously receive and process one SQS document message at a time."""
 
         while True:
-            self.run_once()
-
-    def run_once(self) -> int:
-        """Receive and process one SQS response.
-
-        Output: 1 when one document message was received, or 0 when the queue
-        returned no message.
-        """
-
-        messages = self.dependencies.aws_sqs.listen_sqs_message()
-        for message in messages:
-            self._process_message(message)
-        return len(messages)
+            for message in self.dependencies.aws_sqs.listen_sqs_message():
+                self._process_message(message)
 
     def _process_message(self, message: SqsMessage) -> None:
         """Process one document and delete its message only after completion.
@@ -34,25 +23,37 @@ class SqsProcessor:
         Input: message={"tsp_id": 100, "ReceiptHandle": "receipt-value"}
         """
 
-        tsp_id = self._read_tsp_id(message)
-        if tsp_id is None:
-            self.dependencies.logger.error("The SQS message is missing the required tsp_id.")
-            return
-
-        self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}")
         try:
-            self.dependencies.logger.info("Starting a Case Similarity document message.")
-            self.dependencies.case_similarity_handler.process(tsp_id)
-            if not self.dependencies.aws_sqs.delete_messages(message):
-                self.dependencies.logger.error("Processing completed, but source message deletion failed.")
+            tsp_id = self._read_tsp_id(message)
+            if tsp_id is None:
+                self._leave_message_for_sqs("The SQS message is missing the required tsp_id.")
                 return
-            self.dependencies.logger.info("Case Similarity completed and deleted the source SQS message.")
-        except CaseSimilarityError as error:
+            self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}")
+            self.dependencies.logger.info("Starting a Case Similarity document message.")
+            result = self.dependencies.case_similarity_handler.process(tsp_id)
+            if result is None:
+                self._leave_message_for_sqs("Case Similarity did not complete the message.")
+                return
+        except (OperationFailedError, PermanentDataError, QueueSendError) as error:
             self.dependencies.logger.error(
                 f"Case Similarity stopped because of {type(error).__name__}: {str(error)[:500]}"
             )
-        finally:
-            self.dependencies.logger.set_generic_message(None)
+            return
+
+        if not self.dependencies.aws_sqs.delete_messages(message):
+            self.dependencies.logger.error("Processing completed, but source message deletion failed.")
+            return
+        self.dependencies.logger.info("Case Similarity completed and deleted the source SQS message.")
+
+    def _leave_message_for_sqs(self, reason: str) -> None:
+        """Log why a source message remains available for SQS redelivery.
+
+        Input: reason="The document context is unavailable."
+        """
+
+        self.dependencies.logger.error(
+            f"{reason} The source message was not deleted; SQS will use its configured retry and DLQ flow."
+        )
 
     def _read_tsp_id(self, message: SqsMessage) -> TspId | None:
         """Return tsp_id without changing the type supplied by upstream.

@@ -30,11 +30,10 @@ def test_one_live_message_runs_the_complete_case_similarity_flow(service_config)
     handler = CaseSimilarityHandler(service_config, database_store, kafka_processor, aws_sqs, LoggerFake())
     processor = SqsProcessor(DependenciesFake(aws_sqs, handler, LoggerFake()))
 
-    processed_message_count = processor.run_once()
+    processor._process_message(message)
     kafka_payload = json.loads(kafka_producer.published[0][2])
 
     assert {
-        "processed_message_count": processed_message_count,
         "refreshed_applications": database_store.refreshed,
         "next_message": aws_sqs.sent[0]["message_body"],
         "deleted_messages": aws_sqs.deleted,
@@ -42,7 +41,6 @@ def test_one_live_message_runs_the_complete_case_similarity_flow(service_config)
         "kafka_payload": kafka_payload,
         "saved_delivery_count": len(kafka_event_store.deliveries),
     } == {
-        "processed_message_count": 1,
         "refreshed_applications": [(100, "Asylee")],
         "next_message": {"source": "P2", "tsp_id": "10", "sent_by": "case-similarity"},
         "deleted_messages": [message],
@@ -62,7 +60,7 @@ def test_failed_message_is_not_deleted():
     aws_sqs = AwsSqsFake([message])
     processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(failure=True), LoggerFake()))
 
-    processor.run_once()
+    processor._process_message(message)
 
     assert aws_sqs.deleted == []
 
@@ -135,30 +133,30 @@ def test_sqs_processor_reports_missing_id_and_delete_failure():
     logger = LoggerFake()
     processor = SqsProcessor(DependenciesFake(aws_sqs, handler, logger))
 
-    message_count = processor.run_once()
+    processor._process_message(missing_id_message)
+    processor._process_message(valid_message)
     errors = [message for level, message in logger.messages if level == "error"]
 
     assert {
-        "message_count": message_count,
         "processed_tsp_ids": handler.calls,
         "delete_attempts": aws_sqs.deleted,
         "error_count": len(errors),
         "generic_message": logger.generic_message,
     } == {
-        "message_count": 2,
         "processed_tsp_ids": ["10"],
         "delete_attempts": [valid_message],
         "error_count": 2,
-        "generic_message": None,
+        "generic_message": "tsp_id=10",
     }
 
 
 def test_sqs_run_keeps_listening():
-    processor = SqsProcessor(DependenciesFake(AwsSqsFake(), HandlerFake(), LoggerFake()))
-    run_once = Mock(side_effect=KeyboardInterrupt)
-    processor.run_once = run_once
+    message = {"tsp_id": 10, "MessageId": "case-local", "ReceiptHandle": "receipt-local"}
+    aws_sqs = AwsSqsFake()
+    aws_sqs.listen_sqs_message = Mock(side_effect=[[message], KeyboardInterrupt])
+    processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(completed=False), LoggerFake()))
 
     with pytest.raises(KeyboardInterrupt):
         processor.run()
 
-    assert run_once.call_count == 1
+    assert (aws_sqs.listen_sqs_message.call_count, aws_sqs.deleted) == (2, [])

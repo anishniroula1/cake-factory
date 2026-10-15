@@ -1,4 +1,10 @@
 /*
+ * Delete the old clone because its A-number-based structure does not match the new application-ID-based Titan flow.
+ * A-number is PII, so the new table does not copy it or store it unnecessarily; it can be retrieved using application_id when needed.
+ * Run this DROP only in the one-time Flyway migration because running it again would delete saved Titan case summaries.
+ */
+DROP TABLE IF EXISTS tsp.titan_similar_cases;
+/*
  * Create the table that stores one summary for each application.
  *
  * Example:
@@ -14,7 +20,6 @@
  * PostgreSQL counts the IDs in the lists and sets is_tah automatically.
  * An application with no matches does not have a row in this table.
  */
-DROP TABLE IF EXISTS tsp.titan_similar_cases;
 
 CREATE TABLE tsp.titan_similar_cases (
     application_id INTEGER PRIMARY KEY,
@@ -49,18 +54,27 @@ CREATE INDEX ix_titan_similar_cases_analysis_group
     ON tsp.titan_similar_cases (analysis_group, application_id);
 
 /*
- * Refresh one source application and mirror only that relationship on its targets.
+ * Recalculate the case summary for one application and update the other side
+ * of each relationship.
  *
- * Example: application 10 matches applications 20, 30, and 40.
+ * Running example used in the comments below:
+ *   Application 10 has 1 matching sentence with application 20.
+ *   Application 10 has 2 matching sentences with application 30.
+ *   Application 10 has 3 matching sentences with application 40.
+ *   Application 10 used to match application 50, but that match is now gone.
  *
- *   Application 10 is rebuilt from all Titan matches owned by application 10.
- *   Application 20 only adds or removes application 10 from its saved lists.
- *   Application 30 only adds or removes application 10 from its saved lists.
- *   Application 40 only adds or removes application 10 from its saved lists.
+ * With the default limits, application 10 gets:
+ *   similar_application_ids = [20, 30, 40] because each has at least 1 match
+ *   similar_case_ids        = [30, 40] because each has at least 2 matches
+ *   tah_case_ids            = [40] because it has at least 3 matches
  *
- * The function does not read every Titan match owned by applications 20, 30,
- * and 40. Their other saved relationships stay unchanged. This follows the old
- * Case Similarity behavior and avoids rebuilding a large connected network.
+ * Every relationship is saved in both directions. For example, application 10
+ * contains application 50, and application 50 also contains application 10.
+ * If application 50's matching document or sentences are deleted, the current
+ * Titan matches no longer connect applications 10 and 50. This refresh removes
+ * 50 from application 10 and removes 10 from application 50, including their
+ * similar-case and TAH lists when previously present. Application 50 may still
+ * match applications 60 and 70, so those unrelated relationships are not removed.
  *
  * This function does not commit. The Python service commits the transaction.
  */
@@ -82,54 +96,49 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    /* Every application whose saved row may change during this refresh. */
     affected_application_ids INTEGER[];
+    /* One ID from the list above, used while rows are locked in order. */
     affected_application_id INTEGER;
 BEGIN
     /*
-     * Make one list containing the source and every target row that needs a patch.
+     * STEP 1: Find every application row that may need to change.
      *
-     * Example:
-     *   Source application: 100
-     *   Current matches: [200, 300]
-     *   Previous saved matches: [300, 400]
-     *   Final affected list: [100, 200, 300, 400]
-     *
-     * Application 400 is still included even though it no longer matches.
-     * Its old connection to application 100 must be removed.
+     * In the running example, current matches are [20, 30, 40] and the old
+     * saved list also contains 50. The result is [10, 20, 30, 40, 50]. We keep
+     * 50 in this list so its old reverse relationship to 10 can be removed.
      */
-    -- Put the application IDs into one sorted list. UNION removes duplicates.
+    -- ARRAY_AGG makes one sorted array. UNION removes duplicate IDs.
     SELECT ARRAY_AGG(candidate.application_id ORDER BY candidate.application_id)
     INTO affected_application_ids
     FROM (
-        -- Start with the application that is being processed.
-        -- Example: processing application 100 adds 100 to the list.
+        -- Always include the source. In the example, this adds application 10.
         SELECT p_source_application_id AS application_id
 
         UNION
 
-        -- Add applications that currently match the source application.
+        -- Add every application that currently has a sentence matching the source.
         SELECT DISTINCT target_owner.application_id
         FROM tsp.titan_matches AS source_match
-        -- Example: {"5001": 0.10, "5002": 0.20} becomes global IDs 5001 and 5002.
+        -- jsonb_object_keys changes {"5001": 0.10, "5002": 0.20} into IDs 5001 and 5002.
         CROSS JOIN LATERAL jsonb_object_keys(source_match.matches) AS target(target_global_id)
-        -- global_id is the first part of the Titan match primary key, so this
-        -- lookup reads only the target rows instead of scanning the whole table.
+        -- Use each target global ID to find the application that owns that sentence.
         JOIN tsp.titan_matches AS target_owner
             ON target_owner.global_id = target.target_global_id::INTEGER
         JOIN tsp.text_similarity_input AS target_input
             ON target_input.application_id = target_owner.application_id
            AND target_input.analysis_group = p_analysis_group
-        -- Read matches only from the source application.
+        -- Read sentence matches owned by the source application only.
         WHERE source_match.application_id = p_source_application_id
-          -- Do not add the source application as its own match.
+          -- An application must never be listed as matching itself.
           AND target_owner.application_id <> p_source_application_id
 
         UNION
 
-        -- Add applications from the old summary so removed matches can be cleared.
+        -- Include old matches so relationships that disappeared can be removed.
         SELECT previous_target.application_id::INTEGER
         FROM tsp.titan_similar_cases AS previous_summary
-        -- Example: [200, 300] becomes one row for 200 and one row for 300.
+        -- jsonb_array_elements_text changes [30, 40, 50] into three SQL rows.
         CROSS JOIN LATERAL jsonb_array_elements_text(
             previous_summary.similar_application_ids
         ) AS previous_target(application_id)
@@ -137,11 +146,11 @@ BEGIN
     ) AS candidate;
 
     /*
-     * Lock each affected application in number order.
+     * STEP 2: Lock affected applications in the same order every time.
      *
-     * Example: two workers both need applications 100 and 200. Both workers
-     * ask for 100 first and 200 second. One worker waits instead of both workers
-     * blocking each other. This lock also works when a summary row is new.
+     * Example: two workers both need applications 10 and 20. Both lock 10 first
+     * and 20 second. One worker waits for the other instead of creating a
+     * deadlock. Advisory locks also work when a summary row does not exist yet.
      */
     FOREACH affected_application_id IN ARRAY affected_application_ids
     LOOP
@@ -153,7 +162,12 @@ BEGIN
         );
     END LOOP;
 
-    /* Lock summary rows that already exist until this transaction finishes. */
+    /*
+     * STEP 3: Lock summary rows that already exist.
+     *
+     * The rows stay locked until the transaction finishes. Other workers can
+     * still read them, but they must wait before changing the same rows.
+     */
     PERFORM summary.application_id
     FROM tsp.titan_similar_cases AS summary
     WHERE summary.application_id = ANY(affected_application_ids)
@@ -162,11 +176,11 @@ BEGIN
 
     WITH source_sentence_pairs AS (
         /*
-         * Read only sentence pairs owned by the source application.
+         * STEP 4: Expand the source application's JSONB matches into sentence pairs.
          *
          * Example: source global ID 10 matches target global IDs 50 and 60.
-         * This creates (10, 50) and (10, 60). DISTINCT removes the same pair
-         * if it appears again in another bucket row.
+         * This produces two rows: (10, 50) and (10, 60). DISTINCT keeps only
+         * one copy if the same pair appears more than once.
          */
         SELECT DISTINCT
             source_match.global_id AS source_global_id,
@@ -177,10 +191,11 @@ BEGIN
     ),
     target_owners AS (
         /*
-         * Find the application that owns each target sentence.
+         * STEP 5: Find which application owns each matching target sentence.
          *
-         * The join starts with the small source_sentence_pairs result. It does
-         * not build an owner list for every global ID in Titan matches.
+         * Example: target global IDs 50 and 60 belong to application 20, so
+         * both sentence pairs count toward application 10 matching application
+         * 20. Targets outside the requested analysis group are ignored.
          */
         SELECT DISTINCT target_match.global_id, target_match.application_id
         FROM source_sentence_pairs AS sentence_pair
@@ -193,10 +208,10 @@ BEGIN
     ),
     source_match_counts AS (
         /*
-         * Count how many sentence pairs connect the source to each target.
+         * STEP 6: Count matching sentence pairs for each target application.
          *
-         * Example: application 100 has sentence pairs (10, 50), (11, 51), and
-         * (12, 52) with application 200. Its count for application 200 is 3.
+         * Example: application 10 has pairs (100, 500), (101, 501), and
+         * (102, 502) with application 40. Application 40 gets a count of 3.
          */
         SELECT
             target_owners.application_id AS target_application_id,
@@ -208,20 +223,20 @@ BEGIN
     ),
     rebuilt_source_summary AS (
         /*
-         * Fully rebuild only the source application's three lists.
+         * STEP 7: Build all three lists for the source application.
          *
-         * Example with limits 2 and 3:
-         *   App 200 has 1 sentence match: add it only to similar_application_ids.
-         *   App 300 has 2 sentence matches: also add it to similar_case_ids.
-         *   App 400 has 3 sentence matches: also add it to tah_case_ids.
+         * Running example with limits 2 and 3:
+         *   App 20 has 1 match, so it goes in similar_application_ids only.
+         *   App 30 has 2 matches, so it also goes in similar_case_ids.
+         *   App 40 has 3 matches, so it also goes in tah_case_ids.
          *
-         * HAVING prevents an empty source row when no target application was
-         * found. The smaller case and TAH lists can still be empty because they
-         * require two and three matching sentence pairs.
+         * HAVING stops the function from creating an empty source row when no
+         * matches exist. The case and TAH lists are allowed to be empty.
          */
         SELECT
             p_source_application_id AS application_id,
             p_analysis_group AS analysis_group,
+            /* List every application with at least one matching sentence. */
             COALESCE(
                 jsonb_agg(
                     source_match_counts.target_application_id
@@ -231,6 +246,7 @@ BEGIN
                 ),
                 '[]'::JSONB
             ) AS similar_application_ids,
+            /* List applications that meet the similar-case limit, normally 2. */
             COALESCE(
                 jsonb_agg(
                     source_match_counts.target_application_id
@@ -240,6 +256,7 @@ BEGIN
                 ),
                 '[]'::JSONB
             ) AS similar_case_ids,
+            /* List applications that meet the TAH limit, normally 3. */
             COALESCE(
                 jsonb_agg(
                     source_match_counts.target_application_id
@@ -254,10 +271,11 @@ BEGIN
     ),
     target_rows AS (
         /*
-         * Load the existing target summaries and the source-to-target count.
+         * STEP 8: Load each target's saved lists and its new count with the source.
          *
-         * A target can be here because it matches now or because it matched
-         * before and application 10 must be removed from its old lists.
+         * A target appears here when it matches now or matched before. In the
+         * running example, app 50 has no new count, but it is loaded so app 10
+         * can be removed from app 50's old lists.
          */
         SELECT
             affected.application_id,
@@ -278,16 +296,16 @@ BEGIN
     ),
     patched_target_summaries AS (
         /*
-         * Change only the source application's membership in each target row.
+         * STEP 9: Update only the source ID inside each target application's lists.
          *
-         * Example: app 20 already has [5, 8, 30]. When app 10 now has two
-         * sentence matches with app 20, the result is [5, 8, 10, 30]. The
-         * relationships to 5, 8, and 30 are not recalculated or removed.
-         * An invalid self-reference, such as app 20 containing 20, is removed.
+         * Example: app 30 already has [5, 8]. It now has two sentence matches
+         * with app 10, so its similar_case_ids become [5, 8, 10]. IDs 5 and 8
+         * stay unchanged. If app 10 no longer qualifies, only 10 is removed.
          */
         SELECT
             target_row.application_id,
             p_analysis_group AS analysis_group,
+            /* Add/remove the source in the target's one-or-more-match list. */
             COALESCE(
                 (
                     SELECT jsonb_agg(candidate.application_id ORDER BY candidate.application_id)
@@ -307,6 +325,7 @@ BEGIN
                 ),
                 '[]'::JSONB
             ) AS similar_application_ids,
+            /* Add/remove the source in the target's similar-case list. */
             COALESCE(
                 (
                     SELECT jsonb_agg(candidate.application_id ORDER BY candidate.application_id)
@@ -326,6 +345,7 @@ BEGIN
                 ),
                 '[]'::JSONB
             ) AS similar_case_ids,
+            /* Add/remove the source in the target's TAH list. */
             COALESCE(
                 (
                     SELECT jsonb_agg(candidate.application_id ORDER BY candidate.application_id)
@@ -346,11 +366,12 @@ BEGIN
                 '[]'::JSONB
             ) AS tah_case_ids
         FROM target_rows AS target_row
-        -- Do not create an empty row only because an old source list named it.
+        -- Keep an existing target or a target that has a current sentence match.
         WHERE target_row.summary_exists
            OR target_row.sentence_match_count IS NOT NULL
     ),
     summaries_to_save AS (
+        /* STEP 10: Put the rebuilt source and updated target rows into one list. */
         SELECT * FROM rebuilt_source_summary
 
         UNION ALL
@@ -359,9 +380,10 @@ BEGIN
     ),
     summaries_with_matches AS (
         /*
-         * Keep a row only when at least one of its lists contains an application.
-         * similar_application_ids is normally the largest list. Checking all
-         * three also protects older rows whose lists may not be consistent.
+         * STEP 11: Keep only summaries that still contain a relationship.
+         *
+         * Example: if app 50 contained only app 10 and that match disappeared,
+         * all three lists are empty and app 50 is not saved again.
          */
         SELECT *
         FROM summaries_to_save
@@ -371,9 +393,10 @@ BEGIN
     ),
     deleted_empty_summaries AS (
         /*
-         * Remove an older row when its last relationship disappeared.
-         * Example: app 20 contained only app 10. If that relationship is gone,
-         * app 20 should have no summary row instead of three empty lists.
+         * STEP 12: Delete an old row after its last relationship disappears.
+         *
+         * In the running example, app 50 is deleted if app 10 was its only
+         * relationship. We do not keep a database row with three empty lists.
          */
         DELETE FROM tsp.titan_similar_cases AS existing
         WHERE existing.application_id = ANY(affected_application_ids)
@@ -385,8 +408,10 @@ BEGIN
         RETURNING existing.application_id
     )
     /*
-     * Replace the source lists. For targets, these values already contain their
-     * old relationships plus or minus only the source application.
+     * STEP 13: Insert new summaries or replace existing summaries.
+     *
+     * The source row contains fully rebuilt lists. Each target row contains its
+     * old relationships with only the source ID added or removed.
      */
     INSERT INTO tsp.titan_similar_cases (
         application_id,
@@ -404,7 +429,7 @@ BEGIN
         summary.tah_case_ids,
         NOW()
     FROM summaries_with_matches AS summary
-    /* Use the primary-key column so this upsert does not depend on PostgreSQL's generated constraint name. */
+    /* application_id is the primary key, so an existing row is updated. */
     ON CONFLICT (application_id)
     DO UPDATE SET
         analysis_group = EXCLUDED.analysis_group,
@@ -414,9 +439,10 @@ BEGIN
         last_modified = NOW();
 
     /*
-     * Return every affected application to the service, including an application
-     * whose database row was removed. Removed rows are returned as empty values
-     * so the service can report zero counts and publish a changed TAH=false event.
+     * STEP 14: Return the final value for every application that was checked.
+     *
+     * A deleted row is returned with empty lists, zero counts, and is_tah=false.
+     * This lets the service publish a TAH change from true to false when needed.
      */
     RETURN QUERY
     SELECT

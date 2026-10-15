@@ -5,9 +5,48 @@ from sqlalchemy.orm import Session
 
 from case_similarity_completed.opensearch.contracts import KafkaDelivery, KafkaEvent
 
-# Build Kafka events only when an application has a new TAH value.
-# Example: the saved value is false and the current value is true, so one event
-# is returned. If both values are true, nothing is returned.
+# Return only applications whose current TAH value needs to be published.
+#
+# Input:
+#   {
+#       "application_ids": [100, 200],
+#       "kafka_environment": "prod"
+#   }
+#
+# Tables used:
+#   tsp.text_similarity_input supplies application_id, a_number, and
+#   analysis_group.
+#   tsp.titan_similar_cases supplies the current is_tah value. A missing summary
+#   row is treated as is_tah=false.
+#   landing.global_document_registry supplies the receipt number used as the
+#   Kafka message key.
+#   validation.kafka_ta_hit_lookup supplies the last Kafka-confirmed is_tah
+#   value for the receipt number and Kafka environment.
+#
+# Example database values:
+#   Application 100 currently has is_tah=true, while its last Kafka-confirmed
+#   value is false. The query returns application 100 so the new true value can
+#   be published. The reverse change also works: if the current value is false
+#   and the Kafka-confirmed value is true, the new false value is returned.
+#
+#   Application 200 currently has is_tah=true, and its last Kafka-confirmed
+#   value is also true. The query skips application 200 because Kafka already
+#   received its current value.
+#
+# Output:
+#   Assume application 100 has a_number=900001, analysis_group="Asylee", and
+#   receipt_number="A100000001". The query returns:
+#
+#   {
+#       "receipt_number": "A100000001",
+#       "application_id": 100,
+#       "a_number": 900001,
+#       "analysis_group": "Asylee",
+#       "is_tah": true
+#   }
+#
+#   Application 200 is not included in the output because its TAH value did not
+#   change. An application is also returned when no Kafka-confirmed value exists.
 LOAD_CHANGED_TAH_EVENTS = text(
     """
     -- One application can have many document rows. Keep one copy of its values.
@@ -63,8 +102,36 @@ LOAD_CHANGED_TAH_EVENTS = text(
     """
 )
 
-# Save Kafka's delivery result. A later run reads this value and avoids sending
-# the same TAH value again.
+# Save the TAH value only after Kafka confirms delivery.
+#
+# Input:
+#   {
+#       "receipt_number": "A100000001",
+#       "kafka_environment": "prod",
+#       "is_tah": true,
+#       "kafka_ts": "2026-10-14T15:30:00+00:00",
+#       "kafka_partition": 2,
+#       "kafka_offset": 500
+#   }
+#
+# Table used:
+#   validation.kafka_ta_hit_lookup stores the last Kafka-confirmed TAH value
+#   and broker location for each receipt number and Kafka environment.
+#
+# Saved row:
+#   {
+#       "receipt_number": "A100000001",
+#       "kafka_environment": "prod",
+#       "is_tah": true,
+#       "kafka_ts": "2026-10-14T15:30:00+00:00",
+#       "kafka_partition": 2,
+#       "kafka_offset": 500
+#   }
+#
+# A new receipt and environment creates a row. If the same receipt and
+# environment already exist, the confirmed TAH value, timestamp, partition,
+# and offset replace the older delivery details. LOAD_CHANGED_TAH_EVENTS reads
+# this row later and skips publishing an unchanged TAH value.
 SAVE_KAFKA_DELIVERY = text(
     """
     INSERT INTO validation.kafka_ta_hit_lookup (

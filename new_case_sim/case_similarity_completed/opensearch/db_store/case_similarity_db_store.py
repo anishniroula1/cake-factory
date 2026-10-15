@@ -18,14 +18,44 @@ LOAD_DOCUMENT = text(
     """
 )
 
-# This database function fully rebuilds the source application's summary.
-# Connected applications keep their existing summaries; the function only adds
-# or removes the source application from their three saved lists.
+# Rebuild one source application's case summary and update the reverse
+# relationship on every affected target application.
 #
-# Example: application 100 matches applications 200 and 300. The function
-# rebuilds 100, then mirrors only the relationship to 100 on rows 200 and 300.
-# If 100 has no match, no summary row is saved and the function returns empty
-# lists so the service can still complete the document.
+# Input:
+#   {
+#       "source_application_id": 100,
+#       "analysis_group": "Asylee",
+#       "similar_case_threshold": 2,
+#       "tah_case_threshold": 3
+#   }
+#
+# Tables used:
+#   tsp.titan_matches supplies sentence-level relationships and target global
+#   IDs. tsp.text_similarity_input confirms target applications belong to the
+#   requested analysis group. tsp.titan_similar_cases supplies existing lists
+#   and receives the rebuilt source and reverse target summaries.
+#
+# Example match counts:
+#   Application 100 has 1 matching sentence with application 200, 2 with
+#   application 300, and 3 with application 400.
+#
+# Output for the source application:
+#   {
+#       "application_id": 100,
+#       "similar_application_ids": [200, 300, 400],
+#       "similar_case_ids": [300, 400],
+#       "similar_case_count": 2,
+#       "tah_case_ids": [400],
+#       "tah_case_count": 1,
+#       "is_tah": true
+#   }
+#
+# The function also returns reverse rows. Application 200 receives 100 only in
+# similar_application_ids. Application 300 receives 100 in both
+# similar_application_ids and similar_case_ids. Application 400 receives 100
+# in all three lists. Existing relationships to other applications remain.
+# When application 100 has no matches, its stored summary is removed and it is
+# returned with empty lists, zero counts, and is_tah=false.
 REFRESH_CASE_SUMMARIES = text(
     """
     SELECT
