@@ -89,6 +89,17 @@ def test_kafka_database_store_reads_and_saves_delivery():
                     "a_number": 900001,
                     "analysis_group": "Asylee",
                     "is_tah": True,
+                    "published_is_tah": False,
+                    "decision": "PUBLISH_CHANGED_VALUE",
+                },
+                {
+                    "receipt_number": None,
+                    "application_id": 200,
+                    "a_number": 900002,
+                    "analysis_group": "Asylee",
+                    "is_tah": False,
+                    "published_is_tah": None,
+                    "decision": "MISSING_GDR_RECEIPT",
                 }
             ]
         )
@@ -96,12 +107,20 @@ def test_kafka_database_store_reads_and_saves_delivery():
     save_session = SessionFake()
     store = KafkaEventDBStore(SessionFactoryFake([load_session, save_session]))
 
-    event = store.load_changed_tah_events([100], "local")[0]
+    selection = store.load_tah_event_selection([100, 200], "local")
+    event = selection.events[0]
     store.save_kafka_delivery(event, KafkaDelivery("2026-10-10T12:00:00+00:00", 1, 20), "local")
 
-    assert (event.receipt_number, event.application_id, len(save_session.executions), save_session.commits) == (
+    assert (
+        event.receipt_number,
+        event.application_id,
+        selection.skipped_events[0].reason,
+        len(save_session.executions),
+        save_session.commits,
+    ) == (
         "ABC123",
         100,
+        "MISSING_GDR_RECEIPT",
         1,
         1,
     )
@@ -115,7 +134,8 @@ def test_database_stores_return_empty_results_and_report_missing_documents(servi
     with pytest.raises(PermanentDataError, match="tsp_id=999"):
         case_store.load_document_context(999)
 
-    assert kafka_store.load_changed_tah_events([], "local") == []
+    selection = kafka_store.load_tah_event_selection([], "local")
+    assert (selection.events, selection.skipped_events) == ([], [])
 
 
 def test_retry_repeats_only_the_failed_operation():

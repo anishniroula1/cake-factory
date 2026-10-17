@@ -80,6 +80,25 @@ class KafkaEvent:
 
 
 @dataclass(frozen=True)
+class SkippedKafkaEvent:
+    """Explain why an affected application did not produce a Kafka event."""
+
+    application_id: int
+    receipt_number: str | None
+    reason: str
+    current_is_tah: bool
+    published_is_tah: bool | None
+
+
+@dataclass(frozen=True)
+class KafkaEventSelection:
+    """Hold the Kafka events to publish and the candidates that were skipped."""
+
+    events: list[KafkaEvent]
+    skipped_events: list[SkippedKafkaEvent]
+
+
+@dataclass(frozen=True)
 class KafkaDelivery:
     """Kafka delivery values saved after the broker accepts an event."""
 

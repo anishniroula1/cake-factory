@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from case_similarity_completed.opensearch.contracts import SkippedKafkaEvent
 from case_similarity_completed.opensearch.errors import KafkaPublishError, QueueSendError
 from case_similarity_completed.opensearch.handlers.case_similarity_handler import CaseSimilarityHandler
 from case_similarity_completed.opensearch.kafka_processor import KafkaProcessor
@@ -77,11 +78,23 @@ def test_kafka_processor_skips_historical_flow(service_config):
 
 
 def test_live_kafka_flow_handles_no_changes_and_missing_producer(service_config):
+    logger = LoggerFake()
     no_change_processor = KafkaProcessor(
-        service_config, KafkaProducerFake(), KafkaEventDBStoreFake(events=[]), LoggerFake()
+        service_config,
+        KafkaProducerFake(),
+        KafkaEventDBStoreFake(
+            events=[],
+            skipped_events=[
+                SkippedKafkaEvent(100, "ABC123", "UNCHANGED_TAH_VALUE", True, True),
+                SkippedKafkaEvent(200, None, "MISSING_GDR_RECEIPT", False, None),
+            ],
+        ),
+        logger,
     )
 
     assert no_change_processor.publish_changed_tah_events([100]) == 0
+    assert any("already matches" in message for level, message in logger.messages if level == "info")
+    assert any("GDR receipt" in message for level, message in logger.messages if level == "warning")
 
     with pytest.raises(KafkaPublishError, match="producer is unavailable"):
         KafkaProcessor(service_config, None, KafkaEventDBStoreFake(), LoggerFake()).publish_changed_tah_events([100])

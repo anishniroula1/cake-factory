@@ -1,11 +1,12 @@
 import json
+from collections import defaultdict
 from datetime import UTC, datetime
 
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
 from case_similarity_completed.opensearch import constants
 from case_similarity_completed.opensearch.config import Config
-from case_similarity_completed.opensearch.contracts import KafkaDelivery, KafkaEvent
+from case_similarity_completed.opensearch.contracts import KafkaDelivery, KafkaEvent, SkippedKafkaEvent
 from case_similarity_completed.opensearch.db_store.kafka_event_db_store import KafkaEventDBStore
 from case_similarity_completed.opensearch.errors import KafkaPublishError
 from case_similarity_completed.opensearch.retry import retry_operation
@@ -47,20 +48,22 @@ class KafkaProcessor:
         if self.kafka_producer is None:
             raise KafkaPublishError("TAH Kafka publishing is enabled, but the producer is unavailable")
 
-        # The lookup table removes unchanged TAH values before Kafka work starts.
-        events = retry_operation(
-            "Load changed TAH events",
-            self.kafka_event_db_store.load_changed_tah_events,
+        # PostgreSQL returns both the events to publish and an explanation for
+        # every application that cannot or does not need to publish an event.
+        selection = retry_operation(
+            "Load TAH Kafka event selection",
+            self.kafka_event_db_store.load_tah_event_selection,
             application_ids,
             self.config.kafka_environment,
             wait_seconds=constants.RETRY_SECONDS,
             max_attempts=constants.MAX_ATTEMPTS,
             custom_logger=self.logger,
         )
+        self._log_skipped_events(selection.skipped_events)
 
         # Publish and confirm one event at a time. A temporary failure retries only
         # the event that failed instead of reloading all application summaries.
-        for event in events:
+        for event in selection.events:
             retry_operation(
                 f"Publish TAH event for application_id={event.application_id}",
                 self._publish_event,
@@ -69,11 +72,58 @@ class KafkaProcessor:
                 max_attempts=constants.MAX_ATTEMPTS,
                 custom_logger=self.logger,
             )
-        if events:
-            self.logger.info(f"Published {len(events)} changed TAH event(s) to Kafka.")
+        if selection.events:
+            self.logger.info(f"Published {len(selection.events)} new or changed TAH event(s) to Kafka.")
         else:
-            self.logger.info("No changed TAH value needed a Kafka event.")
-        return len(events)
+            self.logger.info("No TAH Kafka event was published. The selection reason is logged above.")
+        return len(selection.events)
+
+    def _log_skipped_events(self, skipped_events: list[SkippedKafkaEvent]) -> None:
+        """Log grouped reasons explaining why Kafka candidates were skipped.
+
+        Input: two unchanged applications and one application missing a GDR
+        receipt. Output: two compact log messages containing counts and sample
+        application IDs instead of one message for every database row.
+        """
+
+        events_by_reason = defaultdict(list)
+        for skipped_event in skipped_events:
+            events_by_reason[skipped_event.reason].append(skipped_event)
+
+        reason_messages = {
+            "MISSING_TEXT_SIMILARITY_INPUT": "no text_similarity_input row was found",
+            "MISSING_GDR_RECEIPT": "the a_number did not resolve to a GDR receipt number",
+            "RECEIPT_HAS_MULTIPLE_APPLICATIONS": "the receipt number belongs to multiple affected applications",
+            "UNCHANGED_TAH_VALUE": "the current TAH value already matches the last Kafka-confirmed value",
+        }
+        warning_reasons = {
+            "MISSING_TEXT_SIMILARITY_INPUT",
+            "MISSING_GDR_RECEIPT",
+            "RECEIPT_HAS_MULTIPLE_APPLICATIONS",
+        }
+
+        for reason in sorted(events_by_reason):
+            matching_events = events_by_reason[reason]
+            application_ids = sorted({event.application_id for event in matching_events})
+            receipt_numbers = sorted(
+                {event.receipt_number for event in matching_events if event.receipt_number is not None}
+            )
+            tah_values = sorted(
+                {
+                    f"current={event.current_is_tah}, published={event.published_is_tah}"
+                    for event in matching_events
+                }
+            )
+            message = (
+                f"Skipped {len(matching_events)} TAH Kafka candidate(s) because "
+                f"{reason_messages.get(reason, reason.lower())}. "
+                f"Application IDs: {application_ids[:10]}. Receipt numbers: {receipt_numbers[:10]}. "
+                f"TAH values: {tah_values}."
+            )
+            if reason in warning_reasons:
+                self.logger.warning(message)
+            else:
+                self.logger.info(message)
 
     def _publish_event(self, event: KafkaEvent) -> None:
         """Publish one TAH event and save its confirmed broker location.

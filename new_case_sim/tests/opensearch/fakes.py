@@ -1,4 +1,10 @@
-from case_similarity_completed.opensearch.contracts import CaseSummary, DocumentContext, KafkaEvent
+from case_similarity_completed.opensearch.contracts import (
+    CaseSummary,
+    DocumentContext,
+    KafkaEvent,
+    KafkaEventSelection,
+    SkippedKafkaEvent,
+)
 from case_similarity_completed.opensearch.errors import OperationFailedError
 
 
@@ -90,12 +96,17 @@ class DependenciesFake:
 
 
 class KafkaEventDBStoreFake:
-    def __init__(self, events: list[KafkaEvent] | None = None) -> None:
+    def __init__(
+        self,
+        events: list[KafkaEvent] | None = None,
+        skipped_events: list[SkippedKafkaEvent] | None = None,
+    ) -> None:
         self.events = events if events is not None else [KafkaEvent("ABC123", 100, 900001, "Asylee", True)]
+        self.skipped_events = skipped_events or []
         self.deliveries = []
 
-    def load_changed_tah_events(self, application_ids, kafka_environment):
-        return self.events
+    def load_tah_event_selection(self, application_ids, kafka_environment):
+        return KafkaEventSelection(events=self.events, skipped_events=self.skipped_events)
 
     def save_kafka_delivery(self, event, delivery, kafka_environment):
         self.deliveries.append((event, delivery, kafka_environment))
