@@ -82,13 +82,13 @@ class KafkaProcessor:
         """Log grouped reasons explaining why Kafka candidates were skipped.
 
         Input: two unchanged applications and one application missing a GDR
-        receipt. Output: two compact log messages containing counts and sample
-        application IDs instead of one message for every database row.
+        receipt. Output: two compact messages containing only the count and
+        reason. Candidate values can be inspected with the diagnostic SQL.
         """
 
-        events_by_reason = defaultdict(list)
+        event_count_by_reason = defaultdict(int)
         for skipped_event in skipped_events:
-            events_by_reason[skipped_event.reason].append(skipped_event)
+            event_count_by_reason[skipped_event.reason] += 1
 
         reason_messages = {
             "MISSING_TEXT_SIMILARITY_INPUT": "no text_similarity_input row was found",
@@ -102,23 +102,10 @@ class KafkaProcessor:
             "RECEIPT_HAS_MULTIPLE_APPLICATIONS",
         }
 
-        for reason in sorted(events_by_reason):
-            matching_events = events_by_reason[reason]
-            application_ids = sorted({event.application_id for event in matching_events})
-            receipt_numbers = sorted(
-                {event.receipt_number for event in matching_events if event.receipt_number is not None}
-            )
-            tah_values = sorted(
-                {
-                    f"current={event.current_is_tah}, published={event.published_is_tah}"
-                    for event in matching_events
-                }
-            )
+        for reason in sorted(event_count_by_reason):
             message = (
-                f"Skipped {len(matching_events)} TAH Kafka candidate(s) because "
-                f"{reason_messages.get(reason, reason.lower())}. "
-                f"Application IDs: {application_ids[:10]}. Receipt numbers: {receipt_numbers[:10]}. "
-                f"TAH values: {tah_values}."
+                f"Skipped {event_count_by_reason[reason]} TAH Kafka candidate(s) because "
+                f"{reason_messages.get(reason, reason.lower())}."
             )
             if reason in warning_reasons:
                 self.logger.warning(message)
