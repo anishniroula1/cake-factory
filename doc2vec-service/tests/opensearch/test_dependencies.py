@@ -122,7 +122,7 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
         "pg_db_port": 5432,
         "pool_size": 20,
         "max_overflow": 10,
-        "dynamic_credentials_file": None,
+        "use_dynamic_credentials": False,
         "application_name": "doc2vec_opensearch",
         "logger": logger,
     }

@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from time import perf_counter
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, load_only
@@ -41,6 +42,7 @@ class TrainModelHandler:
         are created in memory and are not saved to sentences_vector.
         """
 
+        started_at = perf_counter()
         total = retry_operation(
             "Count model-training sentences",
             self._count_sentences,
@@ -118,6 +120,7 @@ class TrainModelHandler:
             f"Model-training processing completed. Source count: {source_count}. "
             f"Unique count: {len(seen_keys)}. Indexed count: {indexed_count}."
         )
+        self.logger.info(f"Model-training processing took {perf_counter() - started_at:.2f} seconds to complete.")
         return {
             "reason": "TRAIN_MODEL",
             "tsp_id": tsp_id,

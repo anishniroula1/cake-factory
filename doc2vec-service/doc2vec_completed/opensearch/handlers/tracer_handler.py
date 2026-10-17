@@ -2,6 +2,7 @@ import json
 from array import array
 from collections.abc import Callable
 from datetime import UTC, datetime
+from time import perf_counter
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -38,6 +39,7 @@ class TracerHandler:
         Output: {"reason": "TRACER", "source_count": 2, "indexed_count": 2}
         """
 
+        started_at = perf_counter()
         unique_ids = list(dict.fromkeys(tracer_sentence_ids))
         if not unique_ids:
             self.logger.error("No tracer_sentence_ids were supplied for processing.")
@@ -103,6 +105,7 @@ class TracerHandler:
             f"Tracer processing completed. Source count: {len(unique_ids)}. "
             f"Indexed count: {indexed_count}."
         )
+        self.logger.info(f"Tracer processing took {perf_counter() - started_at:.2f} seconds to complete.")
         return {
             "reason": "TRACER",
             "source_count": len(unique_ids),

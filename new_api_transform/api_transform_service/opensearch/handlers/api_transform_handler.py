@@ -1,3 +1,5 @@
+from time import perf_counter
+
 from api_transform_service.opensearch import constants
 from api_transform_service.opensearch.config import Config
 from api_transform_service.opensearch.contracts import TransformResult, TspId
@@ -44,6 +46,7 @@ class ApiTransformHandler:
         Output: counts for that source message, its application, and Kafka events.
         """
 
+        started_at = perf_counter()
         try:
             reference = self._retry(
                 "Load the application for API Transform", self.application_db_store.load_application_reference, tsp_id
@@ -55,6 +58,7 @@ class ApiTransformHandler:
             self.logger.info(
                 f"API Transform completed one document, one application, and {published_count} Kafka event(s)."
             )
+            self.logger.info(f"API Transform took {perf_counter() - started_at:.2f} seconds to complete.")
             return {"source_message_count": 1, "application_count": 1, "kafka_event_count": published_count}
         except ApiTransformError as error:
             self.transmission_db_store.save_etl_error("API Transform failed", error)

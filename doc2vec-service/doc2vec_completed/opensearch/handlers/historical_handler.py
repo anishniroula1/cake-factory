@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from time import perf_counter
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, load_only
@@ -58,6 +59,7 @@ class HistoricalHandler:
         rows disappear before they can be loaded.
         """
 
+        started_at = perf_counter()
         self.logger.info("Sentence processing started.")
         total = retry_operation(
             "Count document sentences",
@@ -146,6 +148,7 @@ class HistoricalHandler:
             f"Sentence processing completed. Source count: {total}. "
             f"Indexed count: {indexed}."
         )
+        self.logger.info(f"Sentence processing took {perf_counter() - started_at:.2f} seconds to complete.")
 
         return {
             "reason": "HISTORICAL",

@@ -50,6 +50,7 @@ class Config:
     database_pool_size: int
     dynamic_credential_file: str
     database_max_overflow: int
+    environment: str
 
     # OpenSearch
     aws_region: str
@@ -88,8 +89,8 @@ class Config:
         secrets = VaultSecrets()
         config = cls(
             # Read the PostgreSQL login from Vault and pool sizes from env.
-            pg_db_user=str(secrets.get("pgUser") or ""),
-            pg_db_password=str(secrets.get("pgPassword") or ""),
+            pg_db_user=str(secrets.get("pgUser") or secrets.get("pgDynamicUser") or ""),
+            pg_db_password=str(secrets.get("pgPassword") or secrets.get("pgDynamicPassword") or ""),
             pg_db_host=str(secrets.get("pgHost") or ""),
             pg_db_database=str(secrets.get("pgDatabase") or ""),
             pg_db_port=int(secrets.get("pgPort") or 5432),
@@ -100,6 +101,7 @@ class Config:
                 10,
                 minimum=0,
             ),
+            environment=(os.getenv("ENVIRONMENT", "local").strip().lower() or "local"),
             # Read values needed to connect to the correct OpenSearch indexes.
             aws_region=os.getenv("AWS_DEFAULT_REGION", "us-east-1").strip(),
             opensearch_iam_access_role=os.getenv(

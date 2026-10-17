@@ -60,8 +60,8 @@ class Config:
         secrets = VaultSecrets()
         config = cls(
             # Database credentials
-            pg_db_user=str(secrets.get("pgUser") or ""),
-            pg_db_password=str(secrets.get("pgPassword") or ""),
+            pg_db_user=str(secrets.get("pgUser") or secrets.get("pgDynamicUser") or ""),
+            pg_db_password=str(secrets.get("pgPassword") or secrets.get("pgDynamicPassword") or ""),
             pg_db_host=str(secrets.get("pgHost") or ""),
             pg_db_database=str(secrets.get("pgDatabase") or ""),
             pg_db_port=int(secrets.get("pgPort") or 5432),
@@ -80,35 +80,22 @@ class Config:
         return config
 
     def validate(self) -> None:
-        """Validate settings required by PostgreSQL, OpenSearch, and SQS.
+        """Validate settings required by PostgreSQL, OpenSearch, and SQS."""
 
-        Input: the current Config instance, such as pg_db_port=5432 and
-        opensearch_host="search-sentences.us-east-1.es.amazonaws.com".
-
-        Validation runs during configuration creation so invalid deployment
-        values fail before the SQS processing loop starts.
-
-        Raises:
-            ValueError: If a required setting is missing or invalid.
-        """
-
-        if not self.pg_db_user:
-            raise ValueError("pgUser is required in Vault")
-        if not self.pg_db_password:
-            raise ValueError("pgPassword is required in Vault")
-        if not self.pg_db_host:
-            raise ValueError("pgHost is required in Vault")
-        if not self.pg_db_database:
-            raise ValueError("pgDatabase is required in Vault")
-        if not self.pg_db_port:
-            raise ValueError("pgPort is required in Vault")
+        required_values = {
+            "pgUser": self.pg_db_user,
+            "pgPassword": self.pg_db_password,
+            "pgHost": self.pg_db_host,
+            "pgDatabase": self.pg_db_database,
+            "pgPort": self.pg_db_port,
+            "OPENSEARCH_HOST": self.opensearch_host,
+            "AWS_RECEIVE_SQS_ENDPOINT": self.receive_sqs_endpoint,
+            "AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT": self.sent_sqs_endpoint,
+        }
+        missing = [name for name, value in required_values.items() if not value]
+        if missing:
+            raise ValueError(f"Missing required configuration: {', '.join(missing)}")
         if self.environment != "local" and not self.dynamic_credential_file:
             raise ValueError("VAULT_YAML_PATH is required outside the local environment")
         if self.opensearch_iam_access_role and not self.opensearch_iam_access_role.startswith("arn:"):
             raise ValueError("OPENSEARCH_IAM_ACCESS_ROLE must be an ARN")
-        if not self.opensearch_host:
-            raise ValueError("OPENSEARCH_HOST is required")
-        if not self.receive_sqs_endpoint:
-            raise ValueError("AWS_RECEIVE_SQS_ENDPOINT is required")
-        if not self.sent_sqs_endpoint:
-            raise ValueError("AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT is required")

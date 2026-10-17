@@ -1,6 +1,7 @@
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from time import perf_counter
 
 from opensearchpy import OpenSearch
 from sqlalchemy.orm import Session
@@ -64,6 +65,7 @@ class SentenceSimilarityHandler:
         The method returns None when occurrence or catalog data is not ready.
         """
 
+        started_at = perf_counter()
         self.logger.info("Sentence Similarity processing started.")
         if not self._wait_for_searchable_occurrences(tsp_id):
             return None
@@ -160,6 +162,7 @@ class SentenceSimilarityHandler:
             f"{saved_relationships} relationship(s) were saved, {tracers} tracer classification(s), "
             f"{form_languages} form-language classification(s), and {non_matchers} non-matcher classification(s)."
         )
+        self.logger.info(f"Sentence Similarity took {perf_counter() - started_at:.2f} seconds to complete.")
         return {
             "tsp_id": tsp_id,
             "source_count": total,

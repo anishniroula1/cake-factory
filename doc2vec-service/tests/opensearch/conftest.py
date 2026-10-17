@@ -20,6 +20,7 @@ def dependency_config():
         database_pool_size=20,
         database_max_overflow=10,
         dynamic_credential_file="",
+        environment="local",
         aws_region="us-east-1",
         aws_endpoint_url="",
         opensearch_host="search.example.com",
