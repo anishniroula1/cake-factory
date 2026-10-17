@@ -72,3 +72,58 @@ The expected result after deleting the lookup row is:
 Missing database mappings are warnings. An unchanged value is an informational
 message. Logs include candidate counts plus sample application IDs and receipt
 numbers without printing one line for every affected application.
+
+## Multiple receipt numbers
+
+Multiple different receipt numbers for one application do not cause a skip.
+Each receipt is checked separately and can produce its own Kafka event and
+`kafka_ta_hit_lookup` row.
+
+Example:
+
+| Receipt | Application | Result |
+|---|---:|---|
+| R1 | 100 | Send |
+| R2 | 100 | Send |
+
+A receipt is skipped only when that same receipt belongs to multiple affected
+applications:
+
+| Receipt | Application | Result |
+|---|---:|---|
+| R1 | 100 | Skip R1 |
+| R1 | 200 | Skip R1 |
+| R2 | 100 | R2 can still be sent |
+
+Use this query to check how many applications share one receipt:
+
+```sql
+SELECT
+    registry.receipt_number,
+    COUNT(DISTINCT input.application_id) AS application_count,
+    ARRAY_AGG(DISTINCT input.application_id ORDER BY input.application_id)
+        AS application_ids
+FROM tsp.text_similarity_input AS input
+JOIN landing.global_document_registry AS registry
+    ON registry.a_number = input.a_number
+WHERE registry.receipt_number = 'YOUR_RECEIPT_NUMBER'
+GROUP BY registry.receipt_number;
+```
+
+Use this query to list every receipt belonging to one application:
+
+```sql
+SELECT
+    input.application_id,
+    input.a_number,
+    COUNT(DISTINCT registry.receipt_number) AS receipt_count,
+    ARRAY_AGG(
+        DISTINCT registry.receipt_number
+        ORDER BY registry.receipt_number
+    ) AS receipt_numbers
+FROM tsp.text_similarity_input AS input
+JOIN landing.global_document_registry AS registry
+    ON registry.a_number = input.a_number
+WHERE input.application_id = YOUR_APPLICATION_ID
+GROUP BY input.application_id, input.a_number;
+```
