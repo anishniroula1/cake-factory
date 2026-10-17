@@ -1,3 +1,5 @@
+from time import perf_counter
+
 from case_similarity_completed.opensearch import constants
 from case_similarity_completed.opensearch.config import Config
 from case_similarity_completed.opensearch.contracts import ProcessResult, TspId
@@ -40,6 +42,8 @@ class CaseSimilarityHandler:
         only TAH values that are new or different from the last confirmed value.
         """
 
+        started_at = perf_counter()
+
         # First find the application and analysis group that own this document.
         context = retry_operation(
             "Load Case Similarity document values",
@@ -77,6 +81,7 @@ class CaseSimilarityHandler:
             f"{source_summary.similar_case_count} similar case(s), {source_summary.tah_case_count} TAH case(s), "
             f"and {kafka_event_count} Kafka event(s)."
         )
+        self.logger.info(f"Case Similarity took {perf_counter() - started_at:.2f} seconds to complete.")
         return {
             "tsp_id": tsp_id,
             "source_application_id": context.application_id,

@@ -1,83 +1,72 @@
-# Final Titan Sentence Matching Production Architecture
+# Titan Sentence Matching Production Plan
 
-## Goal
+## Purpose
 
-This plan focuses on two services:
+This is the current production plan for the Titan sentence flow. It covers
+DOC2Vec, Sentence Similarity, Case Similarity, and API Transform.
 
-1. DOC2Vec splits and saves document sentences.
-2. Sentence Similarity decides whether a sentence is allowed to match, finds
-   its matches, and saves both directions.
+The design uses OpenSearch for vector creation and semantic retrieval, and
+PostgreSQL for the final sentence and case relationships consumed by the rest
+of the application.
 
-There are four runtime OpenSearch indexes:
-
-1. `sentence_occurrences`: every sentence occurrence.
-2. `sentence_semantic_catalog_asylee`: one Titan vector per unique Asylee
-   sentence key.
-3. `sentence_semantic_catalog_refugee`: one Titan vector per unique Refugee
-   sentence key.
-4. `tracer_form_language_catalog`: tracer and form-language reference vectors.
-
-Sentence Similarity checks the small tracer and form-language catalog before
-it searches the larger catalog selected by the sentence's `analysis_group`.
-If the sentence is a
-non-matcher, the service saves no relationships and moves to the next
-sentence. This avoids an unnecessary main-catalog search.
-
-The Asylee and Refugee catalogs use the same trained 512-dimension Faiss
-IVF-SQ16 model. The model is trained once from representative data from both
-groups. Separate catalogs keep searches and saved non-matcher decisions inside
-the correct analysis group.
-
-The separate `sentence_semantic_training` index is used only to train that
-shared IVF-SQ16 model, so it is not counted as a runtime search index.
-
-Accepted relationships are written to the new `titan_matches` table. One
-row belongs to one sentence occurrence, and its JSONB list contains the
-matching occurrences. This keeps the data shape familiar to API Transform and
-Case Similarity while OpenSearch becomes the source of vector matching.
-
-DOC2Vec still creates and saves a stable `sentence_key` for every sentence.
-The key deduplicates vectors in OpenSearch now and prepares the data for a
-future sentence-key relationship table after the first production release is
-stable.
-
-## Simple flow
+## Final service flow
 
 ```text
-DOC2Vec receives tsp_id
-    -> Live: load the document text and split it into sentences
-    -> Historical: load the sentences already saved in sentences_vector
-    -> Normalize each sentence and create or reuse sentence_key
-    -> Live: insert the sentences and receive every global_id
-    -> Historical: keep the existing global_id values
-    -> Reuse an existing Titan embedding for the global_id when available
-    -> Generate an embedding only when it does not already exist
-    -> Index sentence occurrences
-    -> Use analysis_group to select the Asylee or Refugee catalog
-    -> Create missing vectors only in the selected catalog
-    -> Send tsp_id to Sentence Similarity
+Document message
+    -> DOC2Vec
+       -> create or reuse sentence_key
+       -> reuse an existing Titan embedding when available
+       -> write every sentence to sentence_occurrences
+       -> write each unique key to its analysis-group catalog
+       -> refresh the indexes once after all document writes
+       -> send tsp_id to Sentence Similarity
 
-Sentence Similarity receives tsp_id
-    -> Load one source sentence
-    -> Use analysis_group to select the Asylee or Refugee catalog
-    -> Read its saved vector and any saved classification
-    -> Reuse a saved classification or search the tracer/form-language catalog
-    -> Save the classification on the selected catalog document
-    -> Update sentences_vector by global_id
-    -> Tracer reference found: save no relationships and take the next sentence
-    -> No tracer reference found: search only the selected group catalog
-    -> Remove ineligible and same-application targets
-    -> Update titan_matches for the source and every target in both directions
-    -> Commit and take the next sentence
+    -> Sentence Similarity
+       -> load the document sentences in pages of 30
+       -> process as many as 30 source sentences concurrently
+       -> classify each source against the tracer catalog
+       -> skip normal matching when any exclusion flag is true
+       -> search the Asylee or Refugee catalog at 76% similarity
+       -> expand matching keys through sentence_occurrences
+       -> classify candidate keys before saving a relationship
+       -> save both directions in 16-bucket titan_matches rows
+       -> send tsp_id to Case Similarity
+
+    -> Case Similarity
+       -> resolve application_id and analysis_group from tsp_id
+       -> rebuild the source application's case summary from titan_matches
+       -> update the reverse membership on affected applications
+       -> publish changed TAH values to Kafka when the live-flow toggle is on
+       -> send tsp_id to API Transform
+
+    -> API Transform
+       -> read titan_matches and titan_similar_cases
+       -> build the existing response shape without NER for this flow
+       -> limit each source sentence to 3000 returned matches
+       -> publish the transformed result and complete the document state
 ```
 
-## 1. The four runtime OpenSearch indexes
+## OpenSearch resources
 
-### `sentence_occurrences`
+There are four runtime indexes and one temporary training index.
 
-This index stores every place where a sentence appears.
+| Resource | Purpose | Vector engine |
+|---|---|---|
+| `sentence_occurrences` | Every sentence occurrence and its document location | None |
+| `sentence_semantic_catalog_asylee` | One vector per unique Asylee sentence key | Faiss IVF-SQ16 |
+| `sentence_semantic_catalog_refugee` | One vector per unique Refugee sentence key | Faiss IVF-SQ16 |
+| `tracer_form_language_catalog` | About 4000 tracer, form-language, and non-matcher references | Lucene HNSW |
+| `sentence_semantic_training` | Representative vectors used to train the shared IVF model | Untrained 512-dimension vectors |
 
-Create the physical occurrence index with this complete mapping:
+The Asylee and Refugee catalogs use the same trained 512-dimension IVF-SQ16
+model. They are separate because only about 33,000 sentences overlap across
+the two groups out of roughly 100 million sentences. Separate catalogs avoid
+cross-group candidates and allow a sentence key to have a different saved
+classification in each group.
+
+### Sentence occurrence mapping
+
+The OpenSearch `_id` is the integer `globalId`.
 
 ```http
 PUT /sentence_occurrences-v1
@@ -89,86 +78,33 @@ PUT /sentence_occurrences-v1
   "mappings": {
     "dynamic": "strict",
     "properties": {
-      "globalId": {
-        "type": "long"
-      },
-      "applicationId": {
-        "type": "long"
-      },
-      "tspId": {
-        "type": "long"
-      },
-      "sectionName": {
-        "type": "keyword"
-      },
-      "sentIdLocal": {
-        "type": "long"
-      },
-      "sentenceContent": {
-        "type": "text"
-      },
-      "sentenceKey": {
-        "type": "keyword"
-      },
-      "sourceType": {
-        "type": "keyword"
-      },
-      "analysisGroup": {
-        "type": "keyword"
-      },
-      "isCurrent": {
-        "type": "boolean"
-      },
-      "createdAt": {
-        "type": "date"
-      },
-      "updatedAt": {
-        "type": "date"
-      }
+      "globalId": {"type": "long"},
+      "applicationId": {"type": "long"},
+      "tspId": {"type": "long"},
+      "sectionName": {"type": "keyword"},
+      "sentIdLocal": {"type": "long"},
+      "sentenceKey": {"type": "keyword"},
+      "sourceType": {"type": "keyword"},
+      "analysisGroup": {"type": "keyword"},
+      "isCurrent": {"type": "boolean"},
+      "createdAt": {"type": "date"},
+      "updatedAt": {"type": "date"}
     }
   }
 }
 ```
 
-Create its alias:
+The occurrence index intentionally does not store `sentenceContent`,
+`isNonMatcher`, `isTracer`, or `isFormLanguage`. It stores only the identity,
+location, sentence key, and document fields needed to expand a matching key
+into occurrences.
 
-```http
-POST /_aliases
-{
-  "actions": [
-    {
-      "add": {
-        "index": "sentence_occurrences-v1",
-        "alias": "sentence_occurrences"
-      }
-    }
-  ]
-}
-```
+The unique sentence text remains in the selected sentence catalog because the
+Bedrock ingest pipeline needs it to create the vector. PostgreSQL
+`sentences_vector` remains the source for occurrence-level sentence text and
+classification fields.
 
-The OpenSearch document `_id` is `globalId`.
-
-The occurrence index stores sentence identity, content, location, and analysis
-group. It does not store non-matcher classification. The selected Asylee or
-Refugee catalog stores the reusable key-level classification, and
-`sentences_vector` stores the occurrence-level database copy.
-
-### Group-specific sentence semantic catalogs
-
-The production design replaces the single mixed sentence catalog with two
-catalogs:
-
-| Analysis group | Physical index | Alias |
-|---|---|---|
-| Asylee | `sentence_semantic_catalog_asylee-ivf-sq16-v1` | `sentence_semantic_catalog_asylee` |
-| Refugee | `sentence_semantic_catalog_refugee-ivf-sq16-v1` | `sentence_semantic_catalog_refugee` |
-
-Each catalog stores one document for each unique `sentenceKey` in that group.
-Both catalogs use the same trained 512-dimension Faiss IVF-SQ16 model, Titan
-embedding pipeline, and cosine similarity. Train the model once with
-representative Asylee and Refugee vectors; do not train one model per catalog.
-
-Create the Asylee catalog with this complete mapping:
+### Asylee sentence catalog mapping
 
 ```http
 PUT /sentence_semantic_catalog_asylee-ivf-sq16-v1
@@ -198,7 +134,7 @@ PUT /sentence_semantic_catalog_asylee-ivf-sq16-v1
 }
 ```
 
-Create the Refugee catalog with the same model and pipeline:
+### Refugee sentence catalog mapping
 
 ```http
 PUT /sentence_semantic_catalog_refugee-ivf-sq16-v1
@@ -228,101 +164,42 @@ PUT /sentence_semantic_catalog_refugee-ivf-sq16-v1
 }
 ```
 
-Set each shard count from that group's expected vector count and target shard
-size. Do not automatically give both catalogs the old mixed catalog's full
-shard count.
+The catalog document `_id` is the 64-character `sentenceKey`. The catalog does
+not need `analysisGroup`; selecting the physical catalog establishes the
+group.
 
-Create both aliases:
+### Why occurrences and catalogs both exist
 
-```http
-POST /_aliases
-{
-  "actions": [
-    {
-      "add": {
-        "index": "sentence_semantic_catalog_asylee-ivf-sq16-v1",
-        "alias": "sentence_semantic_catalog_asylee"
-      }
-    },
-    {
-      "add": {
-        "index": "sentence_semantic_catalog_refugee-ivf-sq16-v1",
-        "alias": "sentence_semantic_catalog_refugee"
-      }
-    }
-  ]
-}
-```
+Assume these two sentences occur in four documents:
 
-OpenSearch cannot rename or split an existing mixed physical index in place.
-If `sentence_semantic_catalog` already contains data, create both new physical
-indexes, populate them by `analysis_group`, validate their counts, and then
-change the service environment variables to the two new aliases. Keep the old
-mixed index until that cutover is verified.
+| Text | Group | Application | `globalId` | `sentenceKey` |
+|---|---|---:|---:|---|
+| I worked at the hospital for five years. | Asylee | 10 | 1001 | `KEY-A` |
+| I worked at the hospital for five years. | Asylee | 25 | 8507 | `KEY-A` |
+| My family left the village after the attack. | Refugee | 10 | 1002 | `KEY-B` |
+| My family left the village after the attack. | Refugee | 44 | 9014 | `KEY-B` |
 
-The catalog document does not need `analysisGroup`; the selected physical
-catalog already defines the group. The classification flags are saved on the
-catalog document because the same key can have a different non-matcher result
-in Asylee and Refugee. Sentence Similarity copies those flags to each matching
-`sentences_vector` row.
+The occurrence index has four documents because there are four sentence
+locations. The Asylee catalog has one `KEY-A` vector, and the Refugee catalog
+has one `KEY-B` vector. The catalog prevents duplicate vectors while the
+occurrence index preserves every `globalId`, `applicationId`, and `tspId`.
 
-If the same sentence appears in many documents in one group, that group's
-catalog keeps one vector. The occurrence index keeps every place where it
-appears. A key that exists in both groups is stored once in each catalog. The
-measured overlap is about 33,000 exact sentences out of roughly 100 million,
-so this small duplication is a good tradeoff for isolated searches and rules.
-
-Here are two complete sentence examples and their real SHA-256 keys:
-
-| Example | Original sentence | Normalized text | `sentenceKey` |
-|---|---|---|---|
-| Sentence A | The applicant lived in Ethiopia before moving to the United States. | the applicant lived in ethiopia before moving to the united states. | `310796ab599358716162cc1f8183e7a3861dae74ec1cf58219e12272e0abd828` |
-| Sentence B | The applicant submitted supporting documents with the application. | the applicant submitted supporting documents with the application. | `abbe073671a24dd60282a9ca827c1fd54c63306c02803cd7b6557c5d787b99c1` |
-
-Each sentence appears in two applications within its analysis group below.
-That creates four occurrence documents but only two catalog documents:
-
-| Example | Group | OpenSearch index | OpenSearch `_id` | Application | `globalId` | `sentenceKey` | Vector |
-|---|---|---|---|---|---:|---|---|
-| Sentence A | Asylee | `sentence_occurrences` | `1001` | `APP-10` | 1001 | `310796ab599358716162cc1f8183e7a3861dae74ec1cf58219e12272e0abd828` | Not stored |
-| Sentence A | Asylee | `sentence_occurrences` | `8507` | `APP-25` | 8507 | `310796ab599358716162cc1f8183e7a3861dae74ec1cf58219e12272e0abd828` | Not stored |
-| Sentence A | Asylee | `sentence_semantic_catalog_asylee` | `310796ab599358716162cc1f8183e7a3861dae74ec1cf58219e12272e0abd828` | Not applicable | Not applicable | `310796ab599358716162cc1f8183e7a3861dae74ec1cf58219e12272e0abd828` | One 512-dimension vector |
-| Sentence B | Refugee | `sentence_occurrences` | `1002` | `APP-10` | 1002 | `abbe073671a24dd60282a9ca827c1fd54c63306c02803cd7b6557c5d787b99c1` | Not stored |
-| Sentence B | Refugee | `sentence_occurrences` | `9014` | `APP-44` | 9014 | `abbe073671a24dd60282a9ca827c1fd54c63306c02803cd7b6557c5d787b99c1` | Not stored |
-| Sentence B | Refugee | `sentence_semantic_catalog_refugee` | `abbe073671a24dd60282a9ca827c1fd54c63306c02803cd7b6557c5d787b99c1` | Not applicable | Not applicable | `abbe073671a24dd60282a9ca827c1fd54c63306c02803cd7b6557c5d787b99c1` | One 512-dimension vector |
-
-Occurrence rows have different `globalId` values because each row represents
-one place where the sentence appeared. Rows containing the same normalized
-sentence share one `sentenceKey`. The selected group catalog uses that key as
-its OpenSearch `_id`, so each unique sentence has only one stored vector per
-analysis group regardless of how many applications contain it.
-
-### `tracer_form_language_catalog`
-
-This is a separate reference catalog. It does not store document occurrences.
-It stores the known tracer and form-language sentences used to decide whether
-an incoming sentence is allowed to participate in matching.
-
-Create the physical index with this complete mapping:
+### Tracer and form-language catalog mapping
 
 ```http
 PUT /tracer_form_language_catalog-v1
 {
   "settings": {
-    "index.knn": true,
-    "index.default_pipeline": "<bedrock embedding pipeline>",
     "number_of_shards": 1,
-    "number_of_replicas": 1
+    "number_of_replicas": 1,
+    "index.knn": true,
+    "index.default_pipeline": "<bedrock embedding pipeline>"
   },
   "mappings": {
     "dynamic": "strict",
     "properties": {
-      "tracerId": {
-        "type": "integer"
-      },
-      "sentenceContent": {
-        "type": "text"
-      },
+      "tracerId": {"type": "integer"},
+      "sentenceContent": {"type": "text"},
       "sentenceContentVector": {
         "type": "knn_vector",
         "dimension": 512,
@@ -332,668 +209,525 @@ PUT /tracer_form_language_catalog-v1
           "engine": "lucene"
         }
       },
-      "isFormLanguage": {
-        "type": "boolean"
-      },
-      "analysisGroup": {
-        "type": "keyword"
-      },
-      "isNonMatcher": {
-        "type": "boolean"
-      },
-      "createdAt": {
-        "type": "date"
-      },
-      "updatedAt": {
-        "type": "date"
-      }
+      "analysisGroup": {"type": "keyword"},
+      "isNonMatcher": {"type": "boolean"},
+      "isFormLanguage": {"type": "boolean"},
+      "createdAt": {"type": "date"},
+      "updatedAt": {"type": "date"}
     }
   }
 }
 ```
 
-Replace `<bedrock embedding pipeline>` with the Titan ingest pipeline name.
+The OpenSearch `_id` and `tracerId` are the integer
+`tracer_sentence_id`. This index does not have an `isTracer` field. A reference
+with both stored flags set to false represents a tracer sentence.
 
-This reference index uses Lucene HNSW. It does not use Faiss, IVF, SQ16, or a
-trained k-NN model. With about 4,000 reference sentences, one primary shard is
-enough and IVF training would add complexity without a useful benefit.
+Lucene HNSW is appropriate here because the catalog has only about 4000
+vectors. It does not need a trained Faiss model or IVF buckets.
 
-The default pipeline must map `sentenceContent` to
-`sentenceContentVector`. It calls the deployed Titan embedding model when a
-reference document is indexed, so the caller sends the sentence but does not
-need to send the 512 vector. The Titan embedding model is still required; only
-the trained IVF model is removed from this index.
+### Training index mapping
 
-Create an alias after the physical index exists:
+```http
+PUT /sentence_semantic_training-v1
+{
+  "settings": {
+    "number_of_shards": 6,
+    "number_of_replicas": 1,
+    "index.default_pipeline": "<bedrock embedding pipeline>"
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "sentenceKey": {"type": "keyword"},
+      "sentenceContent": {"type": "text"},
+      "sentenceContentVector": {
+        "type": "knn_vector",
+        "dimension": 512
+      },
+      "createdAt": {"type": "date"},
+      "updatedAt": {"type": "date"}
+    }
+  }
+}
+```
+
+Training data excludes rows already classified as non-matcher, tracer, or
+form language. The handler reuses `embedding_type = 2` from the `embeddings`
+table when present and creates only missing vectors. It generates a stable key
+for deduplication but does not save that training-only key back to
+`sentences_vector`.
+
+After representative Asylee and Refugee vectors are loaded, train one
+512-dimension Faiss IVF-SQ16 cosine model. Both runtime catalogs must wait
+until its state is `created` before their mappings reference its model ID.
+
+### Aliases
 
 ```http
 POST /_aliases
 {
   "actions": [
-    {
-      "add": {
-        "index": "tracer_form_language_catalog-v1",
-        "alias": "tracer_form_language_catalog"
-      }
-    }
+    {"add": {"index": "sentence_occurrences-v1", "alias": "sentence_occurrences"}},
+    {"add": {"index": "sentence_semantic_catalog_asylee-ivf-sq16-v1", "alias": "sentence_semantic_catalog_asylee"}},
+    {"add": {"index": "sentence_semantic_catalog_refugee-ivf-sq16-v1", "alias": "sentence_semantic_catalog_refugee"}},
+    {"add": {"index": "tracer_form_language_catalog-v1", "alias": "tracer_form_language_catalog"}},
+    {"add": {"index": "sentence_semantic_training-v1", "alias": "sentence_semantic_training"}}
   ]
 }
 ```
 
-Use a stable OpenSearch `_id` for every reference document. A safe value is a
-SHA-256 hash made from `analysisGroup` and normalized `sentenceContent`.
-Reindexing the same reference then updates it instead of creating a duplicate,
-even when its flags change.
+## DOC2Vec
 
-The reference catalog stores only `isNonMatcher` and `isFormLanguage`.
-`isTracer` does not exist in the tracer table or this reference index. Sentence
-Similarity creates `isTracer` for `sentences_vector` and the selected sentence
-catalog using these rules:
+### Message routes
 
-| Reference found | `isNonMatcher` | `isFormLanguage` | Saved `isTracer` | Search sentence catalog? |
-|---|---:|---:|---:|---|
-| No | false | false | false | Yes |
-| Yes | false | false | true | No |
-| Yes | true | false | false | No |
-| Yes | true | true | false | No |
-| Yes | false | true | false | No |
+| Message | Handler | Behavior |
+|---|---|---|
+| Normal live DOC2Vec message | Existing live DOC2Vec flow | Split the source document and insert new sentence rows |
+| `reason=HISTORICAL` | OpenSearch backfill processor | Process existing `sentences_vector` rows without splitting again |
+| `reason=TRAIN_MODEL` | OpenSearch backfill processor | Load representative rows into the training index |
+| `reason=TRACER` | OpenSearch backfill processor | Load `tracer_sentence` rows into the tracer catalog |
 
-Any tracer-catalog match stops normal sentence matching. Only a sentence with
-no tracer-catalog match continues to the selected sentence catalog.
+The standalone OpenSearch backfill processor currently supports the three
+explicit reasons shown above. The normal live route belongs in the existing
+DOC2Vec service behind the OpenSearch feature toggle. Each processor receives
+one source SQS message at a time and deletes it only after all required work
+finishes.
 
-The reference catalog is managed separately from normal document ingestion.
-Adding or changing a tracer or form-language rule updates this catalog; DOC2Vec
-does not copy every document sentence into it.
+### Stable sentence identity
 
-## 2. DOC2Vec Service
+DOC2Vec creates `sentence_key` by normalizing the text and hashing it with
+SHA-256. If an existing row already has a key, that value is reused.
 
-### Receive live or historical sentences
+The key serves two purposes:
 
-DOC2Vec receives `tsp_id` for both flows, but the sentence source is different.
+1. It is the catalog document `_id`, so repeated text does not create another
+   vector in the same analysis group.
+2. It prepares the system for a possible future key-level relationship model.
 
-For the live flow, DOC2Vec loads the document text and splits it into sentences
-in the original order. Each new sentence receives a `sent_id_local` showing its
-position in the document.
+### Live flow
 
-For the historical flow, the sentences have already been split and saved in
-`sentences_vector`. DOC2Vec loads those rows by `tsp_id`; it does not load the
-original document text, split the text again, or insert duplicate sentence
-rows. The historical rows keep their existing `global_id` values.
+The live route loads document text from `text_similarity_input`, calls the
+existing sentence splitter, and inserts the new `sentences_vector` rows. It
+receives the generated `global_id` values after each database batch commits.
 
-DOC2Vec does not search for tracer or form-language matches. That decision is
-made later by Sentence Similarity.
+Document-level values come from `text_similarity_input`:
 
-### Create the sentence key
+- `application_id`
+- `analysis_group`
+- `section_name`
+- `is_current`
 
-For every sentence:
+All four OpenSearch identity fields use numbers where applicable:
+`globalId`, `applicationId`, and `tspId` are integers.
 
-1. Apply Unicode NFKC normalization.
-2. Apply case folding.
-3. Remove extra whitespace.
-4. Create SHA-256 from the normalized sentence.
+### Historical flow
 
-The same normalized sentence always creates the same 64-character
-`sentence_key`. Live processing saves the key during the sentence insert.
-Historical processing generates and updates the key only when the existing row
-does not already have it.
+Historical sentences are already split. The route:
 
-### Insert `sentences_vector`
+1. Counts existing rows for the incoming `tsp_id`.
+2. Loads up to 3000 rows at a time.
+3. Splits that page into worker batches of 30.
+4. Uses up to 100 workers.
+5. Reuses an existing `sentence_key`, or creates and saves it inside the
+   worker when missing.
+6. Writes occurrences and missing catalog documents.
 
-For the live flow, DOC2Vec inserts every new sentence into the existing
-PostgreSQL `sentences_vector` table and receives the generated `global_id`
-values. Historical processing reuses the rows and global IDs already stored in
-that table.
+### Embedding reuse
 
-Important columns are:
+For a missing catalog key, DOC2Vec checks `embeddings` with the sentence
+`global_id` and `embedding_type = 2`.
 
 ```text
-global_id, tsp_id,
-is_non_matcher, is_tracer, is_form_language, non_matcher_checked,
-sent_id_local, sentence_content, source_type,
-sentence_key, created_at, updated_at
+Valid 512-value embedding exists
+    -> send that vector in the catalog document
+
+No valid saved embedding exists
+    -> omit the vector
+    -> the Bedrock ingest pipeline creates it from sentenceContent
 ```
 
-DOC2Vec joins `text_similarity_input` by `tsp_id` and reads the document-level
-`application_id`, `analysis_group`, `section_name`, and `is_current` values
-from that table. One `tsp_id` has one analysis group, so all of its sentence
-occurrences use the same catalog.
+If the catalog key already exists, no embedding lookup or Titan call is
+needed.
 
-DOC2Vec initially saves `is_non_matcher = false`, `is_tracer = false`, and
-`is_form_language = false`. It saves `non_matcher_checked = false` because
-Sentence Similarity has not made the decision yet.
+### OpenSearch writes and retries
 
-Sentence Similarity updates PostgreSQL and the selected group catalog after
-the reference catalog check. PostgreSQL remains the source of truth for each
-sentence occurrence.
+| Setting | Current value |
+|---|---:|
+| OpenSearch bulk size | 1000 documents |
+| Historical worker batch | 30 sentences |
+| Historical worker count | 100 |
+| Training worker count | 16 |
+| Normal retry wait | 5 seconds |
+| Bulk retry count | 15 retries after the original attempt |
 
-### Reuse existing Titan embeddings
+Bulk retries apply to statuses `408`, `424`, `425`, `429`, `500`, `502`,
+`503`, and `504`. Only failed retryable documents are submitted again. Stable
+`globalId` and `sentenceKey` values make retrying idempotent.
 
-Both live and historical processing check the `embeddings` table before asking
-Titan to create a vector. The lookup uses the sentence `global_id` and
-`embedding_type = 2`, which identifies the existing 512-dimension Titan
-embedding.
+After all catalog and occurrence writes for the document finish, DOC2Vec
+explicitly refreshes the selected group catalog and `sentence_occurrences`
+once. It does not use `refresh=wait_for` on every bulk request because that
+would reduce ingestion throughput.
+
+## Sentence Similarity
+
+### Readiness and source loading
+
+Sentence Similarity receives one `tsp_id`. It first checks whether at least one
+occurrence is searchable. If not, it waits 30 seconds and checks once more.
+The extra check covers the small period between DOC2Vec publishing the message
+and OpenSearch exposing a refresh. If the second check is empty, processing
+stops and the SQS message is not deleted.
+
+The service reads 30 source rows from `sentences_vector` at a time and uses a
+30-worker thread pool. Each worker handles one source sentence.
+
+The source vectors are loaded from the analysis-group catalog by
+`sentenceKey`. Vector values are read through `docvalue_fields` instead of the
+normal `_source`, which avoids expensive vector source loading.
+
+### Tracer classification
+
+The tracer query:
+
+- uses the source's saved 512-value vector;
+- filters by `analysisGroup`;
+- retrieves the nearest 100 references;
+- accepts every returned hit at or above 70% cosine similarity.
+
+All accepted hits contribute to the final classification:
+
+| Qualifying reference | Result |
+|---|---|
+| `isNonMatcher=true` | `is_non_matcher=true` |
+| `isFormLanguage=true` | `is_form_language=true` |
+| Both fields false | `is_tracer=true` |
+
+Different qualifying hits may set different flags, so all three final flags
+can be true. If any final flag is true, the source does not search the normal
+sentence catalog and does not create a Titan relationship.
+
+The final flags are saved on the selected catalog key and copied to the
+matching `sentences_vector` occurrences. The current database update changes
+only:
 
 ```text
-Existing 512-dimension Titan embedding found
-    -> Use that vector for OpenSearch
-    -> Do not call Titan again
-
-No Titan embedding found and the catalog vector is missing
-    -> Generate the 512-dimension vector through the Titan pipeline
-    -> Continue only after the vector is available
+is_non_matcher, is_tracer, is_form_language, last_modified
 ```
 
-This check applies to historical and live sentences. It avoids paying for and
-waiting on an embedding that already exists. A vector is generated only when
-the required sentence-catalog record is missing and no reusable Titan
-embedding is available for the selected global ID.
+It does not update `closest_non_matcher` or `closest_nm_score`.
 
-### Write to OpenSearch
+Current cache behavior reuses a saved classification only when all three
+flags are false. A saved excluded key is checked against the tracer catalog
+again. This is the implemented behavior and should remain explicit in testing.
 
-After DOC2Vec inserts the live rows or loads the historical rows, it:
+### Semantic search
 
-1. Writes every sentence occurrence to the occurrence index.
-2. Reads the document's one `analysis_group` from `text_similarity_input`.
-3. Selects `sentence_semantic_catalog_asylee` or
-   `sentence_semantic_catalog_refugee` once for that `tsp_id`.
-4. Checks all sentence keys for the `tsp_id` in that selected catalog.
-5. Skips vector work when the sentence key already exists in the selected
-   group catalog.
-6. For a missing key, uses the existing `embedding_type = 2` vector when one
-   is available for the global ID.
-7. Sends the sentence through the Titan ingest pipeline only when the selected
-   catalog key and reusable embedding are both missing.
-8. Writes the missing key only to its selected group catalog.
-9. Waits until every missing catalog vector exists.
+An eligible source searches only its selected catalog:
 
-DOC2Vec does not write incoming sentences to the tracer/form-language catalog.
+| Setting | Current value |
+|---|---:|
+| Similarity threshold | 76% |
+| OpenSearch radial minimum score | 0.88 |
+| IVF `nprobes` | 64 |
+| Composite page size | 1000 keys |
 
-### Batch and retry behavior
-
-DOC2Vec uses:
+OpenSearch cosine score is not the similarity percentage. The conversion is:
 
 ```text
-Bulk size: 100
-Parallel workers: up to 16
-Retry wait: 5 seconds
-Immediate retry attempts: 10
+minimum_score = (1 + similarity) / 2
+76% similarity -> minimum_score 0.88
 ```
 
-For each batch, missing catalog vectors are created or supplied from the
-existing embeddings in the correct group catalog before its occurrence rows
-are considered complete.
-Temporary Lasso, Titan, database, or OpenSearch failures are retried. A retry
-uses stable sentence keys and global IDs, so it does not create duplicate
-records or regenerate a vector that can be reused.
+The service pages through every key meeting the radial threshold. It is not a
+fixed top-K sentence search. The source key is also included with distance
+`0.0`, allowing exact occurrences to use the same expansion path.
 
-DOC2Vec sends `tsp_id` to Sentence Similarity only after all expected group
-catalog and occurrence records exist.
-
-## 3. Sentence Similarity Service
-
-### Process one sentence at a time
-
-Sentence Similarity receives `tsp_id` and loads its current sentences from
-`sentences_vector`.
-
-It processes one source sentence at a time. Every source occurrence keeps its
-own `global_id`, but repeated text reuses the same sentence key and vector.
-
-### First search the tracer/form-language catalog
-
-For the current source sentence:
-
-1. Use `analysis_group` to select `sentence_semantic_catalog_asylee` or
-   `sentence_semantic_catalog_refugee`.
-2. Read the source vector and any saved classification from that catalog by
-   `sentence_key`.
-3. Reuse the saved classification when all three catalog flags are present.
-4. If the classification fields are missing, search the tracer/form-language catalog
-   with the source vector and filter that search by `analysis_group`.
-5. Apply the configured threshold and read the returned reference's
-   `isNonMatcher` and `isFormLanguage` values.
-6. Set `isTracer = true` only when a reference was found and both reference
-   flags are false.
-7. Save `isNonMatcher`, derived `isTracer`, and `isFormLanguage` on the selected group
-   catalog document.
-8. Copy the completed classification to the source `sentences_vector` row.
-
-If any reference is found:
+Saved distance is:
 
 ```text
-Update the sentences_vector row using its global_id.
-Copy is_non_matcher from the matching reference.
-Set closest_non_matcher to the matching tracer_sentence_id.
-Set closest_nn_score to the decimal cosine similarity, such as 0.96 for 96%.
-Set is_form_language from the matching reference.
-Derive is_tracer as true only when is_non_matcher and is_form_language are false.
-Do not run the normal similarity search on the selected group catalog.
-Do not add exact matches.
-Do not update titan_matches.
-Commit the sentence classification.
-Move to the next source sentence.
+cosine_similarity = (2 * OpenSearch _score) - 1
+distance = 1 - cosine_similarity
 ```
 
-The update uses the source sentence's `global_id`:
+Examples:
 
-```sql
-UPDATE sentences_vector
-SET
-    is_non_matcher = :isNonMatcher,
-    closest_non_matcher = :closestNonMatcher,
-    closest_nn_score = :closestNnScore,
-    is_tracer = :isTracer,
-    is_form_language = :isFormLanguage,
-    last_modified = NOW()
-WHERE global_id = :globalId;
+| OpenSearch `_score` | Similarity | Saved distance |
+|---:|---:|---:|
+| 1.00 | 100% | 0.00 |
+| 0.95 | 90% | 0.10 |
+| 0.88 | 76% | 0.24 |
+
+### Expand matching keys into occurrences
+
+Catalog search returns unique sentence keys, not occurrence global IDs. The
+service queries `sentence_occurrences` in pages using:
+
+- a `terms` query for matching `sentenceKey` values;
+- the source `analysisGroup`;
+- exclusion of the source `applicationId`;
+- `globalId` sorting and `search_after` pagination.
+
+The terms/page batch size is 1000. All matching occurrences are returned; the
+1000 value is a page size, not a total-result limit.
+
+Candidate keys are also classified through the tracer catalog before a
+relationship is saved. This protects bidirectional correctness: an eligible
+source cannot create a reverse relationship on a tracer, form-language, or
+non-matcher target.
+
+### Sentence-level write behavior
+
+For source global ID 100 matching global IDs 200 and 232:
+
+```text
+100 -> 200, 232
+200 -> 100
+232 -> 100
 ```
 
-The group catalog is updated by `sentenceKey`, and `sentences_vector` is
-updated by `globalId`. Both updates are safe to retry because they replace the
-same classification fields on stable IDs.
+The service sends targets to PostgreSQL in batches of 500. One SQL function
+call saves the forward and reverse sides in the same transaction. A deadlock
+or another transient database failure retries only that failed match batch,
+not the tracer and OpenSearch work already completed for the source.
 
-`:isNonMatcher` and `:isFormLanguage` come from the matching reference.
-`:isTracer` is calculated because the reference table does not have that
-column. If both reference flags are false, `:isTracer` is true. Every reference
-match skips the normal sentence catalog search.
+No `titan_matches` row is created when a source has no matches.
 
-The same update rule applies when a candidate target is checked and found to
-be a non-matcher. In that case, the target row is updated using the target's
-`global_id`, and no relationship to that target is saved.
+## PostgreSQL `titan_matches`
 
-The same saved vector is reused for this check and the later group-catalog
-search. Titan is not called during Sentence Similarity.
+### Table shape
 
-### Search the selected group catalog only when allowed
+One sentence can own up to 16 rows. The matching target's `global_id`
+determines its bucket:
 
-When the tracer catalog returns no reference:
+```text
+match_bucket_number = abs(target_global_id) % 16
+```
 
-1. Find exact occurrences using the same sentence key and analysis group.
-2. Search only the catalog selected by the source `analysis_group`, using the
-   already loaded vector.
-3. Apply the configured sentence-similarity threshold.
-4. Expand matching keys into occurrences using `sentences_vector`.
-5. Remove the source occurrence and every occurrence from the same
-   application.
-6. Remove any target known to be a tracer, form-language sentence, or other
-   non-matcher.
+Example rows:
 
-The selected catalog itself limits vector candidates to the correct analysis
-group. The occurrence expansion still filters by `analysis_group` as a safety
-check.
+| `global_id` | `tsp_id` | `application_id` | bucket | `matches` | generated count | generated verbatim |
+|---:|---:|---:|---:|---|---:|---|
+| 100 | 10 | 1 | 8 | `{"200": 0.10, "232": 0.0}` | 2 | `{232}` |
+| 200 | 20 | 2 | 4 | `{"100": 0.10}` | 1 | `{}` |
+| 232 | 30 | 3 | 4 | `{"100": 0.0}` | 1 | `{100}` |
 
-The last rule is required for bidirectional correctness. Checking only the
-source is not enough. An allowed source must never create a reverse
-relationship on an ineligible target.
+The primary key is `(global_id, match_bucket_number)`. Supporting indexes are
+`(tsp_id, global_id)` and `(application_id, global_id)`.
+
+`matches` is a JSONB object of `target_global_id: distance`. PostgreSQL
+automatically generates:
+
+- `match_count`: the number of keys in that bucket;
+- `verbatim`: target global IDs whose distance is exactly `0.0`;
+- `last_modified`: the latest write time.
+
+To get one sentence's full total, read all rows for its `global_id`, merge the
+JSONB objects, and add each row's `match_count`.
+
+### Why 16 buckets are used
+
+A sentence may have thousands of matches. Keeping them in one JSONB object
+would rewrite and lock the entire value for every small change. Buckets keep
+each JSONB value smaller, allow work on different buckets to proceed
+independently, and let PostgreSQL TOAST compress large values outside the main
+row page.
+
+The tradeoff is up to 16 rows per owner sentence, but lookup remains fast
+because the primary key starts with `global_id`.
+
+### SQL function contract
+
+The production function is:
+
+```text
+tsp.upsert_bidirectional_titan_matches(
+    source_global_id,
+    source_tsp_id,
+    source_application_id,
+    matches_jsonb
+)
+```
+
+Input example:
+
+```json
+{
+  "200": {"tsp_id": 20, "application_id": 2, "distance": 0.10},
+  "232": {"tsp_id": 30, "application_id": 3, "distance": 0.0}
+}
+```
+
+The function:
+
+1. Removes self matches and same-application matches.
+2. Calculates every forward and reverse bucket.
+3. Takes transaction advisory locks in a stable sorted order.
+4. Creates missing owner/bucket rows.
+5. Merges new distances into existing JSONB objects.
+6. Writes the reverse relationship with the same distance.
+7. Commits or rolls back both directions together through the caller's
+   transaction.
+
+The complete Flyway-ready SQL is in `TITAN_MATCHES_FLYWAY.sql`.
+
+### Important reprocessing limit
+
+The current upsert function adds new relationships and replaces a distance
+when the same target key is supplied again. It does not remove an older target
+that is absent from a later function call.
 
 Example:
 
 ```text
-Source global ID 1001:
-"I worked at the hospital for five years."
-The source was checked and is allowed to match.
-
-The selected group catalog returns a matching target `sentenceKey`, and
-occurrence expansion finds global ID 8507:
-"I certify that the information above is true and correct."
-The target has not been checked yet.
+Saved first: 100 -> 200 and 232
+Later input: 100 -> 232 only
+Current upsert result: 100 still contains 200 and 232
 ```
 
-If the service checks only global ID 1001, it could save this incorrect pair:
+Deletion or reclassification that invalidates old relationships therefore
+needs a separate cleanup workflow before production relies on relationship
+removal. This must not be described as automatic stale-match cleanup.
 
-```text
-1001 adds 8507
-8507 adds 1001
-```
+## Case Similarity
 
-The second line is the problem. It gives a form-language sentence a reverse
-relationship even though form language is not allowed to match.
+Case Similarity does not run another vector search. It receives one `tsp_id`,
+loads its `application_id` and `analysis_group` from
+`text_similarity_input`, and summarizes the sentence relationships already in
+`titan_matches`.
 
-Before saving either direction, the service checks target 8507 against
-`tracer_form_language_catalog`. Suppose it matches a form-language reference.
-The service then:
+For the source application, it counts unique source/target occurrence pairs by
+target application. The current rules are:
 
-1. Updates `sentences_vector` row 8507 with the non-matcher flags, closest
-   tracer sentence ID, and decimal match score.
-2. Saves the classification on the selected group catalog document.
-3. Saves neither 1001-to-8507 nor 8507-to-1001.
+| Sentence pairs between two applications | Saved result |
+|---:|---|
+| 1 or more | Target in `similar_application_ids` |
+| 2 or more | Target also in `similar_case_ids` |
+| 3 or more | Target also in `tah_case_ids`; `is_tah=true` |
 
-The reusable decision is stored on the group-specific catalog document. The
-same `sentenceKey` can therefore have different rules in the two catalogs. For
-example:
+Example:
 
-```text
-Catalog: sentence_semantic_catalog_asylee
-Document ID: KEY-B
-Saved fields: isNonMatcher=true, isTracer=false, isFormLanguage=true
-```
+| Target application | Sentence pairs | Similar application | Similar case | TAH case |
+|---:|---:|---|---|---|
+| 200 | 1 | Yes | No | No |
+| 300 | 2 | Yes | Yes | No |
+| 400 | 3 | Yes | Yes | Yes |
 
-The presence of all three classification fields means the catalog decision is
-complete.
+These thresholds count occurrence pairs. They do not currently count unique
+source sentence groups. This is the implemented rule and should receive final
+business confirmation before production approval.
 
-When another occurrence uses `KEY-B` in the `Asylee` group, the service reuses
-that decision instead of running another tracer/form-language vector search.
-It still copies the decision to that occurrence's `sentences_vector` row using
-its own `globalId`.
+The PostgreSQL refresh function fully rebuilds the source application's lists
+and patches only the source application's membership on each connected target.
+It uses ordered advisory locks so concurrent writers cannot overwrite one
+another. It also removes a stale reverse case relationship when a previously
+connected application is no longer connected. Relationships unrelated to the
+source application remain unchanged.
 
-If a target key has no saved or cached decision, it must be checked before any
-forward or reverse relationship is saved.
+If a source has no case relationships, no empty `titan_similar_cases` row is
+kept. An existing source row is removed when its last relationship disappears.
 
-### Save both directions
+`titan_similar_cases` stores real `application_id` values. It does not store
+`a_number` because `a_number` is PII and can be resolved from
+`text_similarity_input` only when required.
 
-After all filters pass, Sentence Similarity expands every matching
-`sentence_key` into eligible target occurrences from `sentences_vector`.
-Each source-to-target pair is stored by `global_id` in `titan_matches`.
+Generated columns maintain `similar_case_count`, `tah_case_count`, and
+`is_tah`. The service publishes a Kafka TAH event only when the live-flow
+toggle is enabled and the current `is_tah` differs from the last
+Kafka-confirmed value in `kafka_ta_hit_lookup`. Changes from false to true and
+true to false are both publishable.
 
-If source global ID 100 matches target global IDs 900 and 901:
+## API Transform
 
-```text
-100 -> [900, 901]
-900 -> [100]
-901 -> [100]
-```
+The new API Transform handles one `tsp_id` message at a time. It does not call
+OpenSearch and does not rebuild similarity. It reads the prepared PostgreSQL
+results.
 
-The same cosine distance is stored in both directions. An existing target
-`global_id` is updated with the latest distance instead of being added twice.
-All forward and reverse changes for one source sentence commit together.
+The Titan path:
 
-A retry must also remove stale relationships. If global ID 100 is processed
-again and now matches only 901, the completed state is:
+1. Loads document and applicant context from the existing application tables.
+2. Reads all 16 `titan_matches` buckets for each source sentence.
+3. Converts the JSONB object into the existing API match-list shape.
+4. Caps the returned matches at 3000 per source sentence, preserving the
+   existing output limit.
+5. Reads `titan_similar_cases` for case-level fields.
+6. Converts stored application IDs to A-numbers through
+   `landing.application_id_lookup` only where the existing payload requires
+   A-numbers.
+7. Builds the existing transformed payload while excluding NER for this flow.
+8. Publishes Kafka messages and records delivery/status data.
 
-```text
-100 -> [901]
-900 -> []
-901 -> [100]
-```
+When the incoming SQS message has `reason=HISTORICAL`, the outgoing payload
+includes `historical=true`. This lets consumers distinguish backfill results
+from live results without maintaining another processing path.
 
-Only the relationship between 100 and 900 is removed. Any other relationships
-owned by 900 remain unchanged.
+## Reliability and message behavior
 
-Matching is not transitive. If 100 matches 900 and 900 matches 950, the service
-does not add 100 to 950 unless that exact pair passes the configured threshold.
-
-## 4. PostgreSQL `titan_matches`
-
-### Why this table is used first
-
-`titan_matches` stores the actual matching sentence occurrences. This is
-useful for the first production release because downstream services already
-work with global IDs and occurrence-level JSONB lists.
-
-The immediate benefits are:
-
-- API Transform can continue reading matches by `tsp_id`.
-- Case Similarity can group target occurrences by `a_number`. It can use
-  `tsp_id` to read `application_id` from `text_similarity_input` when needed.
-- A saved object identifies the exact source and target sentence locations.
-- OpenSearch can be introduced without redesigning every downstream service at
-  the same time.
-- The rollout can be measured before a larger database migration is started.
-
-### Match object
-
-Each item in the JSONB array describes one target occurrence:
+The runtime services pass one document between queues with a body shaped like:
 
 ```json
 {
-  "global_id": 9002,
-  "a_number": 900,
-  "tsp_id": 8000,
-  "distance": 0.10
+  "source": "P2",
+  "tsp_id": "8205",
+  "sent_by": "<service-name>"
 }
 ```
 
-`distance` is cosine distance, not the raw OpenSearch `_score`:
+Backfill messages may also carry `reason=HISTORICAL` so downstream payloads
+can be marked as historical.
 
-- `0.0` means a 100% match.
-- Exact occurrences use `0.0`.
-- A smaller distance is a stronger semantic match.
-- The same distance is stored in both directions.
+Messages are deleted only after the service completes its required database,
+OpenSearch, Kafka, and next-queue work. A failed message becomes visible again
+and follows the queue redrive policy; after the configured receives it moves
+to the DLQ, where New Relic alerts the team.
 
-Sentence Similarity must perform the OpenSearch score conversion before
-saving the match.
+Expected transient operations use focused retries. A retry should repeat only
+the failed boundary whenever possible:
 
-### Complete bidirectional example
+- failed OpenSearch bulk documents, not the successful documents;
+- one failed Titan match write batch, not the completed vector searches;
+- one failed queue or Kafka publication, not the completed sentence work.
 
-Suppose the source row is:
+## Production checks
 
-```text
-global_id: 100
-a_number: 100
-tsp_id: 5000
-```
+Before enabling the OpenSearch toggle, verify all of the following:
 
-It matches this target:
+1. The shared IVF-SQ16 model is in `created` state and has dimension 512 with
+   cosine similarity.
+2. Both group catalog aliases point to the intended physical indexes.
+3. The occurrence, catalog, and tracer document counts match their source
+   counts after backfill.
+4. Every catalog vector has 512 values.
+5. `globalId`, `applicationId`, and `tspId` are indexed as numbers.
+6. A 76% sentence threshold is sent to OpenSearch as minimum score `0.88`.
+7. Tracer classification reads up to 100 neighbors and applies the 70%
+   threshold across all qualifying results.
+8. Same-application and cross-analysis-group relationships are absent.
+9. Every saved source-to-target sentence relationship has a target-to-source
+   relationship with the same distance.
+10. No empty `titan_matches` row exists for a sentence with zero matches.
+11. Each `match_count` equals its bucket's JSONB key count.
+12. Each `verbatim` value contains only target IDs whose distance is `0.0`.
+13. Case summary lists are bidirectional and contain application IDs, not
+   global IDs, TSP IDs, or A-numbers.
+14. Case rows with no remaining relationships are removed.
+15. Live TAH Kafka events publish only when enabled and only when `is_tah`
+   changes from its last confirmed value.
+16. API Transform produces the existing payload shape, excludes NER for this
+   flow, and enforces the 3000-match limit.
+17. A failed source message is not deleted and reaches its DLQ after the queue
+   retry policy is exhausted.
+18. The stale sentence-relationship cleanup gap is resolved or explicitly
+   accepted before production cutover.
 
-```text
-global_id: 900
-a_number: 900
-tsp_id: 8000
-distance: 0.05
-```
+## Future option: sentence-key relationships
 
-The source row stores:
+Every sentence continues to receive a stable `sentence_key`. If occurrence-
+level relationship storage becomes too large, a future table can store one
+relationship per unique key pair and expand keys through
+`sentence_occurrences` only when global IDs are needed.
 
-```json
-[
-  {
-    "global_id": 900,
-    "a_number": 900,
-    "tsp_id": 8000,
-    "distance": 0.05
-  }
-]
-```
-
-The target row stores the reverse object:
-
-```json
-[
-  {
-    "global_id": 100,
-    "a_number": 100,
-    "tsp_id": 5000,
-    "distance": 0.05
-  }
-]
-```
-
-The `titan_matches` row has only these columns:
-
-```text
-global_id, tsp_id, matches, match_count, verbatim, last_modified
-```
-
-`global_id` is the primary key. PostgreSQL calculates `match_count` from the
-JSONB list and calculates `verbatim` from matches whose distance is `0.0`.
-PostgreSQL also maintains `last_modified`. `a_number` remains in each nested
-match object, but it is not a table column. The caller supplies the source
-identity needed for reverse match objects and the `matches` list.
-
-Sentence Similarity checks eligibility before calling the database function.
-The relationship is valid only when both sentences:
-
-- belong to the same `analysis_group`;
-- are current;
-- belong to different applications; and
-- are not tracer, form-language, or other non-matcher sentences.
-
-### Safe updates from multiple workers
-
-Workers must not read a JSONB list into Python, append an item, and replace the
-row. Two workers doing that at the same time can overwrite each other's
-changes.
-
-Use a PostgreSQL function or atomic SQLAlchemy upsert that:
-
-1. Receives the source occurrence and its accepted match list.
-2. Locks the source and affected target global IDs in sorted order.
-3. Adds new relationships in both directions.
-4. Creates missing source and target rows.
-5. Updates an existing relationship's IDs and distance without duplicating it.
-6. Updates only `matches` and `last_modified` when an owner row already exists.
-7. Commits all changes for the source sentence in one transaction.
-
-A database failure rolls back every forward and reverse change. Retry a
-deadlock or serialization failure with the same input. The operation must be
-safe to repeat.
-
-## 5. Live and historical processing
-
-Live and historical documents use the same DOC2Vec and Sentence Similarity
-logic.
-
-For each completed `tsp_id`:
-
-- Every sentence has a stable `sentence_key` in `sentences_vector`.
-- Every sentence occurrence exists in `sentence_occurrences`.
-- Every unique key has one vector in the catalog selected by its
-  `analysis_group`.
-- Every source and unchecked target has passed the non-matcher check before a
-  relationship is saved.
-- Every accepted occurrence relationship exists in both directions in
-  `titan_matches`.
-
-The source SQS message is deleted only after the entire `tsp_id` completes.
-Temporary database, Lasso, Titan, or OpenSearch failures are retried. Stable
-global IDs and sentence keys make retries idempotent.
-
-Verify the production data with these rules:
-
-- Every 100-to-900 relationship has 900-to-100.
-- Both directions have the same distance.
-- No JSONB list contains the same target global ID twice.
-- No relationship contains a non-matcher sentence.
-- No relationship connects occurrences from the same application.
-- No relationship crosses `analysis_group`.
-- `match_count` equals the JSONB array length.
-- `verbatim` contains only target global IDs whose distance is `0.0`.
-
-## 6. Downstream service use
-
-### API Transform
-
-API Transform will keep using its existing functionality as it is. The Titan
-flow stores the same occurrence-level match information needed by the current
-summary and response-building process, so this service does not need a new
-design.
-
-### Case Similarity
-
-Case Similarity will also keep using its existing functionality as it is. It
-will process the occurrence matches produced by the Titan flow using the same
-case-level calculation currently used by the service.
-
-The existing `similar_cases_emb` table is renamed to `titan_similar_cases` and
-stores the Titan result. The previous case-similarity result remains unchanged.
-Keeping both results separate allows the team to compare the previous flow
-with the new Titan flow before deciding whether to replace the existing result.
-
-## 7. Future sentence-key relationship design
-
-The occurrence design intentionally keeps generating and saving
-`sentence_key`. That gives us a clean future path when the number and size of
-`titan_matches` rows become expensive.
-
-Repeated text can appear in thousands of documents. The current table stores
-relationships for every matching pair of occurrences. A future table can save
-one relationship between two unique sentence keys and expand those keys
-through `sentences_vector` only when global IDs are needed.
-
-A future bucketed table can look like this:
-
-```sql
-CREATE TABLE sentence_key_matches (
-    analysis_group TEXT NOT NULL,
-    sentence_key TEXT NOT NULL,
-    match_bucket_number SMALLINT NOT NULL,
-    matches JSONB NOT NULL DEFAULT '{}'::JSONB,
-    match_key_count INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    PRIMARY KEY (
-        analysis_group,
-        sentence_key,
-        match_bucket_number
-    )
-);
-```
-
-Its `matches` value is an object of matching key to distance:
-
-```json
-{
-  "abbe073671a24dd60282a9ca827c1fd54c63306c02803cd7b6557c5d787b99c1": 0.10
-}
-```
-
-Example forward and reverse rows:
-
-| analysisGroup | sentenceKey | bucket | matches |
-|---|---|---:|---|
-| Asylee | KEY-A | 11 | `{"KEY-B": 0.10}` |
-| Asylee | KEY-B | 17 | `{"KEY-A": 0.10}` |
-
-The matching key deterministically selects one of 32 buckets. The benefits are:
-
-- One semantic relationship is stored once per direction instead of once for
-  every occurrence pair.
-- Large match collections are split into smaller JSONB values.
-- Updating one match rewrites and locks one bucket instead of one very large
-  JSONB list.
-- PostgreSQL TOAST can compress large buckets while normal table pages remain
-  smaller.
-- Different workers can update different buckets for the same sentence key.
-- Relationship storage grows with unique sentence keys rather than every
-  repeated occurrence.
-
-The tradeoff is that API Transform and Case Similarity must expand matching
-keys through `sentences_vector` to recover global IDs. That change will be
-made only after the production OpenSearch flow and `titan_matches` data are
-stable.
-
-The future migration can join each source and target `global_id` in
-`titan_matches` to its saved `sentence_key`, deduplicate the key pairs, and
-backfill the bucketed table. The original sentence text does not need to be
-processed again.
-
-## 8. Final acceptance criteria
-
-1. Four runtime OpenSearch indexes exist: sentence occurrences, the Asylee
-   sentence catalog, the Refugee sentence catalog, and the
-   tracer/form-language catalog.
-2. DOC2Vec splits sentence text only for the live flow; historical processing
-   reuses the sentences and global IDs already in `sentences_vector`.
-3. DOC2Vec creates and saves a stable SHA-256 `sentence_key` for every
-   sentence.
-4. Both flows reuse a valid `embedding_type = 2` Titan embedding for the
-   global ID and generate a new vector only when one is required and missing.
-5. The Asylee and Refugee catalogs use the same trained 512-dimension Faiss
-   IVF-SQ16 model and keep sentence keys and classifications separated by
-   analysis group.
-6. DOC2Vec writes every occurrence and creates a missing catalog vector only
-   in the catalog selected by `analysis_group`.
-7. Sentence Similarity reuses a saved group-catalog classification or checks
-   the tracer/form-language catalog before normal similarity search.
-8. A non-matcher updates its group catalog document and `sentences_vector`
-   row and creates no relationship.
-9. Exact occurrences are found using the same sentence key.
-10. Semantic keys are found using the saved Titan vector and only the selected
-    group catalog.
-11. Matching keys are expanded into eligible target global IDs.
-12. Same-application, cross-analysis-group, and ineligible targets are excluded.
-13. Every accepted relationship is stored in both directions in
-    `titan_matches`.
-14. Both directions contain the same cosine distance.
-15. Reprocessing updates distances and prevents duplicate relationships in
-    both directions.
-16. Concurrent workers cannot overwrite one another's JSONB changes.
-17. API Transform keeps its existing summary and response-building behavior.
-18. Case Similarity keeps its existing calculation behavior and writes the
-    Titan result to `titan_similar_cases` without replacing the existing
-    case-similarity result.
-19. Live and historical messages use the same matching rules.
-20. The SQS message is deleted only after the full `tsp_id` succeeds.
-21. Saved sentence keys remain available for the future bucketed relationship
-    design.
+That future design reduces repeated relationships but changes the read path
+for API Transform and Case Similarity. It is not part of the initial
+`titan_matches` production release.

@@ -58,8 +58,8 @@ class Config:
 
         secrets = VaultSecrets()
         config = cls(
-            pg_db_user=str(secrets.get("pgUser") or ""),
-            pg_db_password=str(secrets.get("pgPassword") or ""),
+            pg_db_user=str(secrets.get("pgUser") or secrets.get("pgDynamicUser") or ""),
+            pg_db_password=str(secrets.get("pgPassword") or secrets.get("pgDynamicPassword") or ""),
             pg_db_host=str(secrets.get("pgHost") or ""),
             pg_db_database=str(secrets.get("pgDatabase") or ""),
             pg_db_port=int(secrets.get("pgPort") or 5432),
