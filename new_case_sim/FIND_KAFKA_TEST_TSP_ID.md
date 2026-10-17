@@ -6,17 +6,16 @@ Similarity Kafka flow. Each returned row has:
 - A current document in `text_similarity_input`.
 - Exactly one receipt for its application.
 - A receipt that belongs to exactly one application.
-- No Kafka lookup row for the selected environment.
 
 This query does not read `titan_similar_cases` or `titan_matches`. It only finds
 a document with a clean one-to-one application and receipt mapping. Whether the
 document produces a TAH event is determined when Case Similarity processes it.
 
-Replace `YOUR_KAFKA_ENV` before running the query.
+It also does not read `kafka_ta_hit_lookup`.
 
 ```sql
 WITH candidate_documents AS MATERIALIZED (
-    /* Start with recent documents that do not have a Kafka lookup row. */
+    /* Start with recent current documents that have a receipt number. */
     SELECT DISTINCT
         input.tsp_id,
         input.application_id,
@@ -26,12 +25,8 @@ WITH candidate_documents AS MATERIALIZED (
     FROM tsp.text_similarity_input AS input
     JOIN landing.global_document_registry AS registry
         ON registry.a_number = input.a_number
-    LEFT JOIN validation.kafka_ta_hit_lookup AS published
-        ON published.receipt_number = registry.receipt_number
-       AND published.kafka_environment = 'YOUR_KAFKA_ENV'
     WHERE input.is_current = TRUE
       AND registry.receipt_number IS NOT NULL
-      AND published.receipt_number IS NULL
     ORDER BY input.tsp_id DESC
     LIMIT 10000
 ),
@@ -109,15 +104,4 @@ The two count columns should both be `1`:
 | 12345 | 100 | ABC123 | 1 | 1 |
 
 Pick one returned `tsp_id` and send it through Case Similarity. If processing
-produces a TAH event and Kafka confirms delivery, verify that the lookup row was
-saved:
-
-```sql
-SELECT *
-FROM validation.kafka_ta_hit_lookup
-WHERE receipt_number = 'RETURNED_RECEIPT_NUMBER'
-  AND kafka_environment = 'YOUR_KAFKA_ENV';
-```
-
-Expected result: one row containing the receipt, Kafka environment, and the
-published `is_tah` value.
+produces a TAH event, the application and receipt mapping will not be ambiguous.
