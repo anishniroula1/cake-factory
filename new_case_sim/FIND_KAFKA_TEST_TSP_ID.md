@@ -4,6 +4,7 @@ Use this query to find a `tsp_id` that is suitable for testing the full Case
 Similarity Kafka flow. Each returned row has:
 
 - A current document in `text_similarity_input`.
+- At least one sentence in `sentences_vector` for the returned `tsp_id`.
 - Exactly one receipt for its application.
 - A receipt that belongs to exactly one application.
 
@@ -27,6 +28,11 @@ WITH candidate_documents AS MATERIALIZED (
         ON registry.a_number = input.a_number
     WHERE input.is_current = TRUE
       AND registry.receipt_number IS NOT NULL
+      AND EXISTS (
+          SELECT 1
+          FROM tsp.sentences_vector AS sentence
+          WHERE sentence.tsp_id = input.tsp_id
+      )
     ORDER BY input.tsp_id DESC
     LIMIT 10000
 ),
