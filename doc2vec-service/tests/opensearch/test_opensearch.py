@@ -60,23 +60,21 @@ def test_empty_opensearch_operations_are_skipped(
     assert helper.bulk_index("catalog", [], needs_embedding=False) == 0
 
 
-def test_refresh_makes_catalog_and_occurrences_searchable(
+def test_refresh_makes_supplied_aliases_searchable(
     service_config,
     custom_logger,
 ):
     client = ClientFake()
     helper = OpenSearchHelper(service_config, client, custom_logger)
 
-    helper.refresh_indices("catalog-asylee")
+    helper.refresh_aliases(["catalog-asylee", "occurrence"])
 
     assert client.refreshed_indices == ["catalog-asylee,occurrence"]
-    assert any(
-        "Newly indexed sentences are now available" in message
-        for message in custom_logger.info_messages
-    )
-
-    helper.refresh_alias("training")
+    helper.refresh_aliases(["training"])
     assert client.refreshed_indices[-1] == "training"
+
+    helper.refresh_aliases([])
+    assert len(client.refreshed_indices) == 2
 
 
 def test_bulk_reports_temporary_failed_documents_to_the_caller(

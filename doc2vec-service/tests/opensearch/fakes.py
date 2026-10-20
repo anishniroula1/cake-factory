@@ -62,7 +62,6 @@ class OpenSearchFake:
         self.vector_dimension = vector_dimension
         self.existing_id_calls = []
         self.bulk_calls = []
-        self.refresh_calls = []
         self.refresh_alias_calls = []
 
     def existing_ids(self, alias, document_ids):
@@ -77,11 +76,8 @@ class OpenSearchFake:
         if len(vector) != self.vector_dimension:
             raise ValueError("wrong vector size")
 
-    def refresh_indices(self, catalog_alias):
-        self.refresh_calls.append(catalog_alias)
-
-    def refresh_alias(self, alias):
-        self.refresh_alias_calls.append(alias)
+    def refresh_aliases(self, aliases):
+        self.refresh_alias_calls.append(aliases)
 
 
 class SqsFake:

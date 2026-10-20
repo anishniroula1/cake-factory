@@ -90,7 +90,7 @@ def test_train_model_reuses_vectors_and_indexes_only_unique_missing_keys(
         name in page_query
         for name in ("is_non_matcher", "is_tracer", "is_form_language")
     )
-    assert opensearch.refresh_alias_calls == ["training"]
+    assert opensearch.refresh_alias_calls == [["training"]]
 
 
 class HandlerFake:

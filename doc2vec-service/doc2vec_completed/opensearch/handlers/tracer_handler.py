@@ -96,8 +96,8 @@ class TracerHandler:
 
         retry_operation(
             "Refresh the tracer catalog",
-            self.opensearch.refresh_alias,
-            self.config.tracer_alias,
+            self.opensearch.refresh_aliases,
+            [self.config.tracer_alias],
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
         )

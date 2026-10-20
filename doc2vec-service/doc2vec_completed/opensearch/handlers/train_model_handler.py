@@ -111,8 +111,8 @@ class TrainModelHandler:
         if indexed_count:
             retry_operation(
                 "Refresh the model-training index",
-                self.opensearch.refresh_alias,
-                self.config.training_alias,
+                self.opensearch.refresh_aliases,
+                [self.config.training_alias],
                 wait_seconds=self.config.retry_seconds,
                 custom_logger=self.logger,
             )

@@ -144,30 +144,19 @@ class OpenSearchHelper:
                 f"{self.config.vector_dimension}"
             )
 
-    def refresh_indices(self, catalog_alias: str) -> None:
-        """Refresh the selected catalog and occurrence index once after all writes.
+    def refresh_aliases(self, aliases: list[str]) -> None:
+        """Refresh one or more aliases after all bulk writes finish.
 
-        Input: catalog_alias="sentence_semantic_catalog_asylee"
+        Input: aliases=["sentence_semantic_catalog_asylee", "sentence_occurrences"]
 
-        One final refresh makes indexed sentences searchable without paying the
-        cost of refreshing after every worker batch.
+        One final refresh makes every supplied alias searchable without paying
+        the cost of refreshing after each worker batch.
         """
 
-        indices = f"{catalog_alias},{self.config.occurrence_alias}"
-        self.client.indices.refresh(index=indices)
-        self.logger.info(
-            "OpenSearch refresh completed. Newly indexed sentences are now "
-            "available to Sentence Similarity."
-        )
-
-    def refresh_alias(self, alias: str) -> None:
-        """Refresh one alias after all of its bulk writes finish.
-
-        Input: alias="sentence_semantic_training"
-        """
-
-        self.client.indices.refresh(index=alias)
-        self.logger.info(f"OpenSearch refresh completed for alias {alias}.")
+        if not aliases:
+            return
+        self.client.indices.refresh(index=",".join(aliases))
+        self.logger.info(f"OpenSearch refresh completed for {len(aliases)} alias(es).")
 
     def _retryable_documents(
         self,

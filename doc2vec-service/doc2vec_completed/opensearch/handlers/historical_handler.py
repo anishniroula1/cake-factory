@@ -130,8 +130,8 @@ class HistoricalHandler:
         # before Sentence Similarity receives its SQS message.
         retry_operation(
             "Refresh indexed sentences",
-            self.opensearch.refresh_indices,
-            catalog_alias,
+            self.opensearch.refresh_aliases,
+            [catalog_alias, self.config.occurrence_alias],
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
         )

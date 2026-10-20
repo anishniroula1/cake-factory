@@ -63,7 +63,7 @@ def test_tracer_handler_reuses_saved_vectors_and_creates_missing_vectors(
         20,
         30,
     }
-    assert opensearch.refresh_alias_calls == ["tracer"]
+    assert opensearch.refresh_alias_calls == [["tracer"]]
 
 
 def test_tracer_handler_stops_when_a_requested_database_row_is_missing(
