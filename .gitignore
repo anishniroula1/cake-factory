@@ -6,3 +6,5 @@ __pycache__/
 *.egg-info/
 casesimilarity
 api-transform
+old-sentence-sim
+filtering-complete
