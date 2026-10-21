@@ -34,6 +34,7 @@ class Classification(TypedDict):
 
 class CatalogRecord(TypedDict):
     sentence_key: str
+    word_count: int
     vector: list[float]
     classification: Classification | None
 

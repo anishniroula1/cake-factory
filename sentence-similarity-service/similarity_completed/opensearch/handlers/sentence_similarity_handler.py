@@ -206,6 +206,21 @@ class SentenceSimilarityHandler:
                 "saved_relationships": 0,
             }
 
+        # Short sentences are still checked against the tracer catalog, but
+        # they do not search the main catalog or create Titan relationships.
+        if source_record["word_count"] < constants.MINIMUM_MATCH_WORD_COUNT:
+            self.logger.info(
+                f"Skipping sentence-catalog matching for global_id={source.global_id}; "
+                f"word_count={source_record['word_count']} is below "
+                f"{constants.MINIMUM_MATCH_WORD_COUNT}."
+            )
+            return {
+                "is_non_matcher": classification["is_non_matcher"],
+                "is_tracer": classification["is_tracer"],
+                "is_form_language": classification["is_form_language"],
+                "saved_relationships": 0,
+            }
+
         key_distances = retry_operation(
             f"Search sentence catalog for source global_id={source.global_id}",
             self.sentence_catalog_open_search_store.search_semantic_matches_by_vector,

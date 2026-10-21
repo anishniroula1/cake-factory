@@ -23,3 +23,16 @@ def sentence_key(value: str) -> str:
     if not normalized:
         raise ValueError("sentence content cannot be empty")
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def sentence_word_count(value: str) -> int:
+    """Count words directly from sentence text instead of using the saved
+    sentences_vector.word_count value.
+
+    Input: value="  The applicant moved to New York.  "
+    Output: 6
+    """
+
+    return len(value.split())
+
+

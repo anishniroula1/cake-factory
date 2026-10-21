@@ -164,6 +164,7 @@ def test_historical_message_runs_the_complete_ingestion_flow(
         ("occurrence", False),
     ]
     assert saved_vector_call[1][0]["sentenceContentVector"] == [0.1, 0.2]
+    assert saved_vector_call[1][0]["wordCount"] == 5
     assert len(occurrence_call[1]) == 4
     occurrence = occurrence_call[1][0]
     assert occurrence["globalId"] == 1

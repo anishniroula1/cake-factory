@@ -120,6 +120,7 @@ PUT /sentence_semantic_catalog_asylee-ivf-sq16-v1
     "properties": {
       "sentenceKey": {"type": "keyword"},
       "sentenceContent": {"type": "text"},
+      "wordCount": {"type": "integer"},
       "sentenceContentVector": {
         "type": "knn_vector",
         "model_id": "<trained IVF-SQ16 model ID>"
@@ -150,6 +151,7 @@ PUT /sentence_semantic_catalog_refugee-ivf-sq16-v1
     "properties": {
       "sentenceKey": {"type": "keyword"},
       "sentenceContent": {"type": "text"},
+      "wordCount": {"type": "integer"},
       "sentenceContentVector": {
         "type": "knn_vector",
         "model_id": "<trained IVF-SQ16 model ID>"
@@ -166,7 +168,9 @@ PUT /sentence_semantic_catalog_refugee-ivf-sq16-v1
 
 The catalog document `_id` is the 64-character `sentenceKey`. The catalog does
 not need `analysisGroup`; selecting the physical catalog establishes the
-group.
+group. Because both mappings use `dynamic: strict`, the `wordCount` mapping
+must be deployed before the updated DOC2Vec writer starts sending catalog
+documents.
 
 ### Why occurrences and catalogs both exist
 
@@ -305,6 +309,12 @@ The key serves two purposes:
    vector in the same analysis group.
 2. It prepares the system for a possible future key-level relationship model.
 
+DOC2Vec also calculates `wordCount` directly from `sentence_content` when it
+builds a catalog document. It does not copy `sentences_vector.word_count`
+because that saved value is not reliable for this matching rule. For example,
+`"The applicant moved to New York."` is stored with `wordCount=6`, while
+`"Yes"` is stored with `wordCount=1`.
+
 ### Live flow
 
 The live route loads document text from `text_similarity_input`, calls the
@@ -331,7 +341,8 @@ Historical sentences are already split. The route:
 4. Uses up to 100 workers.
 5. Reuses an existing `sentence_key`, or creates and saves it inside the
    worker when missing.
-6. Writes occurrences and missing catalog documents.
+6. Calculates catalog `wordCount` from each row's `sentence_content`.
+7. Writes occurrences and missing catalog documents.
 
 ### Embedding reuse
 
@@ -432,6 +443,7 @@ An eligible source searches only its selected catalog:
 | OpenSearch radial minimum score | 0.88 |
 | IVF `nprobes` | 64 |
 | Composite page size | 1000 keys |
+| Minimum source and target word count | 5 words |
 
 OpenSearch cosine score is not the similarity percentage. The conversion is:
 
@@ -443,6 +455,13 @@ minimum_score = (1 + similarity) / 2
 The service pages through every key meeting the radial threshold. It is not a
 fixed top-K sentence search. The source key is also included with distance
 `0.0`, allowing exact occurrences to use the same expansion path.
+
+Every sentence is still checked against the tracer catalog. After that
+classification finishes, a source with `wordCount < 5` stops and does not
+search the normal sentence catalog. For an eligible source, the vector query
+uses `wordCount >= 5` as a catalog filter. This prevents short sentences such
+as `"Yes"`, `"No"`, and `"36"` from creating either exact or similar Titan
+relationships as a source or a target.
 
 Saved distance is:
 

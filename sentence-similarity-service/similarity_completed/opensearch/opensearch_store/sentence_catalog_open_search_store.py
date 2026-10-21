@@ -19,8 +19,8 @@ class SentenceCatalogOpenSearchStore:
 
         Input: catalog_alias="sentence_semantic_catalog_asylee",
         sentence_keys=["abc123", "def456", "abc123"]
-        Output: {"abc123": {"sentence_key": "abc123", "vector": [...],
-        "classification": None}, "def456": {...}}
+        Output: {"abc123": {"sentence_key": "abc123", "word_count": 8,
+        "vector": [...], "classification": None}, "def456": {...}}
 
         Duplicate keys are loaded once. Documents without vector doc values are
         omitted from the returned mapping.
@@ -42,7 +42,7 @@ class SentenceCatalogOpenSearchStore:
                 body={
                     "size": len(key_batch),
                     "track_total_hits": False,
-                    "_source": ["sentenceKey", "isNonMatcher", "isTracer", "isFormLanguage"],
+                    "_source": ["sentenceKey", "wordCount", "isNonMatcher", "isTracer", "isFormLanguage"],
                     "docvalue_fields": [{"field": constants.VECTOR_FIELD, "format": "binary"}],
                     "query": {"ids": {"values": key_batch}},
                 },
@@ -55,6 +55,7 @@ class SentenceCatalogOpenSearchStore:
                 sentence_key = source["sentenceKey"]
                 records[sentence_key] = {
                     "sentence_key": sentence_key,
+                    "word_count": int(source["wordCount"]),
                     "vector": decode_vector(vector_values[0], constants.VECTOR_DIMENSION),
                     "classification": saved_classification(source),
                 }
@@ -71,7 +72,8 @@ class SentenceCatalogOpenSearchStore:
         Output: {"abc123": 0.0, "def456": 0.08}
 
         The source key is always included with distance 0.0. Other keys are
-        returned only when they satisfy the configured similarity threshold.
+        returned only when they satisfy the configured similarity threshold
+        and contain at least five words.
         """
 
         validate_vector(vector, constants.VECTOR_DIMENSION)
@@ -139,6 +141,11 @@ class SentenceCatalogOpenSearchStore:
                             "vector": vector,
                             "min_score": minimum_opensearch_score(constants.MATCH_THRESHOLD),
                             "method_parameters": {"nprobes": constants.IVF_NPROBES},
+                            "filter": {
+                                "range": {
+                                    "wordCount": {"gte": constants.MINIMUM_MATCH_WORD_COUNT}
+                                }
+                            },
                         }
                     }
                 },

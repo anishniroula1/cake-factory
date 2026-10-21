@@ -60,6 +60,7 @@ def test_catalog_records_load_vectors_and_optional_classification(service_config
                             "_id": sentence_key,
                             "_source": {
                                 "sentenceKey": sentence_key,
+                                "wordCount": 5,
                                 "isNonMatcher": False,
                                 "isTracer": False,
                                 "isFormLanguage": False,
@@ -144,6 +145,7 @@ def test_catalog_matches_reads_all_pages_and_keeps_exact_key(service_config):
     assert matches == {source_key: 0.0, target_key: pytest.approx(0.1)}
     knn = client.searches[0]["body"]["query"]["knn"]
     assert knn["sentenceContentVector"]["method_parameters"] == {"nprobes": 64}
+    assert knn["sentenceContentVector"]["filter"] == {"range": {"wordCount": {"gte": 5}}}
 
 
 def test_target_occurrences_searches_every_page_and_excludes_source_application(monkeypatch, service_config):

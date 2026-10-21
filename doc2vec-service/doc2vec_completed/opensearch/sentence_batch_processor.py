@@ -9,7 +9,7 @@ from doc2vec_completed.opensearch.contracts import CatalogDocument, OccurrenceDo
 from doc2vec_completed.opensearch.errors import PermanentDataError
 from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
 from doc2vec_completed.opensearch.retry import retry_operation
-from doc2vec_completed.opensearch.text import sentence_key
+from doc2vec_completed.opensearch.text import sentence_key, sentence_word_count
 from ta_db_connection.atables import Embeddings, SentencesVector
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -203,6 +203,7 @@ class SentenceBatchProcessor:
                 "_id": row.sentence_key,
                 "sentenceKey": row.sentence_key,
                 "sentenceContent": row.sentence_content,
+                "wordCount": sentence_word_count(row.sentence_content),
                 "createdAt": row.last_modified.isoformat(),
                 "updatedAt": row.last_modified.isoformat(),
             }

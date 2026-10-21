@@ -18,6 +18,7 @@ VECTOR_DIMENSION = 512
 VECTOR_FIELD = "sentenceContentVector"
 CLASSIFICATION_FIELDS = ("isNonMatcher", "isTracer", "isFormLanguage")
 MATCH_THRESHOLD = 76  # Minimum sentence-catalog similarity percentage.
+MINIMUM_MATCH_WORD_COUNT = 5  # Shorter sentences do not create sentence matches.
 TRACER_THRESHOLD = 70  # Minimum tracer-catalog classification percentage.
 TRACER_TOP_K = 100  # Closest tracer references checked for classification.
 IVF_NPROBES = 64  # IVF clusters searched by each sentence-catalog query.

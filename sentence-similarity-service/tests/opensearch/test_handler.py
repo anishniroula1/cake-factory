@@ -6,8 +6,13 @@ from similarity_completed.opensearch.handlers.sentence_similarity_handler import
 from tests.opensearch.fakes import LoggerFake, SessionSequence, SqsFake, opensearch_mock, session_mock
 
 
-def source_record(sentence_key, classification=None):
-    return {"sentence_key": sentence_key, "vector": [0.1, 0.2], "classification": classification}
+def source_record(sentence_key, classification=None, word_count=5):
+    return {
+        "sentence_key": sentence_key,
+        "word_count": word_count,
+        "vector": [0.1, 0.2],
+        "classification": classification,
+    }
 
 
 def test_non_matcher_skips_catalog_search_without_creating_match_row(service_config, sentence_row):
@@ -43,6 +48,21 @@ def test_tracer_and_form_language_skip_catalog_search(service_config, sentence_r
     result = handler._process_sentence(sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key))
 
     assert result == {**classification, "saved_relationships": 0}
+    assert router.semantic_search_count == 0
+
+
+def test_short_sentence_is_classified_but_skips_catalog_matching(service_config, sentence_row):
+    opensearch, router = opensearch_mock(sentence_row.sentence_key)
+    sessions = SessionSequence([session_mock(rows=[sentence_row.global_id])])
+    handler = SentenceSimilarityHandler(service_config, sessions, opensearch, SqsFake(), LoggerFake())
+
+    result = handler._process_sentence(
+        sentence_row,
+        "catalog-asylee",
+        source_record(sentence_row.sentence_key, word_count=4),
+    )
+
+    assert result["saved_relationships"] == 0
     assert router.semantic_search_count == 0
 
 

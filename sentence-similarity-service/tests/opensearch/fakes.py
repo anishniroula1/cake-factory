@@ -149,6 +149,7 @@ class OpenSearchResponseRouter:
                     "_id": sentence_key,
                     "_source": {
                         "sentenceKey": sentence_key,
+                        "wordCount": 5,
                         "isNonMatcher": classification["is_non_matcher"],
                         "isTracer": classification["is_tracer"],
                         "isFormLanguage": classification["is_form_language"],

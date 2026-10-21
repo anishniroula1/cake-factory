@@ -709,6 +709,7 @@ PUT /sentence_semantic_catalog_asylee-ivf-sq16-v1
     "properties": {
       "sentenceKey": {"type": "keyword"},
       "sentenceContent": {"type": "text"},
+      "wordCount": {"type": "integer"},
       "sentenceContentVector": {
         "type": "knn_vector",
         "model_id": "<trained IVF-SQ16 model ID>"
@@ -739,6 +740,7 @@ PUT /sentence_semantic_catalog_refugee-ivf-sq16-v1
     "properties": {
       "sentenceKey": {"type": "keyword"},
       "sentenceContent": {"type": "text"},
+      "wordCount": {"type": "integer"},
       "sentenceContentVector": {
         "type": "knn_vector",
         "model_id": "<trained IVF-SQ16 model ID>"
@@ -786,6 +788,7 @@ And it creates sentence_semantic_catalog_refugee-ivf-sq16-v1 with the same model
 And it creates the sentence_semantic_catalog_asylee alias
 And it creates the sentence_semantic_catalog_refugee alias
 And both mappings contain isNonMatcher, isTracer, and isFormLanguage
+And both mappings contain wordCount as an integer
 And neither catalog stores analysisGroup because the selected catalog defines the group
 And Terraform exposes both physical index names and both aliases for Harness
 And application services no longer use the generic sentence_semantic_catalog alias
@@ -796,6 +799,13 @@ Given the existing generic sentence catalog contains data
 When the two group catalogs are deployed
 Then the generic catalog is not deleted during this deployment
 And services switch to the group aliases only after both catalogs are populated and validated
+```
+
+```gherkin
+Given an Asylee or Refugee catalog already contains sentence documents
+When wordCount is added to the strict catalog mapping
+Then existing catalog documents are rebuilt or backfilled with wordCount calculated from sentenceContent
+And no catalog document is missing wordCount before the updated Sentence Similarity service is deployed
 ```
 
 Harness outputs:
@@ -883,6 +893,8 @@ And keys that already exist in the selected group catalog are not inserted again
 And missing keys are checked against embeddings using global_id and embedding_type 2
 And a valid existing 512-dimension embedding is included in its catalog document
 And records without a saved embedding are sent without a vector so the OpenSearch Bedrock pipeline creates it
+And wordCount is calculated directly from sentence_content and is not copied from sentences_vector.word_count
+And every missing catalog document stores that calculated wordCount
 And only missing unique sentence keys are bulk-inserted into their selected group catalog
 And every sentence is bulk-inserted into sentence_occurrences
 And sentenceKey is the stable catalog document ID
@@ -947,6 +959,8 @@ And no vector work is done when that key already exists
 And embeddings is checked by global_id and embedding_type 2 for a missing catalog key
 And an existing 512-dimension Titan embedding is reused
 And the Bedrock pipeline generates a vector only when the catalog key and saved embedding are both missing
+And wordCount is calculated directly from sentence_content and stored on every new catalog document
+And sentences_vector.word_count is not used as the catalog wordCount
 And one occurrence document is written using globalId as its OpenSearch document ID
 ```
 
@@ -1495,6 +1509,7 @@ And isTracer is true only when a tracer result is found and both returned flags 
 And it saves the completed classification on the selected group catalog document
 And the sentence row in sentences_vector is updated using global_id with the flags, matching tracerId, and decimal similarity score
 And any sentence found in the tracer catalog is not sent to normal sentence similarity matching
+And a sentence with catalog wordCount less than 5 completes tracer classification but is not sent to normal sentence similarity matching
 ```
 
 ```gherkin
@@ -1521,6 +1536,8 @@ Given the previous story has updated the sentences for a tsp_id
 When an eligible sentence requires matching
 Then analysis_group selects sentence_semantic_catalog_asylee or sentence_semantic_catalog_refugee
 And its saved vector is used to search only that selected catalog
+And a source sentence with wordCount less than 5 does not run the sentence-catalog vector search
+And the OpenSearch vector query filters catalog targets to wordCount greater than or equal to 5
 And exact and similar sentence results are collected
 And same-application, tracer, form-language, and other non-matcher results are excluded
 And the accepted occurrence matches are written to titan_matches using the bidirectional update logic

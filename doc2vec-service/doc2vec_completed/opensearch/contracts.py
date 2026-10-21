@@ -69,6 +69,7 @@ class CatalogDocument(TypedDict):
     _id: str
     sentenceKey: str
     sentenceContent: str
+    wordCount: int
     createdAt: str
     updatedAt: str
     sentenceContentVector: NotRequired[list[float]]
