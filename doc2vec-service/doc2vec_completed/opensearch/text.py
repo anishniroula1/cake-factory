@@ -1,5 +1,10 @@
 import hashlib
+import re
 import unicodedata
+
+# Match words made from Unicode letters. Apostrophes and hyphens are allowed
+# only when they connect letters, so standalone punctuation is not a word.
+WORD_PATTERN = re.compile(r"[^\W\d_]+(?:[-'’][^\W\d_]+)*", re.UNICODE)
 
 
 def normalize_sentence(value: str) -> str:
@@ -31,8 +36,11 @@ def sentence_word_count(value: str) -> int:
 
     Input: value="  The applicant moved to New York.  "
     Output: 6
+
+    Input: value="Yes , no - 36 !!!"
+    Output: 2 because punctuation and numbers are not words.
     """
 
-    return len(value.split())
-
+    normalized = unicodedata.normalize("NFKC", value)
+    return len(WORD_PATTERN.findall(normalized))
 

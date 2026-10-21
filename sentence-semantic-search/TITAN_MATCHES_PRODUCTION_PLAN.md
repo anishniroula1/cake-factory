@@ -313,7 +313,9 @@ DOC2Vec also calculates `wordCount` directly from `sentence_content` when it
 builds a catalog document. It does not copy `sentences_vector.word_count`
 because that saved value is not reliable for this matching rule. For example,
 `"The applicant moved to New York."` is stored with `wordCount=6`, while
-`"Yes"` is stored with `wordCount=1`.
+`"Yes"` is stored with `wordCount=1`. The counter accepts alphabetic words,
+including normal contractions and hyphenated words, but does not count
+numbers or standalone punctuation such as `,`, `-`, or `!!!`.
 
 ### Live flow
 

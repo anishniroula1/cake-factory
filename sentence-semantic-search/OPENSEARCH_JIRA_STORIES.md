@@ -894,6 +894,7 @@ And missing keys are checked against embeddings using global_id and embedding_ty
 And a valid existing 512-dimension embedding is included in its catalog document
 And records without a saved embedding are sent without a vector so the OpenSearch Bedrock pipeline creates it
 And wordCount is calculated directly from sentence_content and is not copied from sentences_vector.word_count
+And numbers and standalone punctuation are not counted as words
 And every missing catalog document stores that calculated wordCount
 And only missing unique sentence keys are bulk-inserted into their selected group catalog
 And every sentence is bulk-inserted into sentence_occurrences
@@ -960,6 +961,7 @@ And embeddings is checked by global_id and embedding_type 2 for a missing catalo
 And an existing 512-dimension Titan embedding is reused
 And the Bedrock pipeline generates a vector only when the catalog key and saved embedding are both missing
 And wordCount is calculated directly from sentence_content and stored on every new catalog document
+And numbers and standalone punctuation are not counted as words
 And sentences_vector.word_count is not used as the catalog wordCount
 And one occurrence document is written using globalId as its OpenSearch document ID
 ```
