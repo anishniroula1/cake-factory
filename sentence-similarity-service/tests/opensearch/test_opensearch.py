@@ -2,6 +2,7 @@ import base64
 import struct
 
 import pytest
+from opensearchpy.exceptions import OpenSearchException
 
 from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.errors import PermanentDataError
@@ -19,14 +20,16 @@ class Client:
     def __init__(self, responses=None):
         self.responses = responses or []
         self.searches = []
-        self.updates = []
+        self.bulks = []
+        self.bulk_response = {"errors": False, "items": [{"update": {"status": 200}}]}
 
     def search(self, **values):
         self.searches.append(values)
         return self.responses.pop(0)
 
-    def update(self, **values):
-        self.updates.append(values)
+    def bulk(self, **values):
+        self.bulks.append(values)
+        return self.bulk_response
 
 
 def encoded_vector(values):
@@ -103,6 +106,9 @@ def test_tracer_classification_and_catalog_update(service_config):
     assert classification == {"is_non_matcher": True, "is_tracer": True, "is_form_language": True}
     knn = client.searches[0]["body"]["query"]["bool"]["must"][0]["knn"]["sentenceContentVector"]
     assert knn == {"vector": [0.1, 0.2], "k": 100}
+    assert client.bulks[0]["body"][0] == {
+        "update": {"_index": "catalog-asylee", "_id": "a" * 64}
+    }
 
 
 def test_empty_tracer_result_allows_matching(service_config):
@@ -112,6 +118,19 @@ def test_empty_tracer_result_allows_matching(service_config):
         "is_tracer": False,
         "is_form_language": False,
     }
+
+
+def test_catalog_classification_bulk_failure_is_reported(service_config):
+    client = Client()
+    client.bulk_response = {"errors": True, "items": [{"update": {"status": 403}}]}
+    store = SentenceCatalogOpenSearchStore(client)
+
+    with pytest.raises(OpenSearchException):
+        store.update_classification_by_sentence_key(
+            "catalog-asylee",
+            "a" * 64,
+            {"is_non_matcher": False, "is_tracer": True, "is_form_language": False},
+        )
 
 
 def test_unflagged_tracer_reference_is_derived_as_tracer(service_config):

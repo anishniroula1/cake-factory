@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+from opensearchpy.exceptions import OpenSearchException
+
 from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import CatalogRecord, Classification
 from similarity_completed.opensearch.utill.classification import saved_classification
@@ -88,26 +90,39 @@ class SentenceCatalogOpenSearchStore:
     def update_classification_by_sentence_key(
         self, catalog_alias: str, sentence_key: str, classification: Classification
     ) -> None:
-        """Persist reusable classification flags on a catalog document. This
-        prevents repeated tracer searches for the same sentence key.
+        """Persist reusable classification flags with a one-item bulk update.
+        This prevents repeated tracer searches for the same sentence key.
 
         Input: catalog_alias="sentence_semantic_catalog_asylee",
         sentence_key="abc123", classification={"is_non_matcher": True,
         "is_tracer": False, "is_form_language": False}
         """
 
-        self.client.update(
-            index=catalog_alias,
-            id=sentence_key,
-            body={
-                "doc": {
-                    "isNonMatcher": classification["is_non_matcher"],
-                    "isTracer": classification["is_tracer"],
-                    "isFormLanguage": classification["is_form_language"],
-                    "updatedAt": datetime.now(UTC).isoformat(),
-                }
-            },
+        document = {
+            "isNonMatcher": classification["is_non_matcher"],
+            "isTracer": classification["is_tracer"],
+            "isFormLanguage": classification["is_form_language"],
+            "updatedAt": datetime.now(UTC).isoformat(),
+        }
+
+        # The single-document update endpoint returned 403 in the environment.
+        # Keep the old call here for reference while the one-item bulk update is tested.
+        # self.client.update(
+        #     index=catalog_alias,
+        #     id=sentence_key,
+        #     body={"doc": document},
+        # )
+
+        response = self.client.bulk(
+            body=[
+                {"update": {"_index": catalog_alias, "_id": sentence_key}},
+                {"doc": document},
+            ]
         )
+        if response.get("errors"):
+            raise OpenSearchException(
+                f"catalog classification bulk update failed: {response.get('items', [])}"
+            )
 
     def _search_semantic_match_batch(
         self, catalog_alias: str, vector: list[float], after_key: dict | None

@@ -132,11 +132,11 @@ class OpenSearchResponseRouter:
             return self._occurrences(body)
         raise AssertionError(f"Unexpected OpenSearch request for index {index}: {body}")
 
-    def update(self, **values):
-        """Remember catalog classification updates made by the real store."""
+    def bulk(self, **values):
+        """Remember the one-item bulk classification update."""
 
         self.saved_classifications.append(values)
-        return {"result": "updated"}
+        return {"errors": False, "items": [{"update": {"status": 200}}]}
 
     def _catalog_records(self, sentence_keys):
         hits = []
@@ -216,5 +216,5 @@ def opensearch_mock(
     client = create_autospec(OpenSearch, instance=True)
     client.count.side_effect = router.count
     client.search.side_effect = router.search
-    client.update.side_effect = router.update
+    client.bulk.side_effect = router.bulk
     return client, router
