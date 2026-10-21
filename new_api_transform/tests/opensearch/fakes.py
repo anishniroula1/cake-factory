@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
-from api_transform_service.opensearch.contracts import ApplicationReference
-from api_transform_service.opensearch.errors import OperationFailedError
+from transform_completed.opensearch.contracts import ApplicationReference
+from transform_completed.opensearch.errors import OperationFailedError
 
 
 class LoggerFake:
@@ -71,7 +71,7 @@ class DependenciesFake:
 
 class ApplicationStoreFake:
     def load_application_reference(self, tsp_id):
-        return ApplicationReference(100, 900001)
+        return ApplicationReference(100, 900001, "Asylee")
 
     def load_application_records(self, references):
         return {

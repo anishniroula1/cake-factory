@@ -5,8 +5,16 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from api_transform_service.opensearch.contracts import KafkaDelivery
+from transform_completed.opensearch.contracts import KafkaDelivery
 
+# Record when one application's API event was last confirmed by Kafka.
+#
+# Input: {"application_id": 50}
+# Table used: api.transform_status
+# Output: one row whose last_transmission is the current database time.
+#
+# The first successful delivery inserts the row. A later delivery updates the
+# same application instead of creating a duplicate row.
 SAVE_TRANSFORM_STATUS = text(
     """
     INSERT INTO api.transform_status (application_id, last_transmission)
@@ -16,6 +24,21 @@ SAVE_TRANSFORM_STATUS = text(
     """
 )
 
+# Save the Kafka payload and the broker location returned by its delivery
+# callback.
+#
+# Input example:
+#   {
+#       "application_id": 50,
+#       "a_number": 900001,
+#       "analysis_group": "Asylee",
+#       "kafka_partition": 2,
+#       "kafka_offset": 500,
+#       "kafka_environment": "prod"
+#   }
+#
+# Table used: api.kafka_events
+# Output: one audit row for the confirmed Kafka event.
 SAVE_KAFKA_EVENT = text(
     """
     INSERT INTO api.kafka_events (
@@ -40,8 +63,21 @@ SAVE_KAFKA_EVENT = text(
     """
 )
 
+# Remove Kafka audit rows older than the configured retention window.
+#
+# Input: {"oldest_timestamp": "2026-08-21T00:00:00+00:00"}
+# Table used: api.kafka_events
+# Output: audit rows before the timestamp are deleted.
 DELETE_OLD_KAFKA_EVENTS = text("DELETE FROM api.kafka_events WHERE kafka_ts < :oldest_timestamp")
 
+# Save one API Transform failure for operational investigation.
+#
+# Input: {"message": "API Transform failed", "exception": "missing application"}
+# Table used: landing.etlerror
+# Output: one error row with the current database time.
+#
+# The legacy batch IDs use -1 because this worker processes one SQS document
+# rather than a batch file.
 SAVE_ETL_ERROR = text(
     """
     INSERT INTO landing.etlerror (

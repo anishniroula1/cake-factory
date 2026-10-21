@@ -3,6 +3,29 @@ from collections.abc import Callable
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
+# Load the current applicant and the newest current residence and mailing
+# addresses for each requested application.
+#
+# Input:
+#   {"application_ids": [50], "reduce_kafka_size": false}
+#
+# Tables used:
+#   biodata.applicant supplies applicant details and OCR source values.
+#   biodata.address supplies address details and address OCR source values.
+#   api.transform_status supplies the last successful Kafka transmission time.
+#
+# Output example:
+#   {
+#       "application_id": 50,
+#       "first_name": "Ana",
+#       "mailing_address_city": "Arlington",
+#       "residence_address_city": "Alexandria",
+#       "first_name_ocr": "000100"
+#   }
+#
+# When reduce_kafka_size is true, the query returns the applicant only when the
+# applicant or either address changed after the last successful transmission.
+# The Python store converts the OCR source values into five API fault flags.
 LOAD_APPLICANT_DETAILS = text(
     """
     WITH residence AS (

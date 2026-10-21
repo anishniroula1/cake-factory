@@ -3,20 +3,54 @@ from collections.abc import Callable
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from api_transform_service.opensearch.contracts import ApplicationReference, TspId
+from transform_completed.opensearch.contracts import ApplicationReference, TspId
 
+# Find the application and A-number connected to the tsp_id from the SQS
+# message.
+#
+# Input: {"tsp_id": 10}
+# Table used: tsp.text_similarity_input
+# Output: {"application_id": 50, "a_number": 900001,
+#          "analysis_group": "Asylee"}
+#
+# Only the current document row is used. No row means API Transform cannot
+# determine which application should be rebuilt.
 LOAD_APPLICATION_REFERENCE = text(
     """
-    SELECT application_id, a_number
+    SELECT application_id, a_number, analysis_group
     FROM tsp.text_similarity_input
     WHERE tsp_id = :tsp_id
       AND is_current = TRUE
     """
 )
 
-# The Titan summary stores application IDs. The lateral section maps the
-# 2-or-more-match application IDs back to A-numbers because that is what the
-# existing API event calls similar_case_ids.
+# Build the application-level section placed in the API Kafka payload.
+#
+# Input:
+#   {"application_ids": [50], "a_numbers": [900001]}
+#
+# Tables used:
+#   landing.application_id_lookup supplies the application's A-number, analysis
+#   group, and case type. landing.receipt_number_lookup supplies its receipt.
+#   biodata.applicant supplies case details. tsp.text_similarity_input supplies
+#   the sentence source types. tsp.titan_similar_cases supplies Titan case
+#   counts, application IDs, and TAH status. landing.global_case_details_history
+#   supplies confidence values.
+#
+# Output example:
+#   {
+#       "application_id": 50,
+#       "a_number": 900001,
+#       "receipt_number": "A100000001",
+#       "similar_cases_count": 2,
+#       "similar_case_ids": [900010, 900020],
+#       "similar_case_application_ids": [60, 70],
+#       "ta_hit": true
+#   }
+#
+# titan_similar_cases stores application IDs. The lateral query maps the
+# 2-or-more-match IDs to A-numbers because the existing API contract calls that
+# field similar_case_ids but expects A-numbers in it.
 LOAD_APPLICATION_RECORDS = text(
     """
     WITH confidence AS (
@@ -94,20 +128,25 @@ class ApplicationDBStore:
         """Find the application affected by one incoming document ID.
 
         Input: tsp_id=10
-        Output: ApplicationReference(application_id=50, a_number=900001), or
-        None when the document does not exist.
+        Output: ApplicationReference(application_id=50, a_number=900001,
+        analysis_group="Asylee"), or None when the document does not exist.
         """
 
         with self.session_factory() as session:
             row = session.execute(LOAD_APPLICATION_REFERENCE, {"tsp_id": tsp_id}).mappings().one_or_none()
         if row is None:
             return None
-        return ApplicationReference(int(row["application_id"]), int(row["a_number"]))
+        return ApplicationReference(
+            application_id=int(row["application_id"]),
+            a_number=int(row["a_number"]),
+            analysis_group=str(row["analysis_group"]),
+        )
 
     def load_application_records(self, references: list[ApplicationReference]) -> dict[int, dict]:
         """Load the case fields placed in each Kafka event's a_records section.
 
-        Input: references=[ApplicationReference(application_id=50, a_number=900001)]
+        Input: references=[ApplicationReference(application_id=50,
+        a_number=900001, analysis_group="Asylee")]
         Output: {50: {"a_number": 900001, "similar_case_ids": [...], ...}}
 
         Titan case lists contain application IDs. The query also maps those IDs

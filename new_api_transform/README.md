@@ -41,18 +41,32 @@ service repository that already provides those packages.
 ## Configuration
 
 `config.py` reads values that can change between environments, including
-database credentials, queue URLs, Kafka connection values, the analysis group,
-and feature toggles. `constants.py` holds fixed service behavior such as queue
+database credentials, queue URLs, Kafka connection values, and feature
+toggles. `constants.py` holds fixed service behavior such as queue
 timing, payload limits, the Kafka topic, database pool sizes, and retry timing.
 Fixed values do not need to be repeated in deployment environment variables.
 
 ## Run
 
-Copy `.env.example` to `.env`, supply working PostgreSQL, SQS, and Kafka values,
-then run:
+Copy `.env.example` to `.env` and supply working PostgreSQL and SQS values.
+Start the local Kafka broker and create the API Transform topic with:
+
+```bash
+make kafka
+```
+
+The local broker uses `localhost:9092` and the `PLAINTEXT` protocol already
+shown in `.env.example`. Run the worker locally with:
 
 ```bash
 make local
+```
+
+`make local` also starts Kafka when it is not already running. Stop the local
+broker with:
+
+```bash
+make kafka-stop
 ```
 
 Run code checks and tests with:

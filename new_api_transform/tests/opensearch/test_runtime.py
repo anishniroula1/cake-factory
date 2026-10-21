@@ -6,15 +6,15 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 
-from api_transform_service.opensearch import constants
-from api_transform_service.opensearch import dependencies as dependencies_module
-from api_transform_service.opensearch.config import Config, read_boolean
-from api_transform_service.opensearch.dependencies import Dependencies
-from api_transform_service.opensearch.errors import OperationFailedError
-from api_transform_service.opensearch.main import run_opensearch_flow
-from api_transform_service.opensearch.retry import retry_operation
-from api_transform_service.opensearch.sqs_processor import SqsProcessor
 from tests.opensearch.fakes import DependenciesFake, HandlerFake, LoggerFake, SqsFake
+from transform_completed.opensearch import constants
+from transform_completed.opensearch import dependencies as dependencies_module
+from transform_completed.opensearch.config import Config, read_boolean, read_integer
+from transform_completed.opensearch.dependencies import Dependencies
+from transform_completed.opensearch.errors import OperationFailedError
+from transform_completed.opensearch.main import run_opensearch_flow
+from transform_completed.opensearch.retry import retry_operation
+from transform_completed.opensearch.sqs_processor import SqsProcessor
 
 
 def test_config_reads_environment(monkeypatch):
@@ -29,14 +29,13 @@ def test_config_reads_environment(monkeypatch):
         "KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
         "KAFKA_SECURITY_PROTOCOL": "PLAINTEXT",
         "KAFKA_ENV": "local",
-        "ANALYSIS_GROUP": "asylee",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
 
     config = Config.from_environment()
 
-    assert (config.analysis_group, config.pg_db_port) == ("Asylee", 5432)
+    assert (config.pg_db_port, config.sentence_match_limit) == (5432, 3000)
     assert constants.KAFKA_TOPIC == "rfs.ata.data_migration.api.events"
 
 
@@ -44,6 +43,10 @@ def test_boolean_and_validation_reject_bad_values(monkeypatch, service_config):
     monkeypatch.setenv("BAD_TOGGLE", "maybe")
     with pytest.raises(ValueError, match="true or false"):
         read_boolean("BAD_TOGGLE", False)
+
+    monkeypatch.setenv("BAD_INTEGER", "not-a-number")
+    with pytest.raises(ValueError, match="whole number"):
+        read_integer("BAD_INTEGER", 3000)
 
     with pytest.raises(ValueError, match="Missing required"):
         replace(service_config, receive_sqs_endpoint="").validate()
@@ -90,7 +93,7 @@ def test_sqs_send_failure_keeps_source_message(service_config):
 def test_main_closes_dependencies(monkeypatch):
     dependencies = Mock()
     dependencies.logger = LoggerFake()
-    monkeypatch.setattr("api_transform_service.opensearch.main.SqsProcessor.run", Mock())
+    monkeypatch.setattr("transform_completed.opensearch.main.SqsProcessor.run", Mock())
 
     run_opensearch_flow(dependencies=dependencies)
 

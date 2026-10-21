@@ -5,6 +5,37 @@ from datetime import datetime
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
+from transform_completed.opensearch import constants
+
+# Load current sentences and rebuild each sentence's existing API match list
+# from all of its Titan JSONB buckets.
+#
+# Input:
+#   {"application_ids": [50], "sentence_match_limit": 3000}
+#
+# Tables used:
+#   tsp.sentences_vector supplies sentence text and IDs.
+#   tsp.text_similarity_input supplies application, document, section, and
+#   template values. tsp.api_section_map maps internal sections to API sections.
+#   tsp.titan_matches supplies target global IDs and cosine distances.
+#
+# Example Titan buckets for source global_id 10:
+#   bucket 0 has {"20": 0.0}; bucket 1 has {"30": 0.12}
+#
+# Output example:
+#   {
+#       "global_id": 10,
+#       "application_id": 50,
+#       "tsp_id": 100,
+#       "sentence": "The applicant entered the country in 2020.",
+#       "matches": [
+#           {"global_id": 20, "distance": 0.0},
+#           {"global_id": 30, "distance": 0.12}
+#       ]
+#   }
+#
+# The per-sentence limit keeps one unusually common sentence from making the
+# Kafka event too large.
 LOAD_SENTENCES = text(
     """
     WITH source_sentences AS (
@@ -66,13 +97,32 @@ LOAD_SENTENCES = text(
     """
 ).bindparams(bindparam("application_ids", expanding=True))
 
+# Load every current document for the requested applications and count how
+# many distinct source sentences have at least one Titan match.
+#
+# Input: {"application_ids": [50]}
+#
+# Tables used:
+#   tsp.text_similarity_input supplies document values.
+#   tsp.titan_matches supplies matched source global IDs.
+#   landing.global_document_registry supplies file names.
+#   tsp.api_section_map maps internal section names to API section names.
+#
+# Output example:
+#   {
+#       "application_id": 50,
+#       "tsp_id": 100,
+#       "section_name": "Affidavit",
+#       "file_name": "affidavit.pdf",
+#       "match_count": 3
+#   }
 LOAD_DOCUMENTS = text(
-    """
+    f"""
     SELECT
         input.application_id,
         COALESCE(section.api_section_name, input.section_name) AS section_name,
         input.tsp_id,
-        TO_CHAR(input.load_date, 'YYYY-MM-DD HH24:MI:SS.USTZH') AS load_date,
+        TO_CHAR(input.load_date, '{constants.DATETIME_FORMAT_TZH}') AS load_date,
         COALESCE(registry.file_name, 'unknown') AS file_name,
         COUNT(DISTINCT bucket.global_id) FILTER (WHERE bucket.match_count > 0) AS match_count
     FROM tsp.text_similarity_input AS input
@@ -93,13 +143,22 @@ LOAD_DOCUMENTS = text(
     """
 ).bindparams(bindparam("application_ids", expanding=True))
 
+# Load public-template metadata for Asylee applications.
+#
+# Input: {"application_ids": [50]}
+# Tables used: tsp.text_similarity_input and landing.template_registry
+# Output: {"application_id": 50, "a_number": 900001,
+#          "url": "https://example/template.pdf", "load_date": "..."}
+#
+# Rows are newest first. The Python store keeps the first row for each
+# application, which gives the API payload its newest public template.
 LOAD_PUBLIC_TEMPLATES = text(
-    """
+    f"""
     SELECT
         input.application_id,
         input.a_number,
         template.template_url AS url,
-        TO_CHAR(input.load_date, 'YYYY-MM-DD HH24:MI:SS.USTZH') AS load_date
+        TO_CHAR(input.load_date, '{constants.DATETIME_FORMAT_TZH}') AS load_date
     FROM tsp.text_similarity_input AS input
     JOIN landing.template_registry AS template ON template.a_number = input.a_number
     WHERE input.application_id IN :application_ids

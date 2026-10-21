@@ -1,7 +1,7 @@
 import pytest
 
-from api_transform_service.opensearch import constants
-from api_transform_service.opensearch.config import Config
+from transform_completed.opensearch import constants
+from transform_completed.opensearch.config import Config
 
 
 @pytest.fixture
@@ -28,8 +28,8 @@ def service_config(monkeypatch) -> Config:
         ssl_key_file="",
         kafka_compression="lz4",
         verbose_kafka_logging=False,
-        analysis_group="Asylee",
         reduce_kafka_size=False,
+        sentence_match_limit=3000,
     )
 
 

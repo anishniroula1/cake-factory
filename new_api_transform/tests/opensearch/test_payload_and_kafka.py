@@ -1,12 +1,11 @@
 import json
-from dataclasses import replace
 
 import pytest
 
-from api_transform_service.opensearch.errors import KafkaPublishError
-from api_transform_service.opensearch.kafka_processor import KafkaProcessor
-from api_transform_service.opensearch.payload_builder import PayloadBuilder
 from tests.opensearch.fakes import KafkaProducerFake, LoggerFake, TransmissionStoreFake
+from transform_completed.opensearch.errors import KafkaPublishError
+from transform_completed.opensearch.kafka_processor import KafkaProcessor
+from transform_completed.opensearch.payload_builder import PayloadBuilder
 
 
 def application_record(group="Asylee"):
@@ -21,8 +20,7 @@ def application_record(group="Asylee"):
 
 
 def test_refugee_payload_normalizes_receipt_and_has_no_template(service_config):
-    config = replace(service_config, analysis_group="Refugee")
-    event = PayloadBuilder(config).build_application_events(application_record("Refugee"), None, [], [], None)[0]
+    event = PayloadBuilder(service_config).build_application_events(application_record("Refugee"), None, [], [], None)[0]
 
     assert event["after"]["payload"]["a_records"]["receipt_number"] == "ABC-00000123"
     assert "public_templates" not in event["after"]["payload"]

@@ -3,18 +3,18 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from api_transform_service.opensearch.contracts import KafkaDelivery
-from api_transform_service.opensearch.db_store.applicant_db_store import ApplicantDBStore
-from api_transform_service.opensearch.db_store.application_db_store import ApplicationDBStore
-from api_transform_service.opensearch.db_store.content_db_store import ContentDBStore
-from api_transform_service.opensearch.db_store.transmission_db_store import TransmissionDBStore
 from tests.opensearch.fakes import SessionFactoryFake, SessionFake
+from transform_completed.opensearch.contracts import KafkaDelivery
+from transform_completed.opensearch.db_store.applicant_db_store import ApplicantDBStore
+from transform_completed.opensearch.db_store.application_db_store import ApplicationDBStore
+from transform_completed.opensearch.db_store.content_db_store import ContentDBStore
+from transform_completed.opensearch.db_store.transmission_db_store import TransmissionDBStore
 
 
 def test_application_store_reads_unique_application_values():
     sessions = SessionFactoryFake(
         [
-            SessionFake([{"application_id": 100, "a_number": 900001}]),
+            SessionFake([{"application_id": 100, "a_number": 900001, "analysis_group": "Asylee"}]),
             SessionFake(
                 [{"application_id": 100, "a_number": 900001, "analysis_group": "Asylee", "receipt_number": "ABC123"}]
             ),

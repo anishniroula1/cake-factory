@@ -3,9 +3,6 @@ from unittest.mock import Mock
 
 import pytest
 
-from api_transform_service.opensearch.handlers.api_transform_handler import ApiTransformHandler
-from api_transform_service.opensearch.payload_builder import PayloadBuilder
-from api_transform_service.opensearch.sqs_processor import SqsProcessor
 from tests.opensearch.fakes import (
     ApplicantStoreFake,
     ApplicationStoreFake,
@@ -17,6 +14,9 @@ from tests.opensearch.fakes import (
     SqsFake,
     TransmissionStoreFake,
 )
+from transform_completed.opensearch.handlers.api_transform_handler import ApiTransformHandler
+from transform_completed.opensearch.payload_builder import PayloadBuilder
+from transform_completed.opensearch.sqs_processor import SqsProcessor
 
 
 def test_one_sqs_message_runs_complete_api_transform_flow(service_config):

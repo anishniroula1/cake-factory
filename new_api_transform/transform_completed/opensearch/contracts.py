@@ -12,6 +12,7 @@ class ApplicationReference:
 
     application_id: int
     a_number: int
+    analysis_group: str
 
 
 @dataclass(frozen=True)

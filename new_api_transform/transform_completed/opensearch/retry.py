@@ -6,9 +6,9 @@ from botocore.exceptions import BotoCoreError
 from confluent_kafka import KafkaException
 from sqlalchemy.exc import SQLAlchemyError
 
-from api_transform_service.opensearch import constants
-from api_transform_service.opensearch.errors import KafkaPublishError, OperationFailedError
 from ta_utils.logger.CustomLogger import CustomLogger
+from transform_completed.opensearch import constants
+from transform_completed.opensearch.errors import KafkaPublishError, OperationFailedError
 
 RETRYABLE_ERRORS = (BotoCoreError, SQLAlchemyError, KafkaException, KafkaPublishError, TimeoutError, ConnectionError)
 

@@ -1,5 +1,4 @@
 import os
-import re
 from dataclasses import dataclass
 from typing import Self
 
@@ -26,14 +25,20 @@ def read_boolean(name: str, default: bool) -> bool:
     return value == "true"
 
 
-def dlq_url(queue_url: str) -> str:
-    """Build the DLQ URL from the normal API Transform queue URL.
+def read_integer(name: str, default: int, minimum: int = 1) -> int:
+    """Read a whole-number environment value and enforce its minimum.
 
-    Input: queue_url="https://sqs.../asylee-api-transform.fifo"
-    Output: "https://sqs.../asylee-dlq-api-transform.fifo"
+    Input: name="SENTENCE_MATCH_LIMIT", default=3000
+    Output: 3000 when the environment value is missing.
     """
 
-    return re.sub(r"(asylee|refugee)-([^/]+\.fifo)", r"\1-dlq-\2", queue_url)
+    try:
+        value = int(os.getenv(name, str(default)).strip())
+    except ValueError as error:
+        raise ValueError(f"{name} must be a whole number") from error
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -65,8 +70,8 @@ class Config:
     verbose_kafka_logging: bool
 
     # Transformation
-    analysis_group: str
     reduce_kafka_size: bool
+    sentence_match_limit: int
 
     @classmethod
     def from_environment(cls) -> Self:
@@ -85,7 +90,7 @@ class Config:
             aws_region=os.getenv("AWS_DEFAULT_REGION", "us-east-1").strip(),
             aws_local_endpoint_url=os.getenv("AWS_LOCAL_ENDPOINT_URL", "").strip(),
             receive_sqs_endpoint=source_queue,
-            dlq_sqs_endpoint=os.getenv("AWS_DLQ_SQS_QUEUE_ENDPOINT", dlq_url(source_queue)).strip(),
+            dlq_sqs_endpoint=os.getenv("AWS_DLQ_SQS_QUEUE_ENDPOINT", "").strip(),
             sent_sqs_endpoint=os.getenv("AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT", "").strip(),
             kafka_bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "").strip(),
             kafka_security_protocol=os.getenv("KAFKA_SECURITY_PROTOCOL", "SSL").strip(),
@@ -95,8 +100,8 @@ class Config:
             ssl_key_file=os.getenv("SSL_KEYFILE", "").strip(),
             kafka_compression=os.getenv("KAFKA_COMPRESSION", "lz4").strip(),
             verbose_kafka_logging=read_boolean("VERBOSE_KAFKA_LOGGING", False),
-            analysis_group=os.getenv("ANALYSIS_GROUP", "").strip().capitalize(),
             reduce_kafka_size=read_boolean("REDUCE_KAFKA_SIZE", False),
+            sentence_match_limit=read_integer("SENTENCE_MATCH_LIMIT", 3000),
         )
         config.validate()
         return config
@@ -113,7 +118,6 @@ class Config:
             "AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT": self.sent_sqs_endpoint,
             "KAFKA_BOOTSTRAP_SERVERS": self.kafka_bootstrap_servers,
             "KAFKA_ENV": self.kafka_environment,
-            "ANALYSIS_GROUP": self.analysis_group,
         }
         missing = [name for name, value in required.items() if not value]
         if missing:

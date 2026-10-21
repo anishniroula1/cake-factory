@@ -1,9 +1,9 @@
 import json
 
-from api_transform_service.opensearch.contracts import SqsMessage, TspId
-from api_transform_service.opensearch.dependencies import Dependencies
-from api_transform_service.opensearch.errors import ApiTransformError
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
+from transform_completed.opensearch.contracts import SqsMessage, TspId
+from transform_completed.opensearch.dependencies import Dependencies
+from transform_completed.opensearch.errors import ApiTransformError
 
 
 class SqsProcessor:

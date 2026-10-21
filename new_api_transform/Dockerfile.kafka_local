@@ -1,0 +1,2 @@
+# Run one local Kafka broker without a separate ZooKeeper container.
+FROM apache/kafka:3.9.1

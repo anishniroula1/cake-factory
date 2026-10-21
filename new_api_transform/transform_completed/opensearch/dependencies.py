@@ -1,20 +1,20 @@
 from confluent_kafka import Producer
 from sqlalchemy.orm import sessionmaker
 
-from api_transform_service.opensearch import constants
-from api_transform_service.opensearch.config import Config
-from api_transform_service.opensearch.db_store import (
+from ta_db_connection.database_connection import DatabaseConnection
+from ta_utils.aws.sqs.AwsSQS import AwsSQS
+from ta_utils.logger.CustomLogger import CustomLogger
+from transform_completed.opensearch import constants
+from transform_completed.opensearch.config import Config
+from transform_completed.opensearch.db_store import (
     ApplicantDBStore,
     ApplicationDBStore,
     ContentDBStore,
     TransmissionDBStore,
 )
-from api_transform_service.opensearch.handlers import ApiTransformHandler
-from api_transform_service.opensearch.kafka_processor import KafkaProcessor
-from api_transform_service.opensearch.payload_builder import PayloadBuilder
-from ta_db_connection.database_connection import DatabaseConnection
-from ta_utils.aws.sqs.AwsSQS import AwsSQS
-from ta_utils.logger.CustomLogger import CustomLogger
+from transform_completed.opensearch.handlers import ApiTransformHandler
+from transform_completed.opensearch.kafka_processor import KafkaProcessor
+from transform_completed.opensearch.payload_builder import PayloadBuilder
 
 
 class Dependencies:
@@ -38,7 +38,7 @@ class Dependencies:
         self.sent_sqs = self._sqs(self.config.sent_sqs_endpoint)
         application_store = ApplicationDBStore(self.session_factory)
         applicant_store = ApplicantDBStore(self.session_factory)
-        content_store = ContentDBStore(self.session_factory, constants.SENTENCE_MATCH_LIMIT)
+        content_store = ContentDBStore(self.session_factory, self.config.sentence_match_limit)
         transmission_store = TransmissionDBStore(self.session_factory, self.config.kafka_environment)
         payload_builder = PayloadBuilder(self.config)
         kafka_processor = KafkaProcessor(self.config, Producer(self._kafka_config()), transmission_store, self.logger)

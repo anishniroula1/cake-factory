@@ -2,9 +2,9 @@ import json
 import math
 import re
 
-from api_transform_service.opensearch import constants
-from api_transform_service.opensearch.config import Config
-from api_transform_service.opensearch.errors import PermanentDataError
+from transform_completed.opensearch import constants
+from transform_completed.opensearch.config import Config
+from transform_completed.opensearch.errors import PermanentDataError
 
 
 class PayloadBuilder:
@@ -31,11 +31,12 @@ class PayloadBuilder:
 
         application_id = int(application_record["application_id"])
         a_number = int(application_record["a_number"])
+        analysis_group = str(application_record["analysis_group"])
         event = {
-            "pipeline": self.config.analysis_group,
+            "pipeline": analysis_group,
             "a_number": a_number,
             "application_id": application_id,
-            "analysis_group": self.config.analysis_group,
+            "analysis_group": analysis_group,
             "historical": historical,
             "payload": {
                 "a_records": self._clean_application_record(application_record),
@@ -44,7 +45,7 @@ class PayloadBuilder:
                 "sentences": sentences,
             },
         }
-        if self.config.analysis_group == "Asylee":
+        if analysis_group == "Asylee":
             event["payload"]["public_templates"] = public_template
 
         full_event = {"after": event, "op": "c"}

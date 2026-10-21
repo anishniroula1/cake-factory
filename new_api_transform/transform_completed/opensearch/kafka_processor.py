@@ -3,12 +3,12 @@ from datetime import UTC, datetime
 
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
-from api_transform_service.opensearch import constants
-from api_transform_service.opensearch.config import Config
-from api_transform_service.opensearch.contracts import KafkaDelivery
-from api_transform_service.opensearch.db_store.transmission_db_store import TransmissionDBStore
-from api_transform_service.opensearch.errors import KafkaPublishError
 from ta_utils.logger.CustomLogger import CustomLogger
+from transform_completed.opensearch import constants
+from transform_completed.opensearch.config import Config
+from transform_completed.opensearch.contracts import KafkaDelivery
+from transform_completed.opensearch.db_store.transmission_db_store import TransmissionDBStore
+from transform_completed.opensearch.errors import KafkaPublishError
 
 
 class KafkaProcessor:
