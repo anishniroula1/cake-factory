@@ -18,9 +18,10 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     engine = EngineFake()
     database = SimpleNamespace(engine=engine)
     opensearch_client = object()
-    opensearch_helper = object()
+    opensearch_store = object()
     aws_sqs = object()
     historical_handler = object()
+    live_handler = object()
     tracer_handler = object()
     train_model_handler = object()
     session_factory = object()
@@ -62,18 +63,18 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
         OpenSearchClientFake,
     )
 
-    def build_opensearch_helper(received_config, client, received_logger):
+    def build_opensearch_store(received_config, client, received_logger):
         assert (received_config, client, received_logger) == (
             config,
             opensearch_client,
             logger,
         )
-        return opensearch_helper
+        return opensearch_store
 
     monkeypatch.setattr(
         dependencies_module,
-        "OpenSearchHelper",
-        build_opensearch_helper,
+        "OpenSearchDocumentStore",
+        build_opensearch_store,
     )
 
     def build_sqs(**arguments):
@@ -81,6 +82,12 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
         return aws_sqs
 
     monkeypatch.setattr(dependencies_module, "AwsSQS", build_sqs)
+
+    def build_live_handler(*arguments):
+        captured["live_handler"] = arguments
+        return live_handler
+
+    monkeypatch.setattr(dependencies_module, "LiveHandler", build_live_handler)
 
     def build_handler(*arguments):
         captured["handler"] = arguments
@@ -109,9 +116,10 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     assert dependencies.logger is logger
     assert dependencies.database is database
     assert dependencies.session_factory is session_factory
-    assert dependencies.opensearch is opensearch_helper
+    assert dependencies.opensearch_store is opensearch_store
     assert dependencies.aws_sqs is aws_sqs
     assert dependencies.historical_handler is historical_handler
+    assert dependencies.live_handler is live_handler
     assert dependencies.tracer_handler is tracer_handler
     assert dependencies.train_model_handler is train_model_handler
     assert captured["database"] == {
@@ -124,7 +132,6 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
         "max_overflow": 10,
         "use_dynamic_credentials": False,
         "application_name": "doc2vec_opensearch",
-        "logger": logger,
     }
     assert captured["session_factory"] == {
         "bind": engine,
@@ -135,20 +142,27 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     assert captured["handler"] == (
         config,
         session_factory,
-        opensearch_helper,
+        opensearch_store,
+        aws_sqs,
+        logger,
+    )
+    assert captured["live_handler"] == (
+        config,
+        session_factory,
+        opensearch_store,
         aws_sqs,
         logger,
     )
     assert captured["tracer_handler"] == (
         config,
         session_factory,
-        opensearch_helper,
+        opensearch_store,
         logger,
     )
     assert captured["train_model_handler"] == (
         config,
         session_factory,
-        opensearch_helper,
+        opensearch_store,
         logger,
     )
 

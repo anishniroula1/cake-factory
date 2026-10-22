@@ -8,12 +8,11 @@ from doc2vec_completed.opensearch.contracts import OpenSearchDocument
 from doc2vec_completed.opensearch.errors import PermanentDataError
 from ta_utils.logger.CustomLogger import CustomLogger
 
-# These status codes usually mean the service needs a short pause and another try.
 RETRYABLE_STATUS_CODES = {408, 424, 425, 429, 500, 502, 503, 504}
 
 
-class OpenSearchHelper:
-    """Provide catalog and occurrence operations used by Doc2Vec indexing."""
+class OpenSearchDocumentStore:
+    """Read and write Doc2Vec documents in the configured OpenSearch aliases."""
 
     def __init__(
         self,
@@ -27,15 +26,16 @@ class OpenSearchHelper:
         self.cooldown_lock = threading.Lock()
         self.embedding_cooldown_until = 0.0
 
-    def existing_ids(self, alias: str, document_ids: list[str]) -> set[str]:
-        """Return the requested document IDs that already exist in an alias.
+    def find_existing_document_ids(
+        self,
+        alias: str,
+        document_ids: list[str],
+    ) -> set[str]:
+        """Return requested document IDs that already exist in one alias.
 
         Input: alias="sentence_semantic_catalog_asylee",
         document_ids=["A", "B"], where only A exists.
         Output: {"A"}
-
-        A temporary error goes back to the retry code. A bad request stops
-        immediately because waiting will not fix permissions or a bad mapping.
         """
 
         existing: set[str] = set()
@@ -64,21 +64,20 @@ class OpenSearchHelper:
                     existing.add(str(document["_id"]))
         return existing
 
-    def bulk_index(
+    def index_documents(
         self,
         alias: str,
         documents: list[OpenSearchDocument],
         needs_embedding: bool,
     ) -> int:
-        """Write one document batch to OpenSearch. Saved vectors bypass the
-        embedding pipeline, while documents missing vectors use the pipeline.
+        """Write one document batch and optionally run the embedding pipeline.
 
         Input: alias="sentence_semantic_catalog_asylee", documents=[30 records],
         needs_embedding=True
         Output: 30 after every document is accepted.
 
-        _id is used as the OpenSearch document ID and is removed from the
-        saved body. The caller handles the wait and retry when this call fails.
+        Documents with saved vectors bypass the default pipeline so Bedrock
+        does not create and charge for the same vectors again.
         """
 
         if not documents:
@@ -104,8 +103,6 @@ class OpenSearchHelper:
             "raise_on_exception": True,
         }
         if not needs_embedding:
-            # This document already has its vector. Skip the default pipeline so
-            # Bedrock does not create and charge for the same vector again.
             bulk_arguments["pipeline"] = "_none"
 
         try:
@@ -130,7 +127,7 @@ class OpenSearchHelper:
         return len(documents)
 
     def validate_vector(self, vector: list[float]) -> None:
-        """Validate a saved vector against the configured OpenSearch dimension.
+        """Validate a saved vector against the configured dimension.
 
         Input: vector=[512 float values]
 
@@ -145,12 +142,12 @@ class OpenSearchHelper:
             )
 
     def refresh_aliases(self, aliases: list[str]) -> None:
-        """Refresh one or more aliases after all bulk writes finish.
+        """Refresh supplied aliases once after their bulk writes finish.
 
         Input: aliases=["sentence_semantic_catalog_asylee", "sentence_occurrences"]
 
-        One final refresh makes every supplied alias searchable without paying
-        the cost of refreshing after each worker batch.
+        One final refresh makes all supplied aliases searchable before the next
+        service receives its SQS message.
         """
 
         if not aliases:
@@ -163,13 +160,13 @@ class OpenSearchHelper:
         failures: list,
         documents: list[OpenSearchDocument],
     ) -> list[OpenSearchDocument]:
-        """Validate bulk failures and return documents with retryable statuses.
+        """Return failed documents when every failure can be retried.
 
         Input: document A succeeds and document B returns status 503.
         Output: [document B]
 
-        A permanent status such as 400 raises an error because retrying cannot
-        fix a rejected mapping or request.
+        A permanent status such as 400 raises an error immediately because
+        another request cannot fix a rejected mapping or request.
         """
 
         failed_ids = set()
@@ -188,7 +185,7 @@ class OpenSearchHelper:
         ]
 
     def _start_embedding_cooldown(self) -> None:
-        """Start a shared pause after Lasso or Bedrock throttles an embedding write."""
+        """Start a shared pause after the embedding service throttles a write."""
 
         with self.cooldown_lock:
             self.embedding_cooldown_until = max(
@@ -197,7 +194,7 @@ class OpenSearchHelper:
             )
 
     def _wait_for_embedding_cooldown(self) -> None:
-        """Wait until the shared Lasso or Bedrock embedding pause expires."""
+        """Wait until the shared embedding-service pause expires."""
 
         while True:
             with self.cooldown_lock:
@@ -205,15 +202,14 @@ class OpenSearchHelper:
             if remaining <= 0:
                 return
             self.logger.debug(
-                "Waiting "
-                f"{remaining:.1f} second(s) before the next OpenSearch embedding "
-                "write because an earlier request was throttled."
+                f"Waiting {remaining:.1f} second(s) before the next OpenSearch "
+                "embedding write because an earlier request was throttled."
             )
             time.sleep(remaining)
 
     @staticmethod
     def _is_retryable(error: TransportError) -> bool:
-        """Determine whether an OpenSearch transport error can be retried.
+        """Return whether a transport error is safe to retry.
 
         Input: TransportError with status_code=503
         Output: True

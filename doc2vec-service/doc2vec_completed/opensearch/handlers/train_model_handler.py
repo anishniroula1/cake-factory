@@ -2,8 +2,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, load_only
+from sqlalchemy.orm import Session
 
 from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.config import Config
@@ -12,10 +11,14 @@ from doc2vec_completed.opensearch.contracts import (
     TrainModelResult,
     TspId,
 )
-from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
+from doc2vec_completed.opensearch.db_store import (
+    EmbeddingDBStore,
+    SentenceVectorDBStore,
+)
+from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
 from doc2vec_completed.opensearch.retry import retry_operation
 from doc2vec_completed.opensearch.text import sentence_key
-from ta_db_connection.atables import Embeddings, SentencesVector
+from ta_db_connection.atables import SentencesVector
 from ta_utils.logger.CustomLogger import CustomLogger
 
 
@@ -26,13 +29,14 @@ class TrainModelHandler:
         self,
         config: Config,
         session_factory: Callable[[], Session],
-        opensearch: OpenSearchHelper,
+        opensearch_store: OpenSearchDocumentStore,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
-        self.session_factory = session_factory
-        self.opensearch = opensearch
+        self.opensearch_store = opensearch_store
         self.logger = custom_logger
+        self.sentence_vector_db_store = SentenceVectorDBStore(session_factory)
+        self.embedding_db_store = EmbeddingDBStore(session_factory)
 
     def process(self, tsp_id: TspId) -> TrainModelResult | None:
         """Index every unique sentence from one document for IVF model training.
@@ -45,7 +49,7 @@ class TrainModelHandler:
         started_at = perf_counter()
         total = retry_operation(
             "Count model-training sentences",
-            self._count_sentences,
+            self.sentence_vector_db_store.count_training_sentences_by_tsp_id,
             tsp_id,
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
@@ -71,9 +75,10 @@ class TrainModelHandler:
                 page_number += 1
                 rows = retry_operation(
                     f"Load model-training page {page_number}",
-                    self._load_sentence_page,
+                    self.sentence_vector_db_store.load_training_sentence_page,
                     tsp_id,
                     after_global_id,
+                    self.config.opensearch_batch_size,
                     wait_seconds=self.config.retry_seconds,
                     custom_logger=self.logger,
                 )
@@ -85,8 +90,9 @@ class TrainModelHandler:
                 eligible_rows = [row for row in rows if self._is_training_eligible(row)]
                 embeddings = retry_operation(
                     f"Load saved vectors for model-training page {page_number}",
-                    self._load_embeddings,
+                    self.embedding_db_store.load_titan_embeddings_by_global_ids,
                     [row.global_id for row in eligible_rows],
+                    self.config.titan_embedding_type,
                     wait_seconds=self.config.retry_seconds,
                     custom_logger=self.logger,
                 )
@@ -111,7 +117,7 @@ class TrainModelHandler:
         if indexed_count:
             retry_operation(
                 "Refresh the model-training index",
-                self.opensearch.refresh_aliases,
+                self.opensearch_store.refresh_aliases,
                 [self.config.training_alias],
                 wait_seconds=self.config.retry_seconds,
                 custom_logger=self.logger,
@@ -120,7 +126,9 @@ class TrainModelHandler:
             f"Model-training processing completed. Source count: {source_count}. "
             f"Unique count: {len(seen_keys)}. Indexed count: {indexed_count}."
         )
-        self.logger.info(f"Model-training processing took {perf_counter() - started_at:.2f} seconds to complete.")
+        self.logger.info(
+            f"Model-training processing took {perf_counter() - started_at:.2f} seconds to complete."
+        )
         return {
             "reason": "TRAIN_MODEL",
             "tsp_id": tsp_id,
@@ -128,62 +136,6 @@ class TrainModelHandler:
             "unique_count": len(seen_keys),
             "indexed_count": indexed_count,
         }
-
-    def _count_sentences(self, tsp_id: TspId) -> int:
-        """Count sentence rows for one training document.
-
-        Input: tsp_id=1040
-        Output: 1000 when the document contains 1000 sentence rows.
-        """
-
-        with self.session_factory() as session:
-            statement = (
-                select(func.count())
-                .select_from(SentencesVector)
-                .where(
-                    SentencesVector.tsp_id == tsp_id,
-                    SentencesVector.is_non_matcher.is_(False),
-                    SentencesVector.is_tracer.is_(False),
-                    SentencesVector.is_form_language.is_(False),
-                )
-            )
-            return int(session.scalar(statement) or 0)
-
-    def _load_sentence_page(
-        self,
-        tsp_id: TspId,
-        after_global_id: int,
-    ) -> list[SentencesVector]:
-        """Load the next ordered page used to build training documents.
-
-        Input: tsp_id=1040 and after_global_id=0
-        Output: up to 1000 sentence rows ordered by global_id.
-        """
-
-        with self.session_factory() as session:
-            statement = (
-                select(SentencesVector)
-                .options(
-                    load_only(
-                        SentencesVector.global_id,
-                        SentencesVector.sentence_content,
-                        SentencesVector.last_modified,
-                        SentencesVector.is_non_matcher,
-                        SentencesVector.is_tracer,
-                        SentencesVector.is_form_language,
-                    )
-                )
-                .where(
-                    SentencesVector.tsp_id == tsp_id,
-                    SentencesVector.global_id > after_global_id,
-                    SentencesVector.is_non_matcher.is_(False),
-                    SentencesVector.is_tracer.is_(False),
-                    SentencesVector.is_form_language.is_(False),
-                )
-                .order_by(SentencesVector.global_id)
-                .limit(self.config.opensearch_batch_size)
-            )
-            return list(session.scalars(statement))
 
     @staticmethod
     def _is_training_eligible(row: SentencesVector) -> bool:
@@ -195,24 +147,6 @@ class TrainModelHandler:
         """
 
         return not (row.is_non_matcher or row.is_tracer or row.is_form_language)
-
-    def _load_embeddings(self, global_ids: list[int]) -> dict[int, list[float]]:
-        """Load existing Titan vectors for one page of sentence global IDs.
-
-        Input: global_ids=[10, 20]
-        Output: {10: [512 float values]} when only global ID 10 has embedding type 2.
-        """
-
-        with self.session_factory() as session:
-            statement = select(Embeddings).where(
-                Embeddings.global_id.in_(global_ids),
-                Embeddings.embedding_type == self.config.titan_embedding_type,
-            )
-            return {
-                row.global_id: list(row.embeddings)
-                for row in session.scalars(statement)
-                if row.embeddings
-            }
 
     def _prepare_unique_documents(
         self,
@@ -241,7 +175,7 @@ class TrainModelHandler:
             }
             vector = embeddings.get(row.global_id)
             if vector is not None:
-                self.opensearch.validate_vector(vector)
+                self.opensearch_store.validate_vector(vector)
                 document["sentenceContentVector"] = vector
 
             current = documents_by_key.get(key)
@@ -270,7 +204,7 @@ class TrainModelHandler:
         keys = [document["sentenceKey"] for document in documents]
         existing_keys = retry_operation(
             f"Check existing {batch_label}",
-            self.opensearch.existing_ids,
+            self.opensearch_store.find_existing_document_ids,
             self.config.training_alias,
             keys,
             wait_seconds=self.config.retry_seconds,
@@ -293,7 +227,7 @@ class TrainModelHandler:
         ]
         retry_operation(
             f"Write saved vectors for {batch_label}",
-            self.opensearch.bulk_index,
+            self.opensearch_store.index_documents,
             self.config.training_alias,
             saved_vectors,
             False,
@@ -303,7 +237,7 @@ class TrainModelHandler:
         )
         retry_operation(
             f"Create Bedrock vectors for {batch_label}",
-            self.opensearch.bulk_index,
+            self.opensearch_store.index_documents,
             self.config.training_alias,
             bedrock_vectors,
             True,

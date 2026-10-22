@@ -4,20 +4,10 @@ from typing import Self
 
 from dotenv import load_dotenv
 
+from doc2vec_completed.opensearch import constants
 from ta_utils.vault.VaultSecrets import VaultSecrets
 
 load_dotenv()
-
-# These values are the same in every environment, so they do not need env values.
-OPENSEARCH_PORT = 443
-OPENSEARCH_SERVICE = "es"
-OPENSEARCH_BATCH_SIZE = 1_000
-OPENSEARCH_BULK_RETRY_COUNT = 15  # Retries after the original bulk request.
-WORKER_BATCH_SIZE = 30
-THREAD_WORKER_COUNT = 100
-TRAIN_MODEL_WORKER_COUNT = 16
-RETRY_SECONDS = 5
-TITAN_EMBEDDING_TYPE = 2
 
 
 def read_integer(name: str, default: int, minimum: int = 1) -> int:
@@ -74,7 +64,8 @@ class Config:
     sqs_visibility_seconds: int
     aws_endpoint_url: str
 
-    # Historical processing
+    # Processing
+    live_database_batch_size: int
     worker_batch_size: int
     thread_worker_count: int
     train_model_worker_count: int
@@ -90,17 +81,15 @@ class Config:
         config = cls(
             # Read the PostgreSQL login from Vault and pool sizes from env.
             pg_db_user=str(secrets.get("pgUser") or secrets.get("pgDynamicUser") or ""),
-            pg_db_password=str(secrets.get("pgPassword") or secrets.get("pgDynamicPassword") or ""),
+            pg_db_password=str(
+                secrets.get("pgPassword") or secrets.get("pgDynamicPassword") or ""
+            ),
             pg_db_host=str(secrets.get("pgHost") or ""),
             pg_db_database=str(secrets.get("pgDatabase") or ""),
             pg_db_port=int(secrets.get("pgPort") or 5432),
-            database_pool_size=read_integer("DATABASE_POOL_SIZE", 20),
+            database_pool_size=constants.DATABASE_POOL_SIZE,
             dynamic_credential_file=os.getenv("VAULT_YAML_PATH", "").strip(),
-            database_max_overflow=read_integer(
-                "DATABASE_MAX_OVERFLOW",
-                10,
-                minimum=0,
-            ),
+            database_max_overflow=constants.DATABASE_MAX_OVERFLOW,
             environment=(os.getenv("ENVIRONMENT", "local").strip().lower() or "local"),
             # Read values needed to connect to the correct OpenSearch indexes.
             aws_region=os.getenv("AWS_DEFAULT_REGION", "us-east-1").strip(),
@@ -109,29 +98,30 @@ class Config:
                 "",
             ).strip(),
             opensearch_host=os.getenv("OPENSEARCH_HOST", "").strip(),
-            opensearch_port=OPENSEARCH_PORT,
-            opensearch_service=OPENSEARCH_SERVICE,
+            opensearch_port=constants.OPENSEARCH_PORT,
+            opensearch_service=constants.OPENSEARCH_SERVICE,
             occurrence_alias=os.getenv(
-                "OPENSEARCH_OCCURRENCE_ALIAS", "sentence_occurrences"
+                "OPENSEARCH_OCCURRENCE_ALIAS",
+                constants.SENTENCE_OCCURRENCE_ALIAS,
             ).strip(),
             asylee_catalog_alias=os.getenv(
                 "OPENSEARCH_ASYLEE_CATALOG_ALIAS",
-                "sentence_semantic_catalog_asylee",
+                constants.ASYLEE_CATALOG_ALIAS,
             ).strip(),
             refugee_catalog_alias=os.getenv(
                 "OPENSEARCH_REFUGEE_CATALOG_ALIAS",
-                "sentence_semantic_catalog_refugee",
+                constants.REFUGEE_CATALOG_ALIAS,
             ).strip(),
             training_alias=os.getenv(
                 "OPENSEARCH_TRAINING_ALIAS",
-                "sentence_semantic_training",
+                constants.TRAINING_ALIAS,
             ).strip(),
             tracer_alias=os.getenv(
                 "OPENSEARCH_TRACER_FORM_LANGUAGE_ALIAS",
-                "tracer_form_language_catalog",
+                constants.TRACER_ALIAS,
             ).strip(),
-            opensearch_batch_size=OPENSEARCH_BATCH_SIZE,
-            opensearch_bulk_retry_count=OPENSEARCH_BULK_RETRY_COUNT,
+            opensearch_batch_size=constants.OPENSEARCH_BATCH_SIZE,
+            opensearch_bulk_retry_count=constants.OPENSEARCH_BULK_RETRY_COUNT,
             # Read the source and next-step SQS queue values.
             doc2vec_queue_url=str(secrets.get("awsReceiveSqsQueueEndpoint") or ""),
             sentence_similarity_backfill_queue_url=os.getenv(
@@ -143,20 +133,21 @@ class Config:
             ),
             sqs_wait_seconds=read_integer(
                 "AWS_SQS_WAIT_TIME_FOR_NEXT_MESSAGE_BATCH",
-                10,
+                constants.SQS_WAIT_SECONDS,
             ),
             sqs_visibility_seconds=read_integer(
                 "AWS_SQS_VISIBILITY_TIMEOUT",
-                7_200,
+                constants.SQS_VISIBILITY_SECONDS,
             ),
             aws_endpoint_url=os.getenv("AWS_ENDPOINT_URL", "").strip(),
-            # Use the fixed batch, worker, retry, and Titan settings above.
-            worker_batch_size=WORKER_BATCH_SIZE,
-            thread_worker_count=THREAD_WORKER_COUNT,
-            train_model_worker_count=TRAIN_MODEL_WORKER_COUNT,
-            retry_seconds=RETRY_SECONDS,
-            vector_dimension=read_integer("VECTOR_DIMENSION", 512),
-            titan_embedding_type=TITAN_EMBEDDING_TYPE,
+            # Use fixed batch, worker, retry, and Titan settings.
+            live_database_batch_size=constants.LIVE_DATABASE_BATCH_SIZE,
+            worker_batch_size=constants.WORKER_BATCH_SIZE,
+            thread_worker_count=constants.THREAD_WORKER_COUNT,
+            train_model_worker_count=constants.TRAIN_MODEL_WORKER_COUNT,
+            retry_seconds=constants.RETRY_SECONDS,
+            vector_dimension=constants.VECTOR_DIMENSION,
+            titan_embedding_type=constants.TITAN_EMBEDDING_TYPE,
         )
         config.validate()
         return config
@@ -168,6 +159,8 @@ class Config:
             raise ValueError("OPENSEARCH_HOST is required")
         if not self.doc2vec_queue_url:
             raise ValueError("Doc2Vec SQS queue URL is required")
+        if not self.state_machine_queue_url:
+            raise ValueError("State Machine SQS queue URL is required")
         if not self.asylee_catalog_alias:
             raise ValueError("OPENSEARCH_ASYLEE_CATALOG_ALIAS is required")
         if not self.refugee_catalog_alias:

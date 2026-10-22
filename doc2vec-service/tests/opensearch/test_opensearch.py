@@ -2,7 +2,12 @@ import pytest
 from opensearchpy import OpenSearchException, TransportError
 
 from doc2vec_completed.opensearch.errors import PermanentDataError
-from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
+from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
+
+BULK_PATH = (
+    "doc2vec_completed.opensearch.opensearch_store."
+    "open_search_document_store.helpers.bulk"
+)
 
 
 class ClientFake:
@@ -37,16 +42,16 @@ def test_existing_ids_and_bulk_pipeline_selection(
         calls.append((actions, arguments))
         return len(actions), []
 
-    monkeypatch.setattr("doc2vec_completed.opensearch.opensearch.helpers.bulk", bulk)
-    helper = OpenSearchHelper(service_config, ClientFake({"A"}), custom_logger)
-    assert helper.existing_ids("catalog", ["A", "B", "A"]) == {"A"}
+    monkeypatch.setattr(BULK_PATH, bulk)
+    store = OpenSearchDocumentStore(service_config, ClientFake({"A"}), custom_logger)
+    assert store.find_existing_document_ids("catalog", ["A", "B", "A"]) == {"A"}
 
     documents = [{"_id": "A", "value": 1}]
-    assert helper.bulk_index("catalog", documents, needs_embedding=False) == 1
+    assert store.index_documents("catalog", documents, needs_embedding=False) == 1
     assert calls[0][1]["pipeline"] == "_none"
     assert "_id" not in calls[0][0][0]["_source"]
 
-    helper.bulk_index("catalog", documents, needs_embedding=True)
+    store.index_documents("catalog", documents, needs_embedding=True)
     assert "pipeline" not in calls[1][1]
 
 
@@ -54,10 +59,10 @@ def test_empty_opensearch_operations_are_skipped(
     service_config,
     custom_logger,
 ):
-    helper = OpenSearchHelper(service_config, ClientFake(), custom_logger)
+    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
 
-    assert helper.existing_ids("catalog", []) == set()
-    assert helper.bulk_index("catalog", [], needs_embedding=False) == 0
+    assert store.find_existing_document_ids("catalog", []) == set()
+    assert store.index_documents("catalog", [], needs_embedding=False) == 0
 
 
 def test_refresh_makes_supplied_aliases_searchable(
@@ -65,15 +70,15 @@ def test_refresh_makes_supplied_aliases_searchable(
     custom_logger,
 ):
     client = ClientFake()
-    helper = OpenSearchHelper(service_config, client, custom_logger)
+    store = OpenSearchDocumentStore(service_config, client, custom_logger)
 
-    helper.refresh_aliases(["catalog-asylee", "occurrence"])
+    store.refresh_aliases(["catalog-asylee", "occurrence"])
 
     assert client.refreshed_indices == ["catalog-asylee,occurrence"]
-    helper.refresh_aliases(["training"])
+    store.refresh_aliases(["training"])
     assert client.refreshed_indices[-1] == "training"
 
-    helper.refresh_aliases([])
+    store.refresh_aliases([])
     assert len(client.refreshed_indices) == 2
 
 
@@ -90,11 +95,11 @@ def test_bulk_reports_temporary_failed_documents_to_the_caller(
             return 0, [{"index": {"_id": "B", "status": 500}}]
         return len(actions), []
 
-    monkeypatch.setattr("doc2vec_completed.opensearch.opensearch.helpers.bulk", bulk)
-    helper = OpenSearchHelper(service_config, ClientFake(), custom_logger)
+    monkeypatch.setattr(BULK_PATH, bulk)
+    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
     documents = [{"_id": "A"}, {"_id": "B"}]
     with pytest.raises(OpenSearchException):
-        helper.bulk_index("catalog", documents, needs_embedding=False)
+        store.index_documents("catalog", documents, needs_embedding=False)
     assert len(calls) == 1
 
 
@@ -111,10 +116,10 @@ def test_bulk_reports_transport_failure_to_the_caller(
             raise TransportError(503, "temporary")
         return len(actions), []
 
-    monkeypatch.setattr("doc2vec_completed.opensearch.opensearch.helpers.bulk", bulk)
-    helper = OpenSearchHelper(service_config, ClientFake(), custom_logger)
+    monkeypatch.setattr(BULK_PATH, bulk)
+    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
     with pytest.raises(TransportError):
-        helper.bulk_index("catalog", [{"_id": "A"}], False)
+        store.index_documents("catalog", [{"_id": "A"}], False)
     assert len(calls) == 1
 
 
@@ -135,23 +140,23 @@ def test_existing_id_lookup_returns_temporary_and_permanent_failures(
             return super().mget(index, body, params)
 
     retry_client = RetryLookupClient()
-    helper = OpenSearchHelper(service_config, retry_client, custom_logger)
+    store = OpenSearchDocumentStore(service_config, retry_client, custom_logger)
 
     with pytest.raises(TransportError):
-        helper.existing_ids("catalog", ["A"])
+        store.find_existing_document_ids("catalog", ["A"])
     assert retry_client.attempts == 1
 
     class FailedLookupClient(ClientFake):
         def mget(self, index, body, params):
             raise TransportError(401, "unauthorized")
 
-    failed_helper = OpenSearchHelper(
+    failed_store = OpenSearchDocumentStore(
         service_config,
         FailedLookupClient(),
         custom_logger,
     )
     with pytest.raises(PermanentDataError):
-        failed_helper.existing_ids("catalog", ["A"])
+        failed_store.find_existing_document_ids("catalog", ["A"])
 
 
 def test_permanent_opensearch_errors_are_not_retried(
@@ -162,27 +167,23 @@ def test_permanent_opensearch_errors_are_not_retried(
     def bad_mapping(client, actions, **arguments):
         return 0, [{"index": {"_id": "A", "status": 400, "error": "bad mapping"}}]
 
-    monkeypatch.setattr(
-        "doc2vec_completed.opensearch.opensearch.helpers.bulk", bad_mapping
-    )
-    helper = OpenSearchHelper(service_config, ClientFake(), custom_logger)
+    monkeypatch.setattr(BULK_PATH, bad_mapping)
+    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
     with pytest.raises(PermanentDataError):
-        helper.bulk_index("catalog", [{"_id": "A"}], False)
+        store.index_documents("catalog", [{"_id": "A"}], False)
 
     def unauthorized(client, actions, **arguments):
         raise TransportError(401, "unauthorized")
 
-    monkeypatch.setattr(
-        "doc2vec_completed.opensearch.opensearch.helpers.bulk", unauthorized
-    )
+    monkeypatch.setattr(BULK_PATH, unauthorized)
     with pytest.raises(PermanentDataError):
-        helper.bulk_index("catalog", [{"_id": "A"}], False)
+        store.index_documents("catalog", [{"_id": "A"}], False)
 
 
 def test_vector_validation_and_retryable_status(service_config, custom_logger):
-    helper = OpenSearchHelper(service_config, ClientFake(), custom_logger)
-    helper.validate_vector([0.1, 0.2])
+    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
+    store.validate_vector([0.1, 0.2])
     with pytest.raises(PermanentDataError):
-        helper.validate_vector([0.1])
-    assert helper._is_retryable(TransportError(424, "retry"))
-    assert not helper._is_retryable(TransportError(400, "stop"))
+        store.validate_vector([0.1])
+    assert store._is_retryable(TransportError(424, "retry"))
+    assert not store._is_retryable(TransportError(400, "stop"))

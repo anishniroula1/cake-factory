@@ -1,19 +1,19 @@
 # Doc2Vec OpenSearch Ingestion
 
-This standalone SQS worker supports historical sentence backfill, IVF training
-data, and tracer or form-language reference data. Each message is routed by its
-`reason` to a separate handler.
+This standalone SQS worker supports incoming documents, historical sentence
+backfill, IVF training data, and tracer or form-language reference data. Each
+message is routed to a separate handler.
 
 It is not an API or FastAPI application. It processes one SQS message at a
-time. `historical_handler.py`, `train_model_handler.py`, and
-`tracer_handler.py` contain the three independent flows.
+time. `live_handler.py`, `historical_handler.py`, `train_model_handler.py`, and
+`tracer_handler.py` contain the four independent flows.
 
 All OpenSearch flow code lives under `doc2vec_completed/opensearch`. All tests
 for this flow live under `tests/opensearch`.
 
 `dependencies.py` creates the configuration, database connection, OpenSearch
-helper, SQS helper, and all three handlers. The SQS processor receives only
-this one dependency object.
+store, SQS helper, and all four handlers. The SQS processor receives only this
+one dependency object.
 `doc2vec_completed.opensearch.main.run_opensearch_flow(custom_logger=...)` can
 still receive the team's logger, while `ta_utils/logger/CustomLogger.py`
 remains the standalone default.
@@ -51,6 +51,13 @@ awsSqsSendEventQueueEndpoint: state-machine-queue-url
 Supported messages are:
 
 ```json
+{"tsp_id": 1040}
+```
+
+An incoming/live document has no `reason`. This is the existing live message
+contract and routes the message to `LiveHandler`.
+
+```json
 {"reason": "HISTORICAL", "tsp_id": 1040}
 ```
 
@@ -67,17 +74,78 @@ number and a string are valid. The alternate name `tspId` is not accepted.
 Tracer IDs must be integers. An unsupported or incomplete message is logged and
 is not deleted.
 
-The main code types are defined in `contracts.py`. The three processing flows
+The main code types are defined in `contracts.py`. The four processing flows
 are:
 
 ```text
 SqsMessage -> TspId -> list[SentencesVector] -> HistoricalResult
 SqsMessage -> TspId -> list[SentencesVector] -> TrainModelResult
 SqsMessage -> list[tracer_sentence_ids] -> list[TracerSentence] -> TracerResult
+SqsMessage -> TextSimilarityInput -> list[SentencesVector] -> LiveResult
 ```
 
 OpenSearch catalog and occurrence documents also have separate named types, so
 the expected fields are visible before a document is sent for bulk indexing.
+
+## Code structure
+
+`constants.py` holds fixed batch sizes, worker counts, retry values, index
+defaults, and connection defaults. `config.py` is limited to values read from
+Vault or the environment and uses those constants as defaults.
+
+Database access is separated under `db_store`:
+
+- `TextSimilarityInputDBStore` loads an incoming document and its text.
+- `SentenceVectorDBStore` saves live sentence batches, counts and pages saved
+  rows, and saves sentence keys.
+- `EmbeddingDBStore` loads saved Titan embeddings by `global_id`.
+- `TracerSentenceDBStore` loads tracer reference rows by tracer ID.
+
+OpenSearch access is separated under `opensearch_store`.
+`OpenSearchDocumentStore` handles existing-ID lookups, bulk indexing, pipeline
+selection, vector validation, refreshes, and temporary embedding cooldowns.
+The same low-level store is shared because occurrence, catalog, training, and
+tracer ingestion all use the same bulk-write behavior.
+
+Handlers now coordinate the processing steps only. They call the stores for
+database and OpenSearch work instead of containing SQL or low-level indexing
+code.
+
+## Live document flow
+
+1. Receive the existing live message containing `tsp_id` and no `reason`.
+2. Load the `text_similarity_input` row and its document text.
+3. Split the text with the same Syntok rules used by the old Doc2Vec flow. The
+   original text is saved; temporary tokenizer masks are never stored.
+4. Create `sent_id_local` values starting at 1 and create a stable SHA-256
+   `sentence_key` for every sentence.
+5. Save up to 1000 sentence rows per database commit. A retried message reuses
+   `(tsp_id, sent_id_local)` rows instead of inserting the same sentence again.
+6. Split the saved rows into 30-sentence worker jobs and index them concurrently.
+7. Check the selected Asylee or Refugee catalog before creating a vector. Reuse
+   a saved Titan type-2 embedding when available; otherwise let the Bedrock
+   pipeline create the vector.
+8. Write every sentence to the occurrence index, including sentences with fewer
+   than five words. Sentence Similarity applies that matching rule later.
+9. Refresh the selected catalog and occurrence aliases once after all writes.
+10. Send the existing state-machine result and delete the source SQS message
+    only after the state-machine message is accepted.
+
+The successful state-machine message is:
+
+```json
+{
+  "source": "P2",
+  "tsp_id": 1040,
+  "sent_by": "doc2vec",
+  "success": true,
+  "reason": ""
+}
+```
+
+Whitespace-only content, including the pilcrow character, sends the same
+message with `success=false` and `reason="no_content"`. It does not create
+sentence or OpenSearch rows.
 
 ## Model-training flow
 
@@ -170,7 +238,8 @@ The worker uses:
 
 - `sentences_vector`
 - `text_similarity_input`, joined by `tsp_id` to read `application_id`,
-  `analysis_group`, `section_name`, and `is_current`
+  `a_number`, `content`, `source_type`, `analysis_group`, `section_name`, and
+  `is_current`
 - `embeddings`, joined by `global_id`
 - `tracer_sentence`, loaded by `tracer_sentence_id`
 
@@ -227,8 +296,8 @@ make dev
 `make dev` runs the worker in Docker. `make local` runs it without Docker.
 There is no HTTP port, health endpoint, or Swagger page.
 
-The tests cover the SQS routing and the complete historical, training, and
-tracer handler behavior. Database sessions, OpenSearch, and SQS transports are
+The tests cover SQS routing and the live, historical, training, and tracer
+handler behavior. Database sessions, OpenSearch, and SQS transports are
 replaced only at their external boundaries.
 
 ## Portable copy

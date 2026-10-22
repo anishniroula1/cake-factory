@@ -2,8 +2,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, joinedload, load_only
+from sqlalchemy.orm import Session
 
 from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.config import Config
@@ -12,13 +11,17 @@ from doc2vec_completed.opensearch.contracts import (
     NextQueueMessage,
     TspId,
 )
+from doc2vec_completed.opensearch.db_store import (
+    EmbeddingDBStore,
+    SentenceVectorDBStore,
+)
 from doc2vec_completed.opensearch.errors import QueueSendError
-from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
+from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
 from doc2vec_completed.opensearch.retry import retry_operation
 from doc2vec_completed.opensearch.sentence_batch_processor import (
     SentenceBatchProcessor,
 )
-from ta_db_connection.atables import SentencesVector, TextSimilarityInput
+from ta_db_connection.atables import SentencesVector
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -30,19 +33,21 @@ class HistoricalHandler:
         self,
         config: Config,
         session_factory: Callable[[], Session],
-        opensearch: OpenSearchHelper,
+        opensearch_store: OpenSearchDocumentStore,
         aws_sqs: AwsSQS,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
-        self.session_factory = session_factory
-        self.opensearch = opensearch
+        self.opensearch_store = opensearch_store
         self.aws_sqs = aws_sqs
         self.logger = custom_logger
+        self.sentence_vector_db_store = SentenceVectorDBStore(session_factory)
+        self.embedding_db_store = EmbeddingDBStore(session_factory)
         self.batch_processor = SentenceBatchProcessor(
             config,
-            session_factory,
-            opensearch,
+            self.sentence_vector_db_store,
+            self.embedding_db_store,
+            opensearch_store,
             custom_logger,
         )
 
@@ -63,7 +68,7 @@ class HistoricalHandler:
         self.logger.info("Sentence processing started.")
         total = retry_operation(
             "Count document sentences",
-            self._count,
+            self.sentence_vector_db_store.count_sentences_by_tsp_id,
             tsp_id,
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
@@ -88,9 +93,10 @@ class HistoricalHandler:
                 page_number += 1
                 rows = retry_operation(
                     f"Load sentence page {page_number}",
-                    self._load_page,
+                    self.sentence_vector_db_store.load_historical_sentence_page,
                     tsp_id,
                     after_global_id,
+                    self.config.worker_batch_size * self.config.thread_worker_count,
                     wait_seconds=self.config.retry_seconds,
                     custom_logger=self.logger,
                 )
@@ -130,7 +136,7 @@ class HistoricalHandler:
         # before Sentence Similarity receives its SQS message.
         retry_operation(
             "Refresh indexed sentences",
-            self.opensearch.refresh_aliases,
+            self.opensearch_store.refresh_aliases,
             [catalog_alias, self.config.occurrence_alias],
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
@@ -148,7 +154,9 @@ class HistoricalHandler:
             f"Sentence processing completed. Source count: {total}. "
             f"Indexed count: {indexed}."
         )
-        self.logger.info(f"Sentence processing took {perf_counter() - started_at:.2f} seconds to complete.")
+        self.logger.info(
+            f"Sentence processing took {perf_counter() - started_at:.2f} seconds to complete."
+        )
 
         return {
             "reason": "HISTORICAL",
@@ -156,68 +164,6 @@ class HistoricalHandler:
             "source_count": total,
             "indexed_count": indexed,
         }
-
-    def _count(self, tsp_id: TspId) -> int:
-        """Count the sentence rows that belong to one document.
-
-        Input: tsp_id=1040
-        Output: 65 when the document contains 65 sentence rows.
-        """
-
-        with self.session_factory() as session:
-            statement = (
-                select(func.count())
-                .select_from(SentencesVector)
-                .where(SentencesVector.tsp_id == tsp_id)
-            )
-            return int(session.scalar(statement) or 0)
-
-    def _load_page(
-        self,
-        tsp_id: TspId,
-        after_global_id: int,
-    ) -> list[SentencesVector]:
-        """Load the next ordered sentence page without reading the entire document.
-
-        Input: tsp_id=1040, after_global_id=3000
-        Output: up to 3000 rows whose global_id is greater than 3000 when the
-        worker count is 100 and each worker receives 30 rows.
-        """
-
-        # Example: 100 workers with 30 rows each load at most 3,000 rows.
-        # This fills every worker without loading the whole document at once.
-        page_size = self.config.worker_batch_size * self.config.thread_worker_count
-        with self.session_factory() as session:
-            statement = (
-                select(SentencesVector)
-                .options(
-                    # Load only the fields used below. Do not load embedding_list
-                    # because old rows may hold NumPy data that this flow cannot read.
-                    load_only(
-                        SentencesVector.global_id,
-                        SentencesVector.tsp_id,
-                        SentencesVector.sent_id_local,
-                        SentencesVector.sentence_content,
-                        SentencesVector.sentence_key,
-                        SentencesVector.source_type,
-                        SentencesVector.last_modified,
-                    ),
-                    joinedload(SentencesVector.tsp).load_only(
-                        TextSimilarityInput.tsp_id,
-                        TextSimilarityInput.application_id,
-                        TextSimilarityInput.section_name,
-                        TextSimilarityInput.analysis_group,
-                        TextSimilarityInput.is_current,
-                    ),
-                )
-                .where(
-                    SentencesVector.tsp_id == tsp_id,
-                    SentencesVector.global_id > after_global_id,
-                )
-                .order_by(SentencesVector.global_id)
-                .limit(page_size)
-            )
-            return list(session.scalars(statement))
 
     def _run_worker(self, rows: list[SentencesVector]) -> int:
         """Send one sentence batch to the shared batch processor.

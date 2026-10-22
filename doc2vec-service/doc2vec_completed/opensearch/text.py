@@ -43,4 +43,3 @@ def sentence_word_count(value: str) -> int:
 
     normalized = unicodedata.normalize("NFKC", value)
     return len(WORD_PATTERN.findall(normalized))
-

@@ -27,7 +27,7 @@ def dependency_config():
         opensearch_port=443,
         opensearch_service="es",
         opensearch_iam_access_role="",
-        opensearch_batch_size=1_000,
+        opensearch_batch_size=1000,
         opensearch_bulk_retry_count=15,
         occurrence_alias="sentence_occurrences",
         asylee_catalog_alias="sentence_semantic_catalog_asylee",
@@ -37,11 +37,13 @@ def dependency_config():
         vector_dimension=512,
         doc2vec_queue_url="https://sqs.example.com/doc2vec.fifo",
         sqs_wait_seconds=10,
-        sqs_visibility_seconds=7_200,
+        sqs_visibility_seconds=7200,
         retry_seconds=5,
         sentence_similarity_backfill_queue_url=(
             "https://sqs.example.com/similarity.fifo"
         ),
+        state_machine_queue_url="https://sqs.example.com/state.fifo",
+        live_database_batch_size=1000,
         worker_batch_size=30,
         thread_worker_count=100,
         train_model_worker_count=16,
@@ -52,7 +54,7 @@ def dependency_config():
 @pytest.fixture
 def service_config():
     return SimpleNamespace(
-        opensearch_batch_size=1_000,
+        opensearch_batch_size=1000,
         opensearch_bulk_retry_count=15,
         worker_batch_size=30,
         thread_worker_count=2,
@@ -68,9 +70,13 @@ def service_config():
         sentence_similarity_backfill_queue_url=(
             "https://sqs.us-east-1.amazonaws.com/1/next.fifo"
         ),
+        state_machine_queue_url=(
+            "https://sqs.us-east-1.amazonaws.com/1/state-machine.fifo"
+        ),
+        live_database_batch_size=1000,
         doc2vec_queue_url="https://sqs.us-east-1.amazonaws.com/1/source.fifo",
         sqs_wait_seconds=1,
-        sqs_visibility_seconds=7_200,
+        sqs_visibility_seconds=7200,
     )
 
 
@@ -84,7 +90,10 @@ def sentence_record():
     now = datetime.now(UTC)
     document = TextSimilarityInput(
         tsp_id=10,
+        a_number=123456789,
         application_id=1001,
+        content="The applicant moved to Boston.",
+        source_type="affidavit",
         section_name="affidavit",
         analysis_group="Asylee",
         is_current=True,

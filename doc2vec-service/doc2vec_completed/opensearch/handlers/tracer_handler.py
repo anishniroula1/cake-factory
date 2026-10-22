@@ -4,14 +4,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from time import perf_counter
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import TracerDocument, TracerResult
+from doc2vec_completed.opensearch.db_store import TracerSentenceDBStore
 from doc2vec_completed.opensearch.errors import PermanentDataError
-from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
+from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
 from doc2vec_completed.opensearch.retry import retry_operation
 from ta_db_connection.atables import TracerSentence
 from ta_utils.logger.CustomLogger import CustomLogger
@@ -24,13 +24,13 @@ class TracerHandler:
         self,
         config: Config,
         session_factory: Callable[[], Session],
-        opensearch: OpenSearchHelper,
+        opensearch_store: OpenSearchDocumentStore,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
-        self.session_factory = session_factory
-        self.opensearch = opensearch
+        self.opensearch_store = opensearch_store
         self.logger = custom_logger
+        self.tracer_sentence_db_store = TracerSentenceDBStore(session_factory)
 
     def process(self, tracer_sentence_ids: list[int]) -> TracerResult | None:
         """Index the requested tracer, form-language, and non-matcher references.
@@ -50,7 +50,7 @@ class TracerHandler:
         for id_batch in batches(unique_ids, self.config.opensearch_batch_size):
             rows = retry_operation(
                 "Load tracer sentence batch",
-                self._load_tracer_sentences,
+                self.tracer_sentence_db_store.load_tracer_sentences_by_ids,
                 id_batch,
                 wait_seconds=self.config.retry_seconds,
                 custom_logger=self.logger,
@@ -69,7 +69,7 @@ class TracerHandler:
             ]
             indexed_count += retry_operation(
                 "Write tracer references with saved vectors",
-                self.opensearch.bulk_index,
+                self.opensearch_store.index_documents,
                 self.config.tracer_alias,
                 saved_vectors,
                 False,
@@ -79,7 +79,7 @@ class TracerHandler:
             )
             indexed_count += retry_operation(
                 "Create Bedrock vectors for tracer references",
-                self.opensearch.bulk_index,
+                self.opensearch_store.index_documents,
                 self.config.tracer_alias,
                 bedrock_vectors,
                 True,
@@ -96,7 +96,7 @@ class TracerHandler:
 
         retry_operation(
             "Refresh the tracer catalog",
-            self.opensearch.refresh_aliases,
+            self.opensearch_store.refresh_aliases,
             [self.config.tracer_alias],
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
@@ -105,29 +105,14 @@ class TracerHandler:
             f"Tracer processing completed. Source count: {len(unique_ids)}. "
             f"Indexed count: {indexed_count}."
         )
-        self.logger.info(f"Tracer processing took {perf_counter() - started_at:.2f} seconds to complete.")
+        self.logger.info(
+            f"Tracer processing took {perf_counter() - started_at:.2f} seconds to complete."
+        )
         return {
             "reason": "TRACER",
             "source_count": len(unique_ids),
             "indexed_count": indexed_count,
         }
-
-    def _load_tracer_sentences(
-        self, tracer_sentence_ids: list[int]
-    ) -> list[TracerSentence]:
-        """Load the tracer table rows requested by one SQS message batch.
-
-        Input: tracer_sentence_ids=[10, 20]
-        Output: the matching TracerSentence rows ordered by tracer_sentence_id.
-        """
-
-        with self.session_factory() as session:
-            statement = (
-                select(TracerSentence)
-                .where(TracerSentence.tracer_sentence_id.in_(tracer_sentence_ids))
-                .order_by(TracerSentence.tracer_sentence_id)
-            )
-            return list(session.scalars(statement))
 
     def _tracer_document(self, row: TracerSentence) -> TracerDocument:
         """Build a strict tracer document and omit its vector when one is not saved.
@@ -177,7 +162,7 @@ class TracerHandler:
             raise PermanentDataError(
                 "saved tracer embedding is not a list of numbers"
             ) from error
-        self.opensearch.validate_vector(vector)
+        self.opensearch_store.validate_vector(vector)
         return vector
 
     def _raw_float_vector(self, value: bytes) -> list[float]:

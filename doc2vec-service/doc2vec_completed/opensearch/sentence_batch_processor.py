@@ -1,16 +1,14 @@
-from collections.abc import Callable
-from datetime import UTC, datetime
-
-from sqlalchemy import bindparam, select, update
-from sqlalchemy.orm import Session
-
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import CatalogDocument, OccurrenceDocument
+from doc2vec_completed.opensearch.db_store import (
+    EmbeddingDBStore,
+    SentenceVectorDBStore,
+)
 from doc2vec_completed.opensearch.errors import PermanentDataError
-from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
+from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
 from doc2vec_completed.opensearch.retry import retry_operation
-from doc2vec_completed.opensearch.text import sentence_key, sentence_word_count
-from ta_db_connection.atables import Embeddings, SentencesVector
+from doc2vec_completed.opensearch.text import sentence_word_count
+from ta_db_connection.atables import SentencesVector
 from ta_utils.logger.CustomLogger import CustomLogger
 
 
@@ -20,13 +18,15 @@ class SentenceBatchProcessor:
     def __init__(
         self,
         config: Config,
-        session_factory: Callable[[], Session],
-        opensearch: OpenSearchHelper,
+        sentence_vector_db_store: SentenceVectorDBStore,
+        embedding_db_store: EmbeddingDBStore,
+        opensearch_store: OpenSearchDocumentStore,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
-        self.session_factory = session_factory
-        self.opensearch = opensearch
+        self.sentence_vector_db_store = sentence_vector_db_store
+        self.embedding_db_store = embedding_db_store
+        self.opensearch_store = opensearch_store
         self.logger = custom_logger
 
     def process(self, rows: list[SentencesVector], label: str) -> int:
@@ -39,7 +39,7 @@ class SentenceBatchProcessor:
 
         generated_count, reused_count = retry_operation(
             f"Save sentence keys for {label}",
-            self._save_keys,
+            self.sentence_vector_db_store.save_missing_sentence_keys,
             rows,
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
@@ -49,8 +49,9 @@ class SentenceBatchProcessor:
         catalog_alias = self.catalog_alias(document.analysis_group)
         embeddings = retry_operation(
             f"Load saved embeddings for {label}",
-            self._load_embeddings,
+            self.embedding_db_store.load_titan_embeddings_by_global_ids,
             [row.global_id for row in rows],
+            self.config.titan_embedding_type,
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
         )
@@ -64,7 +65,7 @@ class SentenceBatchProcessor:
         occurrences = self._occurrence_documents(rows)
         retry_operation(
             f"Write occurrences for {label}",
-            self.opensearch.bulk_index,
+            self.opensearch_store.index_documents,
             self.config.occurrence_alias,
             occurrences,
             False,
@@ -79,58 +80,6 @@ class SentenceBatchProcessor:
             f"Bedrock vector(s), and {len(occurrences)} occurrence(s)."
         )
         return len(rows)
-
-    def _save_keys(self, rows: list[SentencesVector]) -> tuple[int, int]:
-        """Reuse saved sentence keys and generate only missing values.
-
-        Input: 30 rows where 10 already contain sentence_key.
-        Output: (20, 10), meaning 20 generated keys and 10 reused keys.
-        """
-
-        current_time = datetime.now(UTC)
-        updates = []
-        prepared_rows = []
-        reused_count = 0
-        for row in rows:
-            if row.sentence_key:
-                reused_count += 1
-                continue
-
-            prepared_rows.append((row, row.sentence_key, row.last_modified))
-            row.sentence_key = sentence_key(row.sentence_content)
-            row.last_modified = current_time
-            updates.append(
-                {
-                    "record_global_id": row.global_id,
-                    "record_sentence_key": row.sentence_key,
-                    "record_last_modified": current_time,
-                }
-            )
-
-        if not updates:
-            return 0, reused_count
-
-        table = SentencesVector.__table__
-        statement = (
-            update(table)
-            .where(table.c.global_id == bindparam("record_global_id"))
-            .values(
-                sentence_key=bindparam("record_sentence_key"),
-                last_modified=bindparam("record_last_modified"),
-            )
-        )
-        try:
-            with self.session_factory() as session:
-                session.execute(statement, updates)
-                session.commit()
-        except Exception:
-            # The database did not save these keys. Put the Python rows back the
-            # way they were so the retry creates and saves the keys again.
-            for row, original_key, original_last_modified in prepared_rows:
-                row.sentence_key = original_key
-                row.last_modified = original_last_modified
-            raise
-        return len(updates), reused_count
 
     def catalog_alias(self, analysis_group: str) -> str:
         """Select the sentence catalog for the document analysis group.
@@ -149,25 +98,6 @@ class SentenceBatchProcessor:
             return self.config.refugee_catalog_alias
         raise PermanentDataError(f"unsupported analysis_group {analysis_group!r}")
 
-    def _load_embeddings(self, global_ids: list[int]) -> dict[int, list[float]]:
-        """Read saved Titan vectors for the requested global IDs.
-
-        Input: global_ids=[10, 20]
-        Output: {10: [512 vector values]} when only global ID 10 has a saved
-        Titan embedding with embedding_type=2.
-        """
-
-        with self.session_factory() as session:
-            statement = select(Embeddings).where(
-                Embeddings.global_id.in_(global_ids),
-                Embeddings.embedding_type == self.config.titan_embedding_type,
-            )
-            return {
-                row.global_id: list(row.embeddings)
-                for row in session.scalars(statement)
-                if row.embeddings
-            }
-
     def _index_catalog_rows(
         self,
         catalog_alias: str,
@@ -185,7 +115,7 @@ class SentenceBatchProcessor:
 
         existing_keys = retry_operation(
             f"Check existing catalog keys for {label}",
-            self.opensearch.existing_ids,
+            self.opensearch_store.find_existing_document_ids,
             catalog_alias,
             [row.sentence_key for row in rows],
             wait_seconds=self.config.retry_seconds,
@@ -211,13 +141,13 @@ class SentenceBatchProcessor:
             if vector is None:
                 need_vectors.append(document)
                 continue
-            self.opensearch.validate_vector(vector)
+            self.opensearch_store.validate_vector(vector)
             document["sentenceContentVector"] = vector
             with_vectors.append(document)
 
         retry_operation(
             f"Write saved vectors to {catalog_alias} for {label}",
-            self.opensearch.bulk_index,
+            self.opensearch_store.index_documents,
             catalog_alias,
             with_vectors,
             False,
@@ -227,7 +157,7 @@ class SentenceBatchProcessor:
         )
         retry_operation(
             f"Create Bedrock vectors in {catalog_alias} for {label}",
-            self.opensearch.bulk_index,
+            self.opensearch_store.index_documents,
             catalog_alias,
             need_vectors,
             True,

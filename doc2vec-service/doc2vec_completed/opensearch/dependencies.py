@@ -2,10 +2,11 @@ from sqlalchemy.orm import sessionmaker
 
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.handlers.historical_handler import HistoricalHandler
+from doc2vec_completed.opensearch.handlers.live_handler import LiveHandler
 from doc2vec_completed.opensearch.handlers.tracer_handler import TracerHandler
 from doc2vec_completed.opensearch.handlers.train_model_handler import TrainModelHandler
 from doc2vec_completed.opensearch.open_search_client import OpenSearchClient
-from doc2vec_completed.opensearch.opensearch import OpenSearchHelper
+from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
 from ta_db_connection.database_connection import DatabaseConnection
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
@@ -29,7 +30,7 @@ class Dependencies:
         )
 
         opensearch_client = OpenSearchClient(self.config).create_client()
-        self.opensearch = OpenSearchHelper(
+        self.opensearch_store = OpenSearchDocumentStore(
             self.config,
             opensearch_client,
             self.logger,
@@ -44,23 +45,30 @@ class Dependencies:
             visibility_timeout=self.config.sqs_visibility_seconds,
             retry_wait_seconds=self.config.retry_seconds,
         )
+        self.live_handler = LiveHandler(
+            self.config,
+            self.session_factory,
+            self.opensearch_store,
+            self.aws_sqs,
+            self.logger,
+        )
         self.historical_handler = HistoricalHandler(
             self.config,
             self.session_factory,
-            self.opensearch,
+            self.opensearch_store,
             self.aws_sqs,
             self.logger,
         )
         self.tracer_handler = TracerHandler(
             self.config,
             self.session_factory,
-            self.opensearch,
+            self.opensearch_store,
             self.logger,
         )
         self.train_model_handler = TrainModelHandler(
             self.config,
             self.session_factory,
-            self.opensearch,
+            self.opensearch_store,
             self.logger,
         )
 
@@ -89,6 +97,5 @@ class Dependencies:
             pool_size=self.config.database_pool_size,
             max_overflow=self.config.database_max_overflow,
             application_name="doc2vec_opensearch",
-            logger=self.logger,
             **credential_arguments,
         )

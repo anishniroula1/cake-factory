@@ -29,11 +29,24 @@ class SqsMessage(TypedDict, total=False):
     message_receive_count: int
 
 
-class NextQueueMessage(TypedDict):
+class HistoricalNextQueueMessage(TypedDict):
     """Message sent to Sentence Similarity after indexing completes."""
 
     reason: Literal["HISTORICAL"]
     tsp_id: TspId
+
+
+class LiveNextQueueMessage(TypedDict):
+    """State-machine message sent after one live document is processed."""
+
+    source: Literal["P2"]
+    tsp_id: TspId
+    sent_by: Literal["doc2vec"]
+    success: bool
+    reason: str
+
+
+type NextQueueMessage = HistoricalNextQueueMessage | LiveNextQueueMessage
 
 
 class HistoricalResult(TypedDict):
@@ -43,6 +56,16 @@ class HistoricalResult(TypedDict):
     tsp_id: TspId
     source_count: int
     indexed_count: int
+
+
+class LiveResult(TypedDict):
+    """Counts returned after one incoming document finishes processing."""
+
+    tsp_id: TspId
+    source_count: int
+    indexed_count: int
+    success: bool
+    reason: str
 
 
 class TrainModelResult(TypedDict):

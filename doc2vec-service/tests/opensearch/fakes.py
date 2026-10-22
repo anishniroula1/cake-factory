@@ -21,6 +21,7 @@ class SessionFake:
         self.scalar_statements = []
         self.scalars_statements = []
         self.commits = 0
+        self.added = []
 
     def __enter__(self):
         return self
@@ -41,6 +42,17 @@ class SessionFake:
 
     def execute(self, statement, parameters=None):
         self.executed.append((statement, parameters))
+
+    def add_all(self, rows):
+        next_id = 1
+        for row in rows:
+            if row.global_id is None:
+                row.global_id = next_id
+                next_id += 1
+        self.added.extend(rows)
+
+    def flush(self):
+        pass
 
     def commit(self):
         self.commits += 1
@@ -64,11 +76,11 @@ class OpenSearchFake:
         self.bulk_calls = []
         self.refresh_alias_calls = []
 
-    def existing_ids(self, alias, document_ids):
+    def find_existing_document_ids(self, alias, document_ids):
         self.existing_id_calls.append((alias, document_ids))
         return set(document_ids) & self.existing
 
-    def bulk_index(self, alias, documents, needs_embedding):
+    def index_documents(self, alias, documents, needs_embedding):
         self.bulk_calls.append((alias, documents, needs_embedding))
         return len(documents)
 

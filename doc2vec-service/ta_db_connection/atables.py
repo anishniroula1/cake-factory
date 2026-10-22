@@ -29,7 +29,10 @@ class TextSimilarityInput(Base):
     __table_args__: ClassVar[dict[str, object]] = {"schema": "tsp"}
 
     tsp_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    a_number: Mapped[int] = mapped_column(Integer, nullable=False)
     application_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
     section_name: Mapped[str] = mapped_column(String(50), nullable=False)
     analysis_group: Mapped[str] = mapped_column(String(50), nullable=False)
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

@@ -71,6 +71,8 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
     with pytest.raises(ValueError):
         replace(config, doc2vec_queue_url="").validate()
     with pytest.raises(ValueError):
+        replace(config, state_machine_queue_url=None).validate()
+    with pytest.raises(ValueError):
         replace(config, asylee_catalog_alias="").validate()
     with pytest.raises(ValueError):
         replace(config, refugee_catalog_alias="").validate()

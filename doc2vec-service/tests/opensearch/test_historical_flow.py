@@ -189,11 +189,11 @@ def test_temporary_worker_failure_retries_without_losing_the_message(
             super().__init__()
             self.read_attempts = 0
 
-        def existing_ids(self, alias, document_ids):
+        def find_existing_document_ids(self, alias, document_ids):
             self.read_attempts += 1
             if self.read_attempts == 1:
                 raise ConnectionError("temporary OpenSearch failure")
-            return super().existing_ids(alias, document_ids)
+            return super().find_existing_document_ids(alias, document_ids)
 
     monkeypatch.setattr(
         "doc2vec_completed.opensearch.retry.time.sleep", lambda value: None
@@ -302,17 +302,14 @@ def test_unsupported_analysis_group_does_not_delete_the_message(
     assert sqs.sent == []
 
 
-@pytest.mark.parametrize("reason", [None, "TRAIN", "UNKNOWN"])
+@pytest.mark.parametrize("reason", ["TRAIN", "UNKNOWN"])
 def test_only_historical_messages_enter_the_handler(
     reason,
     service_config,
     custom_logger,
 ):
     message = historical_message()
-    if reason is None:
-        message.pop("reason")
-    else:
-        message["reason"] = reason
+    message["reason"] = reason
 
     sqs = run_application(
         service_config,

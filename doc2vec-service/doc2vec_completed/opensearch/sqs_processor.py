@@ -4,7 +4,7 @@ from doc2vec_completed.opensearch.errors import CriticalProcessingError
 
 
 class SqsProcessor:
-    """Route historical, tracer, and model-training messages to Doc2Vec handlers."""
+    """Route live and backfill messages to the matching Doc2Vec handler."""
 
     def __init__(self, dependencies: Dependencies) -> None:
         self.dependencies = dependencies
@@ -24,10 +24,10 @@ class SqsProcessor:
         """
 
         reason = str(raw_message.get("reason") or "").strip().upper()
-        if reason not in {"HISTORICAL", "TRAIN_MODEL", "TRACER"}:
+        if reason and reason not in {"HISTORICAL", "TRAIN_MODEL", "TRACER"}:
             self.dependencies.logger.error(
-                "Cannot process the SQS message because its reason is missing "
-                "or not supported."
+                f"Cannot process the SQS message because reason={reason!r} is "
+                "not supported."
             )
             return
 
@@ -57,10 +57,14 @@ class SqsProcessor:
                 result = self.dependencies.historical_handler.process(tsp_id)
             elif reason == "TRAIN_MODEL":
                 result = self.dependencies.train_model_handler.process(tsp_id)
-            else:
+            elif reason == "TRACER":
                 result = self.dependencies.tracer_handler.process(tracer_sentence_ids)
+            else:
+                # The established live message contract has no reason field.
+                result = self.dependencies.live_handler.process(tsp_id)
             if result is None:
-                self._leave_message_for_sqs(f"{reason} processing did not complete.")
+                flow_name = reason or "LIVE"
+                self._leave_message_for_sqs(f"{flow_name} processing did not complete.")
                 return
 
             if not self.dependencies.aws_sqs.delete_messages(raw_message):
