@@ -1,0 +1,373 @@
+# Sentence OpenSearch Flow: Database Tables
+
+This document lists the PostgreSQL tables used by the new sentence OpenSearch
+flow. The flow contains four services:
+
+1. Doc2Vec
+2. Sentence Similarity
+3. Case Similarity
+4. API Transform
+
+The OpenSearch indexes are listed separately because they are not PostgreSQL
+tables.
+
+## End-to-end table flow
+
+```text
+tsp.text_similarity_input
+        |
+        v
+tsp.sentences_vector ---- tsp.embeddings
+        |                       |
+        +----------+------------+
+                   |
+                   v
+        OpenSearch sentence indexes
+                   |
+                   v
+          tsp.titan_matches
+                   |
+                   v
+      tsp.titan_similar_cases
+                   |
+                   v
+     API Transform and Kafka tables
+```
+
+## Runtime access summary
+
+`R` means read, `W` means insert or update, and `D` means delete.
+
+| Table | Doc2Vec | Sentence Similarity | Case Similarity | API Transform |
+|---|---:|---:|---:|---:|
+| `tsp.text_similarity_input` | R | R | R | R |
+| `tsp.sentences_vector` | R/W | R/W | — | R |
+| `tsp.embeddings` | R | — | — | — |
+| `tsp.tracer_sentence` | R | — | — | — |
+| `tsp.titan_matches` | — | W | R | R |
+| `tsp.titan_similar_cases` | — | — | R/W/D | R |
+| `tsp.api_section_map` | — | — | — | R |
+| `landing.global_document_registry` | — | — | R | R |
+| `validation.kafka_ta_hit_lookup` | — | — | R/W | — |
+| `landing.application_id_lookup` | — | — | — | R |
+| `landing.receipt_number_lookup` | — | — | — | R |
+| `landing.global_case_details_history` | — | — | — | R |
+| `landing.template_registry` | — | — | — | R |
+| `biodata.applicant` | — | — | — | R |
+| `biodata.address` | — | — | — | R |
+| `api.transform_status` | — | — | — | R/W |
+| `api.kafka_events` | — | — | — | W/D |
+| `landing.etlerror` | — | — | — | W |
+
+## Core sentence tables
+
+### `tsp.text_similarity_input`
+
+One row represents one document. Its `tsp_id` connects the document to every
+sentence extracted from it.
+
+Important fields used by the new flow:
+
+| Field | Purpose |
+|---|---|
+| `tsp_id` | Document identifier received through SQS |
+| `application_id` | Case/application that owns the document |
+| `a_number` | Existing case identifier used where the current API contract requires it |
+| `content` | Full document text used by live Doc2Vec |
+| `source_type` | Source of the document |
+| `section_name` | Document section, such as Affidavit |
+| `analysis_group` | Selects the Asylee or Refugee sentence catalog |
+| `is_current` | Identifies the active document row |
+| `is_template` | Included in API Transform sentence output |
+| `load_date` | Included in API Transform document output |
+| `source_id` | Connects a document to `landing.global_document_registry` |
+
+Service usage:
+
+- Doc2Vec reads the full document for live splitting and reads document fields
+  while indexing historical sentences.
+- Sentence Similarity reads `application_id` and `analysis_group` through the
+  sentence relationship.
+- Case Similarity uses `tsp_id` to find the source application and group.
+- API Transform uses it to find every current document belonging to an
+  application.
+
+### `tsp.sentences_vector`
+
+One row represents one occurrence of a sentence in one document. Two documents
+may contain the same sentence text but have different `global_id` values.
+
+Important fields used by the new flow:
+
+| Field | Purpose |
+|---|---|
+| `global_id` | Unique sentence-occurrence identifier |
+| `tsp_id` | Connects the sentence to its document |
+| `sent_id_local` | Sentence line/order inside the document |
+| `sentence_content` | Original sentence text |
+| `sentence_key` | Stable SHA-256 key created from normalized sentence text |
+| `word_count` | Meaningful word count calculated from `sentence_content` |
+| `source_type` | Source copied from the document |
+| `analysis_group` | Asylee or Refugee |
+| `is_non_matcher` | Sentence must not create normal semantic matches |
+| `is_tracer` | Sentence is classified as tracer text |
+| `is_form_language` | Sentence is classified as form language |
+| `last_modified` | Latest sentence or classification update time |
+
+Service usage:
+
+- Live Doc2Vec inserts or updates sentence rows after splitting a document.
+- Historical Doc2Vec creates missing `sentence_key` values.
+- Sentence Similarity loads source sentences and updates their classification
+  fields.
+- API Transform reads sentence text and identifiers for the outgoing payload.
+
+### `tsp.embeddings`
+
+This table stores previously generated vectors by sentence occurrence.
+
+| Field | Purpose |
+|---|---|
+| `global_id` | Sentence occurrence that owns the vector |
+| `embedding_type` | Model identifier; `2` represents Titan |
+| `embeddings` | Existing 512-dimension vector |
+
+Doc2Vec reads this table before asking the OpenSearch Bedrock pipeline to make
+a vector. When a Titan vector already exists, Doc2Vec reuses it. A vector
+generated by the OpenSearch pipeline is not written back to this table by the
+new flow.
+
+### `tsp.tracer_sentence`
+
+This table is the source for the small tracer/form-language OpenSearch catalog.
+
+| Field | Purpose |
+|---|---|
+| `tracer_sentence_id` | OpenSearch document ID for the tracer reference |
+| `sentence_content` | Reference sentence text |
+| `analysis_group` | Group in which the reference applies |
+| `is_non_matcher` | Marks a non-matching reference |
+| `is_form_language` | Marks a form-language reference |
+| `embedding` | Existing Titan vector when available |
+| `last_modified` | Reference update time |
+
+There is no stored `is_tracer` column in this table. A reference is a tracer
+when both `is_non_matcher` and `is_form_language` are false.
+
+## Derived matching tables
+
+### `tsp.titan_matches`
+
+Sentence Similarity writes semantic sentence relationships into this table.
+Each source `global_id` can own up to 16 bucket rows so a very large match list
+is not stored in one growing JSONB value.
+
+| Field | Purpose |
+|---|---|
+| `global_id` | Source sentence occurrence |
+| `match_bucket_number` | Stable bucket from `0` through `15` |
+| `tsp_id` | Source document |
+| `application_id` | Source application |
+| `matches` | JSONB object in the form `{targetGlobalId: distance}` |
+| `match_count` | Generated count of keys in this bucket |
+| `verbatim` | Generated array of target IDs whose distance is `0.0` |
+| `last_modified` | Time this bucket was last changed |
+
+Example rows:
+
+| global_id | bucket | tsp_id | application_id | matches |
+|---:|---:|---:|---:|---|
+| `100` | `1` | `10` | `500` | `{"201": 0.0, "305": 0.10}` |
+| `100` | `8` | `10` | `500` | `{"808": 0.18}` |
+
+The PostgreSQL function `tsp.upsert_bidirectional_titan_matches` writes the
+source-to-target and target-to-source relationships in the same transaction.
+No row is created when a sentence has no matches.
+
+Consumers:
+
+- Case Similarity counts sentence pairs between applications.
+- API Transform combines all bucket rows into the existing per-sentence
+  response format.
+
+### `tsp.titan_similar_cases`
+
+Case Similarity creates one application-level summary when the application has
+at least one matching application.
+
+| Field | Purpose |
+|---|---|
+| `application_id` | Application represented by the row |
+| `analysis_group` | Group used to calculate the summary |
+| `similar_application_ids` | Applications with at least one matching sentence pair |
+| `similar_case_ids` | Applications meeting the similar-case threshold, normally 2 pairs |
+| `similar_case_count` | Generated size of `similar_case_ids` |
+| `tah_case_ids` | Applications meeting the TAH threshold, normally 3 pairs |
+| `tah_case_count` | Generated size of `tah_case_ids` |
+| `is_tah` | Generated true value when `tah_case_ids` is not empty |
+| `last_modified` | Summary update time |
+
+Example:
+
+```json
+{
+  "application_id": 100,
+  "similar_application_ids": [200, 300, 400],
+  "similar_case_ids": [300, 400],
+  "tah_case_ids": [400],
+  "is_tah": true
+}
+```
+
+The function `tsp.refresh_titan_similar_cases` rebuilds the source summary and
+updates the reverse relationship on affected target applications. When the
+last relationship disappears, the empty summary row is deleted.
+
+## Case Similarity Kafka tables
+
+### `landing.global_document_registry`
+
+Case Similarity uses the application's `a_number` to find the receipt number
+used as the Kafka message key. A receipt shared by multiple applications is
+not published because one receipt cannot safely represent several application
+TAH values.
+
+API Transform also uses this table to find a document file name by
+`source_id`.
+
+Fields used: `a_number`, `receipt_number`,
+`global_document_registry_id`, and `file_name`.
+
+### `validation.kafka_ta_hit_lookup`
+
+This table stores the last TAH value successfully confirmed by Kafka for each
+receipt number and Kafka environment.
+
+Fields used:
+
+- `receipt_number`
+- `kafka_environment`
+- `is_tah`
+- `kafka_ts`
+- `kafka_partition`
+- `kafka_offset`
+
+Case Similarity publishes when no lookup row exists or when the current
+`is_tah` differs from the saved value. It updates this table only after Kafka
+confirms delivery.
+
+## API Transform lookup and enrichment tables
+
+### `tsp.api_section_map`
+
+Maps the internal `text_similarity_input.section_name` to the section name
+required by the API payload.
+
+Fields used: `tsp_section_name` and `api_section_name`.
+
+### `landing.application_id_lookup`
+
+Provides the canonical application-level values used in the API payload.
+It also converts similar application IDs into the A-number list required by
+the existing API contract.
+
+Fields used: `application_id`, `a_number`, `analysis_group`, and `case_type`.
+
+### `landing.receipt_number_lookup`
+
+Provides the receipt number for an application in the API payload.
+
+Fields used: `application_id` and `receipt_number`.
+
+### `landing.global_case_details_history`
+
+Provides applicant confidence values used in the application-level section of
+the API payload.
+
+Fields used: `a_number`, `applicant_key`, and `confidence_score`.
+
+### `landing.template_registry`
+
+Provides the newest public-template URL for an Asylee application.
+
+Fields used: `a_number` and `template_url`.
+
+### `biodata.applicant`
+
+Provides current applicant and case details, including names, date of birth,
+case values, contact information, preparer information, and OCR source bits.
+API Transform converts the OCR source bits into five boolean OCR fault fields.
+
+### `biodata.address`
+
+Provides the newest current residence and mailing addresses for each
+application. Address OCR source bits also contribute to the API Transform OCR
+fault fields.
+
+## API Transform operational tables
+
+### `api.transform_status`
+
+Stores the last successful Kafka transmission time for each application.
+API Transform uses it to omit unchanged applicant/address data when reduced
+Kafka payload mode is enabled.
+
+Fields used: `application_id` and `last_transmission`.
+
+### `api.kafka_events`
+
+Stores an audit copy of each API event after Kafka confirms delivery.
+
+Fields used include:
+
+- `analysis_group`
+- `a_number`
+- `application_id`
+- `kafka_value`
+- `kafka_ts`
+- `kafka_partition`
+- `kafka_offset`
+- `kafka_environment`
+
+Rows older than the configured retention period are deleted by API Transform.
+
+### `landing.etlerror`
+
+Stores an operational error when API Transform cannot build or publish a
+document. The new flow uses `-1` for the legacy batch identifiers because it
+processes one SQS document at a time.
+
+## PostgreSQL functions used by the flow
+
+These are functions, not additional tables.
+
+| Function | Purpose |
+|---|---|
+| `tsp.upsert_bidirectional_titan_matches` | Saves sentence relationships in both directions and selects the correct bucket |
+| `tsp.titan_match_object_size` | Generates the match count for one Titan bucket |
+| `tsp.titan_verbatim_global_ids` | Generates the exact-match global-ID array |
+| `tsp.refresh_titan_similar_cases` | Rebuilds source and reverse application summaries |
+
+## OpenSearch indexes used with these tables
+
+These are OpenSearch aliases, not PostgreSQL tables.
+
+| Alias | Written by | Read by | Purpose |
+|---|---|---|---|
+| `sentence_occurrences` | Doc2Vec | Sentence Similarity | Maps each sentence key to every occurrence, document, and application |
+| `sentence_semantic_catalog_asylee` | Doc2Vec | Sentence Similarity | Unique Asylee sentence keys and 512-dimension Titan vectors |
+| `sentence_semantic_catalog_refugee` | Doc2Vec | Sentence Similarity | Unique Refugee sentence keys and 512-dimension Titan vectors |
+| `tracer_form_language_catalog` | Doc2Vec tracer flow | Sentence Similarity | Tracer, form-language, and non-matcher classification references |
+| `sentence_semantic_training` | Doc2Vec training flow | OpenSearch model training | Vectors used to train the IVF model |
+
+## Legacy tables not used by the new runtime flow
+
+The following tables may still exist, but the new sentence OpenSearch runtime
+does not use them:
+
+- `tsp.matches`: legacy sentence matches stored as JSONB lists. It is used only
+  for comparison and migration queries.
+- `tsp.micro_service_similar_cases`: legacy case summary table.
+- `tsp.sentence_key_matches`: proposed sentence-key design that is not part of
+  the current production plan.
+- `tsp.text_analytics_hit`: not read or written by the four new services.
