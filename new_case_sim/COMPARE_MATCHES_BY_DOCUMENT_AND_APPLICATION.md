@@ -334,21 +334,19 @@ ORDER BY document.tsp_id;
 
 ## 5. Legacy `tsp.matches`: get all matched `tsp_id` values for 50 applications
 
-This query finds documents whose total legacy `match_count` is greater than
-20. It uses those documents to select 50 applications, including at least 20
-qualifying Refugee applications. It then expands the matches saved by every
-document owned by those 50 source applications and returns all unique target
-`tsp_id` values. This is useful for preparing the matched documents for
-OpenSearch comparison testing.
+This query selects 50 source applications that have a legacy match row with
+`match_count` greater than 20, including at least 20 qualifying Refugee
+applications. It then expands the matches saved by every document owned by
+those source applications and returns all unique target `tsp_id` values.
 
-The match count is summed because `tsp.matches` stores one row per source
-sentence. For example, if one document has three sentence rows with match
-counts of 8, 7, and 6, its document match count is 21 and it qualifies.
+The query reads `tsp_id` directly from each JSON match object. It does not join
+every matched `global_id` through `sentences_vector`, which makes this version
+much faster for large match lists.
 
 Change the three values in the `parameters` section when needed. A
-`minimum_match_count` of 20 means the qualifying document must have at least
+`minimum_match_count` of 20 means at least one source sentence row must have
 21 saved matches. The query can return 20 Refugee applications only when at
-least 20 Refugee applications satisfy that match-count rule.
+least 20 Refugee applications satisfy that rule.
 
 ```sql
 WITH parameters AS (
@@ -357,60 +355,36 @@ WITH parameters AS (
         50::INTEGER AS application_limit,
         20::INTEGER AS minimum_refugee_applications
 ),
-document_match_counts AS (
-    SELECT
+qualifying_applications AS MATERIALIZED (
+    SELECT DISTINCT
         input.application_id,
-        input.analysis_group,
-        source_match.tsp_id,
-        SUM(source_match.match_count)::BIGINT AS document_match_count
+        input.analysis_group
     FROM tsp.matches AS source_match
     JOIN tsp.text_similarity_input AS input
       ON input.tsp_id = source_match.tsp_id
-    GROUP BY
-        input.application_id,
-        input.analysis_group,
-        source_match.tsp_id
-),
-qualifying_documents AS (
-    SELECT
-        application_id,
-        analysis_group,
-        tsp_id,
-        document_match_count
-    FROM document_match_counts
-    WHERE document_match_count >
-          (SELECT minimum_match_count FROM parameters)
-),
-application_match_counts AS (
-    SELECT
-        application_id,
-        analysis_group,
-        SUM(document_match_count)::BIGINT AS application_match_count
-    FROM qualifying_documents
-    GROUP BY application_id, analysis_group
+    CROSS JOIN parameters
+    WHERE source_match.match_count > parameters.minimum_match_count
 ),
 refugee_applications AS (
     SELECT
         application_id,
-        analysis_group,
-        application_match_count
-    FROM application_match_counts
+        analysis_group
+    FROM qualifying_applications
     WHERE LOWER(analysis_group) = 'refugee'
-    ORDER BY application_match_count DESC, application_id
+    ORDER BY application_id
     LIMIT (SELECT minimum_refugee_applications FROM parameters)
 ),
 remaining_applications AS (
     SELECT
         candidate.application_id,
-        candidate.analysis_group,
-        candidate.application_match_count
-    FROM application_match_counts AS candidate
+        candidate.analysis_group
+    FROM qualifying_applications AS candidate
     WHERE NOT EXISTS (
         SELECT 1
         FROM refugee_applications AS refugee
         WHERE refugee.application_id = candidate.application_id
     )
-    ORDER BY candidate.application_match_count DESC, candidate.application_id
+    ORDER BY candidate.application_id
     LIMIT (
         SELECT application_limit - (SELECT COUNT(*) FROM refugee_applications)
         FROM parameters
@@ -423,7 +397,7 @@ selected_applications AS (
 ),
 matched_target_documents AS (
     SELECT DISTINCT
-        target_sentence.tsp_id AS matched_tsp_id
+        (target.item ->> 'tsp_id')::INTEGER AS matched_tsp_id
     FROM selected_applications AS application
     JOIN tsp.text_similarity_input AS source_input
       ON source_input.application_id = application.application_id
@@ -433,12 +407,8 @@ matched_target_documents AS (
     CROSS JOIN LATERAL jsonb_array_elements(
         COALESCE(source_match.matches, '[]'::JSONB)
     ) AS target(item)
-    JOIN tsp.sentences_vector AS target_sentence
-      ON target_sentence.global_id = (target.item ->> 'global_id')::INTEGER
-    JOIN tsp.text_similarity_input AS target_input
-      ON target_input.tsp_id = target_sentence.tsp_id
-    WHERE target_input.application_id <> source_input.application_id
-      AND target_input.analysis_group = source_input.analysis_group
+    WHERE target.item ? 'tsp_id'
+      AND NULLIF(target.item ->> 'tsp_id', '') IS NOT NULL
 )
 SELECT matched_tsp_id AS tsp_id
 FROM matched_target_documents
