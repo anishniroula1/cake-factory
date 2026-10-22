@@ -332,13 +332,14 @@ FROM (
 ORDER BY document.tsp_id;
 ```
 
-## 5. Legacy `tsp.matches`: get every `tsp_id` for 50 applications with matches
+## 5. Legacy `tsp.matches`: get all matched `tsp_id` values for 50 applications
 
 This query finds documents whose total legacy `match_count` is greater than
 20. It uses those documents to select 50 applications, including at least 20
-qualifying Refugee applications, then returns every `tsp_id` owned by those
-applications. This is useful for preparing a group of complete applications
-for OpenSearch comparison testing.
+qualifying Refugee applications. It then expands the matches saved by every
+document owned by those 50 source applications and returns all unique target
+`tsp_id` values. This is useful for preparing the matched documents for
+OpenSearch comparison testing.
 
 The match count is summed because `tsp.matches` stores one row per source
 sentence. For example, if one document has three sentence rows with match
@@ -419,34 +420,40 @@ selected_applications AS (
     SELECT * FROM refugee_applications
     UNION ALL
     SELECT * FROM remaining_applications
+),
+matched_target_documents AS (
+    SELECT DISTINCT
+        target_sentence.tsp_id AS matched_tsp_id
+    FROM selected_applications AS application
+    JOIN tsp.text_similarity_input AS source_input
+      ON source_input.application_id = application.application_id
+     AND source_input.analysis_group = application.analysis_group
+    JOIN tsp.matches AS source_match
+      ON source_match.tsp_id = source_input.tsp_id
+    CROSS JOIN LATERAL jsonb_array_elements(
+        COALESCE(source_match.matches, '[]'::JSONB)
+    ) AS target(item)
+    JOIN tsp.sentences_vector AS target_sentence
+      ON target_sentence.global_id = (target.item ->> 'global_id')::INTEGER
+    JOIN tsp.text_similarity_input AS target_input
+      ON target_input.tsp_id = target_sentence.tsp_id
+    WHERE target_input.application_id <> source_input.application_id
+      AND target_input.analysis_group = source_input.analysis_group
 )
-SELECT DISTINCT
-    application.application_id,
-    application.analysis_group,
-    input.tsp_id,
-    COALESCE(document.document_match_count, 0) AS document_match_count,
-    application.application_match_count
-FROM selected_applications AS application
-JOIN tsp.text_similarity_input AS input
-  ON input.application_id = application.application_id
- AND input.analysis_group = application.analysis_group
-LEFT JOIN document_match_counts AS document
-  ON document.application_id = input.application_id
- AND document.analysis_group = input.analysis_group
- AND document.tsp_id = input.tsp_id
-ORDER BY
-    application.application_match_count DESC,
-    application.application_id,
-    input.tsp_id;
+SELECT matched_tsp_id AS tsp_id
+FROM matched_target_documents
+ORDER BY matched_tsp_id;
 ```
 
-The result can contain more than 50 rows because the limit applies to
-applications, not documents. Twenty application positions are filled by the
-highest-match Refugee applications first. The remaining positions are filled
-by the highest-match applications not already selected. If one selected
-application owns ten documents, all ten `tsp_id` values are returned.
-`document_match_count=0` means that the document belongs to a qualifying
-application but does not yet have a row in the legacy matches table.
+The limit applies only to the 50 source applications. It does not limit their
+matched documents. For example, if one selected application owns 10 source
+documents and those documents match 20 other documents, the 20 target
+`tsp_id` values are returned. Across 50 source applications, the result can
+therefore contain 20,000, 40,000, or more unique target `tsp_id` values.
+
+The final `DISTINCT` inside `matched_target_documents` makes each target
+`tsp_id` appear once, even when several source sentences or source
+applications match that same document.
 
 ## Reading the results
 
