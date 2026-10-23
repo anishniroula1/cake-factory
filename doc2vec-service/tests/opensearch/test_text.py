@@ -19,3 +19,11 @@ def test_sentence_normalization_and_key():
 def test_empty_sentence_key_is_rejected():
     with pytest.raises(ValueError):
         sentence_key("   ")
+
+
+def test_word_count_collapses_only_excessive_consecutive_repetition():
+    assert sentence_word_count("Yes yes yes yes yes") == 1
+    assert sentence_word_count("NO no No, I did not go") == 5
+    assert sentence_word_count("I was very very afraid") == 5
+    assert sentence_word_count("The man said the man escaped") == 6
+    assert sentence_word_count("La policía me detuvo durante tres días") == 7

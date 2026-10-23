@@ -127,6 +127,10 @@ code.
    pipeline create the vector.
 8. Write every sentence to the occurrence index, including sentences with fewer
    than five words. Sentence Similarity applies that matching rule later.
+   The catalog `wordCount` preserves Unicode words and counts a consecutive run
+   of three or more identical words once. This prevents text such as
+   `yes yes yes yes yes` from passing the five-word rule without reducing a
+   normal sentence such as `The man said the man escaped`.
 9. Refresh the selected catalog and occurrence aliases once after all writes.
 10. Send the existing state-machine result and delete the source SQS message
     only after the state-machine message is accepted.
