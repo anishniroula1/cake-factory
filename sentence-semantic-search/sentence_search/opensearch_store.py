@@ -625,6 +625,78 @@ class OpenSearchStore:
             if not after_key:
                 return counts
 
+    def occurrence_counts_by_tsp_and_key(
+        self,
+        sentence_keys: list,
+        excluded_tsp_id: str,
+        analysis_group: str,
+    ) -> list:
+        """Count eligible target occurrences for each TSP document and key.
+
+        Input: catalog keys matching sentences from TSP document 101.
+        Output: TSP/application/key/count rows for every document except 101.
+        """
+
+        canonical_group = self.config.canonical_analysis_group(analysis_group)
+        unique_keys = sorted(set(sentence_keys))
+        if not unique_keys:
+            return []
+
+        key_filters = []
+        for offset in range(0, len(unique_keys), TERMS_BATCH_SIZE):
+            batch = unique_keys[offset : offset + TERMS_BATCH_SIZE]
+            key_filters.append({"terms": {"sentenceKey": batch}})
+
+        counts = []
+        after_key = None
+        while True:
+            composite = {
+                "size": APPLICATION_BUCKET_PAGE_SIZE,
+                "sources": [
+                    {"tspId": {"terms": {"field": "tspId"}}},
+                    {"applicationId": {"terms": {"field": "applicationId"}}},
+                    {"sentenceKey": {"terms": {"field": "sentenceKey"}}},
+                ],
+            }
+            if after_key:
+                composite["after"] = after_key
+
+            response = self.client.search(
+                index=self.config.occurrence_alias,
+                body={
+                    "size": 0,
+                    "track_total_hits": False,
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "bool": {
+                                        "should": key_filters,
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                                {"term": {"analysisGroup": canonical_group}},
+                            ],
+                            "must_not": [{"term": {"tspId": excluded_tsp_id}}],
+                        }
+                    },
+                    "aggs": {"matches": {"composite": composite}},
+                },
+            )
+            aggregation = response["aggregations"]["matches"]
+            for bucket in aggregation["buckets"]:
+                counts.append(
+                    {
+                        "tspId": str(bucket["key"]["tspId"]),
+                        "applicationId": str(bucket["key"]["applicationId"]),
+                        "sentenceKey": str(bucket["key"]["sentenceKey"]),
+                        "occurrenceCount": int(bucket["doc_count"]),
+                    }
+                )
+            after_key = aggregation.get("after_key")
+            if not after_key:
+                return counts
+
     def matching_occurrences_for_applications(
         self,
         sentence_keys: list,
@@ -676,6 +748,70 @@ class OpenSearchStore:
                                     }
                                 }
                             ],
+                        }
+                    },
+                }
+                if after_global_id is not None:
+                    body["search_after"] = [after_global_id]
+                response = self.client.search(
+                    index=self.config.occurrence_alias,
+                    body=body,
+                )
+                hits = response["hits"]["hits"]
+                matches.extend(
+                    self._hydrate_occurrences(
+                        [hit["_source"] for hit in hits],
+                        canonical_group,
+                    )
+                )
+                if len(hits) < MATCH_RESULT_BATCH_SIZE:
+                    break
+                after_global_id = int(hits[-1]["sort"][0])
+        return matches
+
+    def matching_occurrences_for_documents(
+        self,
+        sentence_keys: list,
+        tsp_ids: list,
+        excluded_tsp_id: str,
+        analysis_group: str,
+    ) -> list:
+        """Return eligible occurrences from selected target TSP documents."""
+
+        canonical_group = self.config.canonical_analysis_group(analysis_group)
+        unique_keys = sorted(set(sentence_keys))
+        unique_tsp_ids = sorted(set(tsp_ids))
+        if not unique_keys or not unique_tsp_ids:
+            return []
+
+        key_filters = []
+        for offset in range(0, len(unique_keys), TERMS_BATCH_SIZE):
+            batch = unique_keys[offset : offset + TERMS_BATCH_SIZE]
+            key_filters.append({"terms": {"sentenceKey": batch}})
+
+        matches = []
+        for offset in range(0, len(unique_tsp_ids), TERMS_BATCH_SIZE):
+            tsp_batch = unique_tsp_ids[offset : offset + TERMS_BATCH_SIZE]
+            after_global_id = None
+            while True:
+                body = {
+                    "size": MATCH_RESULT_BATCH_SIZE,
+                    "track_total_hits": False,
+                    "_source": OCCURRENCE_SOURCE_FIELDS,
+                    "sort": [{"globalId": "asc"}],
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "bool": {
+                                        "should": key_filters,
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                                {"terms": {"tspId": tsp_batch}},
+                                {"term": {"analysisGroup": canonical_group}},
+                            ],
+                            "must_not": [{"term": {"tspId": excluded_tsp_id}}],
                         }
                     },
                 }

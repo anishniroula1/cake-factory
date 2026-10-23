@@ -64,40 +64,6 @@ class ApplicationMatchService:
             source_sentences,
         )
 
-    def compare_tsp(
-        self,
-        tsp_id: str,
-        analysis_group: str,
-        threshold: int,
-    ) -> dict:
-        """Rank applications matching the eligible sentences in one document.
-
-        Input: TSP document T1, analysis group Asylee, and threshold 90.
-        Output: all applications and pairs originating from document T1.
-        """
-
-        if not 1 <= threshold <= 100:
-            raise ValueError("threshold must be between 1 and 100")
-
-        source_sentences = self._tsp_source_sentences(tsp_id, analysis_group)
-        if not source_sentences:
-            raise ValueError(
-                "tspId has no eligible sentences for this analysisGroup"
-            )
-        source_application_ids = {
-            sentence["applicationId"] for sentence in source_sentences
-        }
-        if len(source_application_ids) != 1:
-            raise RuntimeError("tspId belongs to more than one application")
-        application_id = source_application_ids.pop()
-        result = self._compare_source_sentences(
-            application_id,
-            analysis_group,
-            threshold,
-            source_sentences,
-        )
-        return {"tspId": tsp_id, **result}
-
     def _compare_source_sentences(
         self,
         application_id: str,
@@ -192,27 +158,6 @@ class ApplicationMatchService:
                 SOURCE_PAGE_SIZE,
                 after_global_id,
                 False,
-            )
-            sentences.extend(page["sentences"])
-            after_global_id = page["nextAfterGlobalId"]
-            if after_global_id is None:
-                return sentences
-
-    def _tsp_source_sentences(
-        self,
-        tsp_id: str,
-        analysis_group: str,
-    ) -> list:
-        """Load every eligible source sentence for one TSP document."""
-
-        sentences = []
-        after_global_id = None
-        while True:
-            page = self.opensearch.tsp_occurrence_page(
-                tsp_id,
-                analysis_group,
-                SOURCE_PAGE_SIZE,
-                after_global_id,
             )
             sentences.extend(page["sentences"])
             after_global_id = page["nextAfterGlobalId"]

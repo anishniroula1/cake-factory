@@ -87,9 +87,9 @@ def test_application_matches_has_no_public_pagination():
     }
 
 
-def test_tsp_matches_has_no_public_pagination():
+def test_document_matches_has_no_public_pagination():
     operation = app.openapi()["paths"][
-        "/documents/{tspId}/sentences/application-matches"
+        "/documents/{tspId}/sentences/document-matches"
     ]["get"]
     parameters = {item["name"] for item in operation["parameters"]}
 
@@ -98,6 +98,10 @@ def test_tsp_matches_has_no_public_pagination():
         "analysisGroup",
         "threshold",
     }
+    assert (
+        "/documents/{tspId}/sentences/application-matches"
+        not in app.openapi()["paths"]
+    )
 
 
 def test_csv_download_endpoints_take_analysis_group_and_threshold():

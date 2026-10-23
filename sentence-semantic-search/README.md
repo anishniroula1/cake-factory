@@ -96,24 +96,28 @@ GET /applications/{applicationId}/sentences/application-matches
 ## Search by TSP ID
 
 This endpoint uses only eligible sentences from one TSP document and ranks the
-other applications that match them:
+other TSP documents that match them:
 
 ```text
-GET /documents/{tspId}/sentences/application-matches
+GET /documents/{tspId}/sentences/document-matches
     ?analysisGroup=Asylee
     &threshold=90
 ```
 
-The service reads the source application from those occurrence records and
-excludes that application from the results. Both endpoints still use internal
-OpenSearch pages, but they continue reading until every matching application
-and sentence pair has been returned.
+The document endpoint excludes only the source `tspId`. Another document from
+the same application can therefore appear as a target. Results are grouped and
+ranked by target `tspId`, and each document also includes its `applicationId`
+for context. The application endpoint continues to exclude the complete source
+application and group targets by application.
 
-Applications are ranked by total matching sentence-pair count. Inside every
-application, `matches` contains one item per source sentence. Each source item
-has a `targets` list ordered by `matchPercentage` from highest to lowest, then
-by target global ID. Source groups with the strongest target are shown first.
-The sentence-key search endpoints and CSV exports use the same
+Both endpoints use internal OpenSearch pages and continue reading until every
+matching target and sentence pair has been returned.
+
+Applications or documents are ranked by total matching sentence-pair count.
+Inside every result, `matches` contains one item per source sentence. Each
+source item has a `targets` list ordered by `matchPercentage` from highest to
+lowest, then by target global ID. Source groups with the strongest target are
+shown first. The sentence-key search endpoints and CSV exports use the same
 highest-percentage-first ordering rule.
 
 ```json

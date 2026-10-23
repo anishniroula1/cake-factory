@@ -5,6 +5,7 @@ from opensearchpy.exceptions import OpenSearchException
 
 from sentence_search.components import (
     application_match_service,
+    document_match_service,
     paginated_sentence_key_search_service,
     sentence_key_search_service,
 )
@@ -51,18 +52,18 @@ def application_sentence_matches(
 
 
 @router.get(
-    "/documents/{tspId}/sentences/application-matches",
+    "/documents/{tspId}/sentences/document-matches",
     tags=["Sentence matches"],
 )
-def tsp_sentence_matches(
+def document_sentence_matches(
     tspId: str,
     analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
     threshold: Annotated[int, THRESHOLD_QUERY] = DEFAULT_MATCH_THRESHOLD,
 ):
-    """Return all applications matching sentences from one TSP document."""
+    """Return all TSP documents matching sentences from one source document."""
 
     try:
-        return application_match_service.compare_tsp(
+        return document_match_service.compare(
             tspId,
             analysisGroup,
             threshold,

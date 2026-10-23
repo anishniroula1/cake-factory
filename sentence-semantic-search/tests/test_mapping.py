@@ -531,3 +531,41 @@ def test_application_comparison_details_filter_selected_applications():
     for eligibility_filter in catalog_eligibility_filters():
         assert eligibility_filter not in filters
     assert {"term": {"applicationId": "A1"}} in body["query"]["bool"]["must_not"]
+
+
+def test_document_comparison_counts_by_tsp_and_excludes_only_source_tsp():
+    client = ApplicationComparisonClient()
+    store = OpenSearchStore(config, client)
+
+    result = store.occurrence_counts_by_tsp_and_key(
+        ["key-1", "key-2"],
+        "101",
+        "Asylee",
+    )
+
+    assert result == []
+    body = client.requests[0]["body"]
+    assert {"term": {"tspId": "101"}} in body["query"]["bool"]["must_not"]
+    assert body["aggs"]["matches"]["composite"]["sources"] == [
+        {"tspId": {"terms": {"field": "tspId"}}},
+        {"applicationId": {"terms": {"field": "applicationId"}}},
+        {"sentenceKey": {"terms": {"field": "sentenceKey"}}},
+    ]
+
+
+def test_document_comparison_details_filter_selected_tsp_ids():
+    client = ApplicationComparisonClient()
+    store = OpenSearchStore(config, client)
+
+    result = store.matching_occurrences_for_documents(
+        ["key-1"],
+        ["201", "202"],
+        "101",
+        "Asylee",
+    )
+
+    assert result == []
+    body = client.requests[0]["body"]
+    filters = body["query"]["bool"]["filter"]
+    assert {"terms": {"tspId": ["201", "202"]}} in filters
+    assert {"term": {"tspId": "101"}} in body["query"]["bool"]["must_not"]
