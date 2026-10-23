@@ -131,7 +131,13 @@ def test_application_match_count_is_every_source_target_pair():
     assert result["applications"][0]["applicationId"] == "A456"
     assert result["applications"][0]["matchCount"] == 3
     assert result["applications"][0]["similarMatchCount"] == 3
-    assert len(result["applications"][0]["matches"]) == 3
+    source_match = result["applications"][0]["matches"][0]
+    assert source_match["targetCount"] == 3
+    assert [target["target"]["globalId"] for target in source_match["targets"]] == [
+        1,
+        6,
+        40,
+    ]
     assert result["applications"][1]["applicationId"] == "A789"
     assert result["applications"][1]["exactMatchCount"] == 1
 
@@ -166,15 +172,23 @@ def test_numeric_occurrence_application_id_joins_to_aggregation_count():
     source_key = "source-key"
     target_key = "target-key"
     source = _sentence("A1234", 20, source_key, "Source sentence")
-    target = _sentence(456, 1, target_key, "Target sentence")
+    targets = [
+        _sentence(456, 1, target_key, "Similar target sentence"),
+        _sentence(456, 2, source_key, "Exact target sentence"),
+    ]
     count_rows = [
         {
             "applicationId": "456",
             "sentenceKey": target_key,
             "occurrenceCount": 1,
-        }
+        },
+        {
+            "applicationId": "456",
+            "sentenceKey": source_key,
+            "occurrenceCount": 1,
+        },
     ]
-    store = FakeApplicationMatchStore([source], count_rows, [target])
+    store = FakeApplicationMatchStore([source], count_rows, targets)
     summary = FakeSentenceSummaryService(
         {source_key: {source_key: 100.0, target_key: 94.0}}
     )
@@ -185,8 +199,15 @@ def test_numeric_occurrence_application_id_joins_to_aggregation_count():
         90,
     )
 
-    assert result["applications"][0]["matchCount"] == 1
-    assert len(result["applications"][0]["matches"]) == 1
+    application = result["applications"][0]
+    assert application["matchCount"] == 2
+    assert [
+        target["matchPercentage"]
+        for target in application["matches"][0]["targets"]
+    ] == [
+        100.0,
+        94.0,
+    ]
 
 
 def test_application_match_returns_every_ranked_application():

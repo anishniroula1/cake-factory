@@ -109,6 +109,34 @@ excludes that application from the results. Both endpoints still use internal
 OpenSearch pages, but they continue reading until every matching application
 and sentence pair has been returned.
 
+Applications are ranked by total matching sentence-pair count. Inside every
+application, `matches` contains one item per source sentence. Each source item
+has a `targets` list ordered by `matchPercentage` from highest to lowest, then
+by target global ID. Source groups with the strongest target are shown first.
+The sentence-key search endpoints and CSV exports use the same
+highest-percentage-first ordering rule.
+
+```json
+{
+  "source": {"globalId": 20, "sentenceContent": "Source sentence"},
+  "targetCount": 2,
+  "exactTargetCount": 1,
+  "similarTargetCount": 1,
+  "targets": [
+    {
+      "target": {"globalId": 50, "sentenceContent": "Exact sentence"},
+      "matchType": "exact",
+      "matchPercentage": 100.0
+    },
+    {
+      "target": {"globalId": 60, "sentenceContent": "Similar sentence"},
+      "matchType": "similar",
+      "matchPercentage": 92.0
+    }
+  ]
+}
+```
+
 ## Download every match as CSV
 
 These endpoints generate complete CSV downloads without public pagination:

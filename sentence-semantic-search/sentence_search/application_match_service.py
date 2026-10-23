@@ -11,14 +11,20 @@ def application_match_sort_key(item: tuple) -> tuple:
     return (-int(counts["matchCount"]), str(application_id))
 
 
-def sentence_pair_sort_key(match: dict) -> tuple:
-    """Put the strongest pairs first and keep equal scores stable."""
+def target_match_sort_key(match: dict) -> tuple:
+    """Put the strongest targets first and keep equal scores stable."""
 
     return (
         -float(match["matchPercentage"]),
-        int(match["source"]["globalId"]),
         int(match["target"]["globalId"]),
     )
+
+
+def source_match_sort_key(match: dict) -> tuple:
+    """Put source groups with the strongest target first."""
+
+    strongest_percentage = float(match["targets"][0]["matchPercentage"])
+    return (-strongest_percentage, int(match["source"]["globalId"]))
 
 
 class ApplicationMatchService:
@@ -139,7 +145,7 @@ class ApplicationMatchService:
                 analysis_group,
             )
         )
-        matches_by_application = self._sentence_pairs(
+        matches_by_application = self._group_sentence_matches(
             target_sentences,
             relations_by_target,
             source_sentences_by_key,
@@ -148,7 +154,6 @@ class ApplicationMatchService:
         applications = []
         for target_application_id, counts in ranked_applications:
             matches = matches_by_application.get(target_application_id, [])
-            matches.sort(key=sentence_pair_sort_key)
             applications.append(
                 {
                     "applicationId": target_application_id,
@@ -288,21 +293,24 @@ class ApplicationMatchService:
         }
 
     @staticmethod
-    def _sentence_pairs(
+    def _group_sentence_matches(
         target_sentences: list,
         relations_by_target: dict,
         source_sentences_by_key: dict,
     ) -> dict:
-        """Build every unique source-global-ID to target-global-ID pair."""
+        """Group every unique target match under its source sentence."""
 
-        matches_by_application = {}
+        source_groups_by_application = {}
         seen_pairs_by_application = {}
         for target in target_sentences:
             # Composite aggregation keys are normalized to strings, while
             # occurrence documents can return applicationId as an integer.
             # Use one string key so the counts and detailed pairs join.
             target_application_id = str(target["applicationId"])
-            matches = matches_by_application.setdefault(target_application_id, [])
+            source_groups = source_groups_by_application.setdefault(
+                target_application_id,
+                {},
+            )
             seen_pairs = seen_pairs_by_application.setdefault(
                 target_application_id,
                 set(),
@@ -313,12 +321,34 @@ class ApplicationMatchService:
                     if pair in seen_pairs:
                         continue
                     seen_pairs.add(pair)
-                    matches.append(
+                    source_group = source_groups.setdefault(
+                        int(source["globalId"]),
                         {
                             "source": source,
+                            "targetCount": 0,
+                            "exactTargetCount": 0,
+                            "similarTargetCount": 0,
+                            "targets": [],
+                        },
+                    )
+                    source_group["targets"].append(
+                        {
                             "target": target,
                             "matchType": relation["matchType"],
                             "matchPercentage": relation["matchPercentage"],
                         }
                     )
+                    source_group["targetCount"] += 1
+                    if relation["matchType"] == "exact":
+                        source_group["exactTargetCount"] += 1
+                    else:
+                        source_group["similarTargetCount"] += 1
+
+        matches_by_application = {}
+        for application_id, source_groups in source_groups_by_application.items():
+            matches = list(source_groups.values())
+            for match in matches:
+                match["targets"].sort(key=target_match_sort_key)
+            matches.sort(key=source_match_sort_key)
+            matches_by_application[application_id] = matches
         return matches_by_application
