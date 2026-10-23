@@ -30,6 +30,10 @@ checks those keys in the catalog selected by `analysisGroup`, and joins the
 catalog sentence text and word count into the response. Occurrence queries use
 only fields defined by the occurrence mapping.
 
+New catalog rows do not contain classification flags until Sentence Similarity
+checks them. A missing flag is treated like the initial false value. Once a
+flag is explicitly saved as true, the sentence is excluded from every search.
+
 Matching also stays inside the requested `analysisGroup` and excludes
 occurrences owned by the source application.
 

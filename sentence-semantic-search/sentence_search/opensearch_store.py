@@ -45,13 +45,21 @@ def catalog_eligibility_filters() -> list:
     """Return eligibility rules that exist only in sentence catalogs.
 
     A matchable sentence is not a non-matcher, tracer, or form-language
-    sentence and contains at least five meaningful words.
+    sentence and contains at least five meaningful words. DOC2Vec does not
+    write classification fields on a new catalog row. A missing flag therefore
+    has the same initial meaning as false; only an explicit true is excluded.
     """
 
     return [
-        {"term": {"isNonMatcher": False}},
-        {"term": {"isTracer": False}},
-        {"term": {"isFormLanguage": False}},
+        {
+            "bool": {
+                "must_not": [
+                    {"term": {"isNonMatcher": True}},
+                    {"term": {"isTracer": True}},
+                    {"term": {"isFormLanguage": True}},
+                ]
+            }
+        },
         {"range": {"wordCount": {"gt": 4}}},
     ]
 
@@ -170,7 +178,10 @@ class OpenSearchStore:
                 },
             )
             for hit in response["hits"]["hits"]:
-                source = hit["_source"]
+                source = dict(hit["_source"])
+                source.setdefault("isNonMatcher", False)
+                source.setdefault("isTracer", False)
+                source.setdefault("isFormLanguage", False)
                 records[str(source["sentenceKey"])] = source
         return records
 
@@ -430,12 +441,13 @@ class OpenSearchStore:
     ) -> dict:
         """Return one eligible application-sentence page in global-ID order."""
 
+        canonical_group = self.config.canonical_analysis_group(analysis_group)
         return self._eligible_occurrence_page(
             [
                 {"term": {"applicationId": application_id}},
-                {"term": {"analysisGroup": analysis_group}},
+                {"term": {"analysisGroup": canonical_group}},
             ],
-            analysis_group,
+            canonical_group,
             page_size,
             after_global_id,
             include_total,
@@ -454,12 +466,13 @@ class OpenSearchStore:
         Output: eligible source sentences and the cursor for the next page.
         """
 
+        canonical_group = self.config.canonical_analysis_group(analysis_group)
         return self._eligible_occurrence_page(
             [
                 {"term": {"tspId": tsp_id}},
-                {"term": {"analysisGroup": analysis_group}},
+                {"term": {"analysisGroup": canonical_group}},
             ],
-            analysis_group,
+            canonical_group,
             page_size,
             after_global_id,
             False,
@@ -472,9 +485,10 @@ class OpenSearchStore:
     ) -> bool:
         """Check that the key has an eligible occurrence in the analysis group."""
 
+        canonical_group = self.config.canonical_analysis_group(analysis_group)
         if sentence_key not in self.catalog_records(
             [sentence_key],
-            analysis_group,
+            canonical_group,
         ):
             return False
         response = self.client.count(
@@ -484,7 +498,7 @@ class OpenSearchStore:
                     "bool": {
                         "filter": [
                             {"term": {"sentenceKey": sentence_key}},
-                            {"term": {"analysisGroup": analysis_group}},
+                            {"term": {"analysisGroup": canonical_group}},
                         ]
                     }
                 }
@@ -500,6 +514,7 @@ class OpenSearchStore:
     ) -> dict:
         """Count eligible outside-application occurrences for each key."""
 
+        canonical_group = self.config.canonical_analysis_group(analysis_group)
         counts = {}
         unique_keys = sorted(set(sentence_keys))
         for offset in range(0, len(unique_keys), TERMS_BATCH_SIZE):
@@ -513,7 +528,7 @@ class OpenSearchStore:
                         "bool": {
                             "filter": [
                                 {"terms": {"sentenceKey": batch}},
-                                {"term": {"analysisGroup": analysis_group}},
+                                {"term": {"analysisGroup": canonical_group}},
                             ],
                             "must_not": [
                                 {"term": {"applicationId": excluded_application_id}}
@@ -546,6 +561,7 @@ class OpenSearchStore:
         Output: application/key/count rows for every application except A1.
         """
 
+        canonical_group = self.config.canonical_analysis_group(analysis_group)
         unique_keys = sorted(set(sentence_keys))
         if not unique_keys:
             return []
@@ -582,7 +598,7 @@ class OpenSearchStore:
                                         "minimum_should_match": 1,
                                     }
                                 },
-                                {"term": {"analysisGroup": analysis_group}},
+                                {"term": {"analysisGroup": canonical_group}},
                             ],
                             "must_not": [
                                 {"term": {"applicationId": excluded_application_id}}
@@ -618,6 +634,7 @@ class OpenSearchStore:
     ) -> list:
         """Return eligible occurrences for selected matching applications."""
 
+        canonical_group = self.config.canonical_analysis_group(analysis_group)
         unique_keys = sorted(set(sentence_keys))
         unique_application_ids = sorted(set(application_ids))
         if not unique_keys or not unique_application_ids:
@@ -646,7 +663,7 @@ class OpenSearchStore:
                                 }
                             },
                             {"terms": {"applicationId": unique_application_ids}},
-                            {"term": {"analysisGroup": analysis_group}},
+                            {"term": {"analysisGroup": canonical_group}},
                         ],
                         "must_not": [
                             {"term": {"applicationId": excluded_application_id}}
@@ -664,7 +681,7 @@ class OpenSearchStore:
             matches.extend(
                 self._hydrate_occurrences(
                     [hit["_source"] for hit in hits],
-                    analysis_group,
+                    canonical_group,
                 )
             )
             if len(hits) < MATCH_RESULT_BATCH_SIZE:
@@ -682,6 +699,7 @@ class OpenSearchStore:
     ) -> dict:
         """Return a page found by normal key filters, without vector search."""
 
+        canonical_group = self.config.canonical_analysis_group(analysis_group)
         key_filters = []
         unique_keys = sorted(set(sentence_keys))
         for offset in range(0, len(unique_keys), TERMS_BATCH_SIZE):
@@ -702,7 +720,7 @@ class OpenSearchStore:
                                 "minimum_should_match": 1,
                             }
                         },
-                        {"term": {"analysisGroup": analysis_group}},
+                        {"term": {"analysisGroup": canonical_group}},
                     ],
                     "must_not": [{"term": {"applicationId": excluded_application_id}}],
                 }
@@ -725,7 +743,7 @@ class OpenSearchStore:
         return {
             "matches": self._hydrate_occurrences(
                 [hit["_source"] for hit in page_hits],
-                analysis_group,
+                canonical_group,
             ),
             "nextAfterGlobalId": next_after,
             "totalMatches": total,

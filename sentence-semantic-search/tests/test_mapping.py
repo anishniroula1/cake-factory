@@ -214,14 +214,38 @@ class OccurrenceCatalogJoinClient:
                             "sentenceKey": "eligible-key",
                             "sentenceContent": "This sentence has five useful words",
                             "wordCount": 6,
-                            "isNonMatcher": False,
-                            "isTracer": False,
-                            "isFormLanguage": False,
                         }
                     }
                 ]
             }
         }
+
+
+def test_catalog_eligibility_accepts_missing_flags_and_excludes_true_flags():
+    filters = catalog_eligibility_filters()
+
+    assert filters == [
+        {
+            "bool": {
+                "must_not": [
+                    {"term": {"isNonMatcher": True}},
+                    {"term": {"isTracer": True}},
+                    {"term": {"isFormLanguage": True}},
+                ]
+            }
+        },
+        {"range": {"wordCount": {"gt": 4}}},
+    ]
+
+
+def test_analysis_group_is_normalized_for_occurrence_search():
+    client = EmptySearchClient()
+    store = OpenSearchStore(config, client)
+
+    store.application_occurrence_page("10", "refugee", 100, None, True)
+
+    filters = client.request["body"]["query"]["bool"]["filter"]
+    assert {"term": {"analysisGroup": "Refugee"}} in filters
 
 
 def test_catalog_radial_search_uses_configured_ivf_nprobes():

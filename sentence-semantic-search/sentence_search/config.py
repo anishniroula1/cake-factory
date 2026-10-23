@@ -90,11 +90,20 @@ class Config:
     def catalog_alias_for(self, analysis_group: str) -> str:
         """Select the catalog that belongs to the requested analysis group."""
 
+        canonical_group = self.canonical_analysis_group(analysis_group)
+        if canonical_group == "Asylee":
+            return self.asylee_catalog_alias
+        return self.refugee_catalog_alias
+
+    @staticmethod
+    def canonical_analysis_group(analysis_group: str) -> str:
+        """Return the exact analysis-group value stored in occurrences."""
+
         normalized_group = analysis_group.strip().lower()
         if normalized_group == "asylee":
-            return self.asylee_catalog_alias
+            return "Asylee"
         if normalized_group == "refugee":
-            return self.refugee_catalog_alias
+            return "Refugee"
         raise ValueError("analysisGroup must be Asylee or Refugee")
 
 
