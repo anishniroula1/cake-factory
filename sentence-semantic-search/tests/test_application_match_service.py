@@ -77,7 +77,7 @@ class FakeApplicationMatchStore:
         return [
             sentence
             for sentence in self.target_sentences
-            if sentence["applicationId"] in selected
+            if str(sentence["applicationId"]) in selected
             and sentence["sentenceKey"] in selected_keys
         ]
 
@@ -124,7 +124,7 @@ def test_application_match_count_is_every_source_target_pair():
     )
     service = ApplicationMatchService(store, summary)
 
-    result = service.compare("A1234", "Asylee", 90, None)
+    result = service.compare("A1234", "Asylee", 90)
 
     assert result["totalMatchingApplications"] == 2
     assert result["totalMatchCount"] == 4
@@ -154,7 +154,7 @@ def test_tsp_match_uses_only_sentences_from_the_requested_document():
     )
     service = ApplicationMatchService(store, summary)
 
-    result = service.compare_tsp("T-A1234", "Asylee", 90, None)
+    result = service.compare_tsp("T-A1234", "Asylee", 90)
 
     assert result["tspId"] == "T-A1234"
     assert result["applicationId"] == "A1234"
@@ -162,7 +162,34 @@ def test_tsp_match_uses_only_sentences_from_the_requested_document():
     assert result["applications"][0]["applicationId"] == "A456"
 
 
-def test_application_match_pagination_returns_ten_ranked_applications():
+def test_numeric_occurrence_application_id_joins_to_aggregation_count():
+    source_key = "source-key"
+    target_key = "target-key"
+    source = _sentence("A1234", 20, source_key, "Source sentence")
+    target = _sentence(456, 1, target_key, "Target sentence")
+    count_rows = [
+        {
+            "applicationId": "456",
+            "sentenceKey": target_key,
+            "occurrenceCount": 1,
+        }
+    ]
+    store = FakeApplicationMatchStore([source], count_rows, [target])
+    summary = FakeSentenceSummaryService(
+        {source_key: {source_key: 100.0, target_key: 94.0}}
+    )
+
+    result = ApplicationMatchService(store, summary).compare(
+        "A1234",
+        "Asylee",
+        90,
+    )
+
+    assert result["applications"][0]["matchCount"] == 1
+    assert len(result["applications"][0]["matches"]) == 1
+
+
+def test_application_match_returns_every_ranked_application():
     source_key = "source-key"
     target_key = "target-key"
     source = _sentence("A1234", 20, source_key, "Source sentence")
@@ -196,10 +223,9 @@ def test_application_match_pagination_returns_ten_ranked_applications():
     )
     service = ApplicationMatchService(store, summary)
 
-    first = service.compare("A1234", "Asylee", 90, None)
-    second = service.compare("A1234", "Asylee", 90, first["nextToken"])
+    result = service.compare("A1234", "Asylee", 90)
 
-    assert [item["applicationId"] for item in first["applications"]] == [
+    assert [item["applicationId"] for item in result["applications"]] == [
         "A01",
         "A02",
         "A03",
@@ -210,9 +236,8 @@ def test_application_match_pagination_returns_ten_ranked_applications():
         "A08",
         "A09",
         "A10",
+        "A11",
     ]
-    assert first["pagination"]["pageSize"] == 10
-    assert first["pagination"]["hasNextPage"] is True
-    assert [item["applicationId"] for item in second["applications"]] == ["A11"]
-    assert second["pagination"]["page"] == 2
-    assert second["nextToken"] is None
+    assert result["returnedApplications"] == 11
+    assert "pagination" not in result
+    assert "nextToken" not in result

@@ -35,19 +35,14 @@ def application_sentence_matches(
     applicationId: str,
     analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
     threshold: Annotated[int, THRESHOLD_QUERY] = DEFAULT_MATCH_THRESHOLD,
-    nextToken: Annotated[
-        str | None,
-        Query(description="Application-page token returned by the previous page."),
-    ] = None,
 ):
-    """Rank other applications by every matching sentence pair."""
+    """Return all other applications ranked by matching sentence pairs."""
 
     try:
         return application_match_service.compare(
             applicationId,
             analysisGroup,
             threshold,
-            nextToken,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -63,19 +58,14 @@ def tsp_sentence_matches(
     tspId: str,
     analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
     threshold: Annotated[int, THRESHOLD_QUERY] = DEFAULT_MATCH_THRESHOLD,
-    nextToken: Annotated[
-        str | None,
-        Query(description="Application-page token returned by the previous page."),
-    ] = None,
 ):
-    """Rank other applications using eligible sentences from one TSP document."""
+    """Return all applications matching sentences from one TSP document."""
 
     try:
         return application_match_service.compare_tsp(
             tspId,
             analysisGroup,
             threshold,
-            nextToken,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

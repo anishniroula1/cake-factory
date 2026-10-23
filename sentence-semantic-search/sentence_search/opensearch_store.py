@@ -646,47 +646,56 @@ class OpenSearchStore:
             key_filters.append({"terms": {"sentenceKey": batch}})
 
         matches = []
-        after_global_id = None
-        while True:
-            body = {
-                "size": MATCH_RESULT_BATCH_SIZE,
-                "track_total_hits": False,
-                "_source": OCCURRENCE_SOURCE_FIELDS,
-                "sort": [{"globalId": "asc"}],
-                "query": {
-                    "bool": {
-                        "filter": [
-                            {
-                                "bool": {
-                                    "should": key_filters,
-                                    "minimum_should_match": 1,
+        for offset in range(0, len(unique_application_ids), TERMS_BATCH_SIZE):
+            application_batch = unique_application_ids[
+                offset : offset + TERMS_BATCH_SIZE
+            ]
+            after_global_id = None
+            while True:
+                body = {
+                    "size": MATCH_RESULT_BATCH_SIZE,
+                    "track_total_hits": False,
+                    "_source": OCCURRENCE_SOURCE_FIELDS,
+                    "sort": [{"globalId": "asc"}],
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {
+                                    "bool": {
+                                        "should": key_filters,
+                                        "minimum_should_match": 1,
+                                    }
+                                },
+                                {"terms": {"applicationId": application_batch}},
+                                {"term": {"analysisGroup": canonical_group}},
+                            ],
+                            "must_not": [
+                                {
+                                    "term": {
+                                        "applicationId": excluded_application_id
+                                    }
                                 }
-                            },
-                            {"terms": {"applicationId": unique_application_ids}},
-                            {"term": {"analysisGroup": canonical_group}},
-                        ],
-                        "must_not": [
-                            {"term": {"applicationId": excluded_application_id}}
-                        ],
-                    }
-                },
-            }
-            if after_global_id is not None:
-                body["search_after"] = [after_global_id]
-            response = self.client.search(
-                index=self.config.occurrence_alias,
-                body=body,
-            )
-            hits = response["hits"]["hits"]
-            matches.extend(
-                self._hydrate_occurrences(
-                    [hit["_source"] for hit in hits],
-                    canonical_group,
+                            ],
+                        }
+                    },
+                }
+                if after_global_id is not None:
+                    body["search_after"] = [after_global_id]
+                response = self.client.search(
+                    index=self.config.occurrence_alias,
+                    body=body,
                 )
-            )
-            if len(hits) < MATCH_RESULT_BATCH_SIZE:
-                return matches
-            after_global_id = int(hits[-1]["sort"][0])
+                hits = response["hits"]["hits"]
+                matches.extend(
+                    self._hydrate_occurrences(
+                        [hit["_source"] for hit in hits],
+                        canonical_group,
+                    )
+                )
+                if len(hits) < MATCH_RESULT_BATCH_SIZE:
+                    break
+                after_global_id = int(hits[-1]["sort"][0])
+        return matches
 
     def matching_occurrence_page(
         self,

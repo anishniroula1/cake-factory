@@ -83,14 +83,14 @@ GET /applications/{applicationId}/sentences/semantic-summary-all
     &threshold=90
 ```
 
-The application comparison endpoint ranks other applications by their matching
-sentence pairs. It returns ten target applications per page:
+The application comparison endpoint ranks every other application by its
+matching sentence pairs. It returns the complete result without a public page
+token:
 
 ```text
 GET /applications/{applicationId}/sentences/application-matches
     ?analysisGroup=Asylee
     &threshold=90
-    &nextToken=<token>
 ```
 
 ## Search by TSP ID
@@ -102,11 +102,12 @@ other applications that match them:
 GET /documents/{tspId}/sentences/application-matches
     ?analysisGroup=Asylee
     &threshold=90
-    &nextToken=<token>
 ```
 
 The service reads the source application from those occurrence records and
-excludes that application from the results.
+excludes that application from the results. Both endpoints still use internal
+OpenSearch pages, but they continue reading until every matching application
+and sentence pair has been returned.
 
 ## Download every match as CSV
 

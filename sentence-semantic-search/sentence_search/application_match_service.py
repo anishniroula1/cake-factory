@@ -1,10 +1,6 @@
-from math import ceil
-
 from sentence_search.opensearch_store import OpenSearchStore
-from sentence_search.search_utils import decode_page_token, encode_page_token
 from sentence_search.sentence_summary_service import SentenceSummaryService
 
-APPLICATION_PAGE_SIZE = 10  # Other applications returned on one public page.
 SOURCE_PAGE_SIZE = 1_000  # Source application sentences read per internal page.
 
 
@@ -41,12 +37,11 @@ class ApplicationMatchService:
         application_id: str,
         analysis_group: str,
         threshold: int,
-        next_token: str | None,
     ) -> dict:
         """Rank other applications by every matching sentence pair.
 
         Input: application A1, analysis group Asylee, and threshold 90.
-        Output: ten applications and all source-to-target pairs for those apps.
+        Output: all matching applications and their source-to-target pairs.
         """
 
         if not 1 <= threshold <= 100:
@@ -60,9 +55,7 @@ class ApplicationMatchService:
             application_id,
             analysis_group,
             threshold,
-            next_token,
             source_sentences,
-            "applicationSentenceMatches",
         )
 
     def compare_tsp(
@@ -70,12 +63,11 @@ class ApplicationMatchService:
         tsp_id: str,
         analysis_group: str,
         threshold: int,
-        next_token: str | None,
     ) -> dict:
         """Rank applications matching the eligible sentences in one document.
 
         Input: TSP document T1, analysis group Asylee, and threshold 90.
-        Output: ten applications and all pairs originating from document T1.
+        Output: all applications and pairs originating from document T1.
         """
 
         if not 1 <= threshold <= 100:
@@ -96,10 +88,7 @@ class ApplicationMatchService:
             application_id,
             analysis_group,
             threshold,
-            next_token,
             source_sentences,
-            "tspSentenceMatches",
-            tsp_id,
         )
         return {"tspId": tsp_id, **result}
 
@@ -108,25 +97,9 @@ class ApplicationMatchService:
         application_id: str,
         analysis_group: str,
         threshold: int,
-        next_token: str | None,
         source_sentences: list,
-        token_type: str,
-        tsp_id: str | None = None,
     ) -> dict:
-        """Build one ranked application page from eligible source sentences."""
-
-        offset = 0
-        if next_token:
-            state = decode_page_token(next_token)
-            self._validate_token(
-                state,
-                application_id,
-                analysis_group,
-                threshold,
-                token_type,
-                tsp_id,
-            )
-            offset = int(state["applicationOffset"])
+        """Build the complete ranked result from eligible source sentences."""
 
         source_sentences_by_key = self._sentences_by_key(source_sentences)
         source_keys = sorted(source_sentences_by_key)
@@ -153,8 +126,7 @@ class ApplicationMatchService:
         )
 
         total_applications = len(ranked_applications)
-        page_items = ranked_applications[offset : offset + APPLICATION_PAGE_SIZE]
-        selected_application_ids = [item[0] for item in page_items]
+        selected_application_ids = [item[0] for item in ranked_applications]
         selected_key_set = self._selected_target_keys(
             count_rows,
             selected_application_ids,
@@ -174,7 +146,7 @@ class ApplicationMatchService:
         )
 
         applications = []
-        for target_application_id, counts in page_items:
+        for target_application_id, counts in ranked_applications:
             matches = matches_by_application.get(target_application_id, [])
             matches.sort(key=sentence_pair_sort_key)
             applications.append(
@@ -185,24 +157,6 @@ class ApplicationMatchService:
                 }
             )
 
-        returned_after = offset + len(applications)
-        new_token = None
-        if returned_after < total_applications:
-            token_state = {
-                "type": token_type,
-                "applicationId": application_id,
-                "analysisGroup": analysis_group,
-                "threshold": threshold,
-                "pageSize": APPLICATION_PAGE_SIZE,
-                "applicationOffset": returned_after,
-            }
-            if tsp_id is not None:
-                token_state["tspId"] = tsp_id
-            new_token = encode_page_token(
-                token_state
-            )
-
-        total_pages = ceil(total_applications / APPLICATION_PAGE_SIZE)
         return {
             "applicationId": application_id,
             "analysisGroup": analysis_group,
@@ -213,14 +167,6 @@ class ApplicationMatchService:
                 counts["matchCount"] for counts in counts_by_application.values()
             ),
             "returnedApplications": len(applications),
-            "pagination": {
-                "page": (offset // APPLICATION_PAGE_SIZE) + 1,
-                "pageSize": APPLICATION_PAGE_SIZE,
-                "totalPages": total_pages,
-                "hasPreviousPage": offset > 0,
-                "hasNextPage": new_token is not None,
-            },
-            "nextToken": new_token,
             "applications": applications,
             "neuralSearchUsed": False,
         }
@@ -332,7 +278,7 @@ class ApplicationMatchService:
         count_rows: list,
         application_ids: list,
     ) -> set:
-        """Return target keys used by the selected application page."""
+        """Return target keys used by the matching applications."""
 
         selected = set(application_ids)
         return {
@@ -352,7 +298,10 @@ class ApplicationMatchService:
         matches_by_application = {}
         seen_pairs_by_application = {}
         for target in target_sentences:
-            target_application_id = target["applicationId"]
+            # Composite aggregation keys are normalized to strings, while
+            # occurrence documents can return applicationId as an integer.
+            # Use one string key so the counts and detailed pairs join.
+            target_application_id = str(target["applicationId"])
             matches = matches_by_application.setdefault(target_application_id, [])
             seen_pairs = seen_pairs_by_application.setdefault(
                 target_application_id,
@@ -373,34 +322,3 @@ class ApplicationMatchService:
                         }
                     )
         return matches_by_application
-
-    @staticmethod
-    def _validate_token(
-        state: dict,
-        application_id: str,
-        analysis_group: str,
-        threshold: int,
-        token_type: str = "applicationSentenceMatches",
-        tsp_id: str | None = None,
-    ):
-        """Stop a token from being reused for another comparison."""
-
-        expected = {
-            "type": token_type,
-            "applicationId": application_id,
-            "analysisGroup": analysis_group,
-            "threshold": threshold,
-            "pageSize": APPLICATION_PAGE_SIZE,
-        }
-        if tsp_id is not None:
-            expected["tspId"] = tsp_id
-        for name, value in expected.items():
-            if state.get(name) != value:
-                raise ValueError("nextToken does not belong to this request")
-        offset = state.get("applicationOffset")
-        if (
-            type(offset) is not int
-            or offset < 0
-            or offset % APPLICATION_PAGE_SIZE != 0
-        ):
-            raise ValueError("Invalid nextToken")

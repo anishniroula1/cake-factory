@@ -74,7 +74,7 @@ def test_paginated_sentence_search_has_page_inputs():
     }
 
 
-def test_application_matches_has_fixed_ten_application_pages():
+def test_application_matches_has_no_public_pagination():
     operation = app.openapi()["paths"][
         "/applications/{applicationId}/sentences/application-matches"
     ]["get"]
@@ -84,11 +84,10 @@ def test_application_matches_has_fixed_ten_application_pages():
         "applicationId",
         "analysisGroup",
         "threshold",
-        "nextToken",
     }
 
 
-def test_tsp_matches_has_fixed_ten_application_pages():
+def test_tsp_matches_has_no_public_pagination():
     operation = app.openapi()["paths"][
         "/documents/{tspId}/sentences/application-matches"
     ]["get"]
@@ -98,7 +97,6 @@ def test_tsp_matches_has_fixed_ten_application_pages():
         "tspId",
         "analysisGroup",
         "threshold",
-        "nextToken",
     }
 
 
