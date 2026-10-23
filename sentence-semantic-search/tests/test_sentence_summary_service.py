@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from sentence_search.opensearch_store import sentence_eligibility_filters
+from sentence_search.opensearch_store import catalog_eligibility_filters
 from sentence_search.sentence_summary_service import SentenceSummaryService
 
 
@@ -65,7 +65,7 @@ class FakeOpenSearchStore:
         responses = []
         for body in bodies:
             bool_query = body["query"]["bool"]
-            assert bool_query["filter"] == sentence_eligibility_filters()
+            assert bool_query["filter"] == catalog_eligibility_filters()
             source_key = bool_query["should"][0]["term"]["sentenceKey"]
             minimum_score = bool_query["should"][1]["knn"][
                 "sentenceContentVector"

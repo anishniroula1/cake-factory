@@ -8,7 +8,7 @@ import pytest
 from sentence_search.config import config
 from sentence_search.opensearch_store import (
     OpenSearchStore,
-    sentence_eligibility_filters,
+    catalog_eligibility_filters,
 )
 
 
@@ -96,10 +96,30 @@ class CatalogPageClient:
 
 class EligibleSentenceClient:
     def __init__(self):
-        self.request = None
+        self.catalog_request = None
+        self.count_request = None
+
+    def search(self, **request):
+        self.catalog_request = request
+        return {
+            "hits": {
+                "hits": [
+                    {
+                        "_source": {
+                            "sentenceKey": "key-1",
+                            "sentenceContent": "A long eligible sentence here",
+                            "wordCount": 5,
+                            "isNonMatcher": False,
+                            "isTracer": False,
+                            "isFormLanguage": False,
+                        }
+                    }
+                ]
+            }
+        }
 
     def count(self, **request):
-        self.request = request
+        self.count_request = request
         return {"count": 1}
 
 
@@ -153,6 +173,57 @@ class CatalogVectorsWithoutDocumentIdClient:
         }
 
 
+class OccurrenceCatalogJoinClient:
+    def __init__(self):
+        self.requests = []
+
+    def search(self, **request):
+        self.requests.append(request)
+        if request["index"] == config.occurrence_alias:
+            return {
+                "hits": {
+                    "hits": [
+                        {
+                            "_source": {
+                                "globalId": 1,
+                                "applicationId": 10,
+                                "tspId": 100,
+                                "sentenceKey": "eligible-key",
+                                "analysisGroup": "Asylee",
+                            },
+                            "sort": [1],
+                        },
+                        {
+                            "_source": {
+                                "globalId": 2,
+                                "applicationId": 10,
+                                "tspId": 100,
+                                "sentenceKey": "short-key",
+                                "analysisGroup": "Asylee",
+                            },
+                            "sort": [2],
+                        },
+                    ]
+                }
+            }
+        return {
+            "hits": {
+                "hits": [
+                    {
+                        "_source": {
+                            "sentenceKey": "eligible-key",
+                            "sentenceContent": "This sentence has five useful words",
+                            "wordCount": 6,
+                            "isNonMatcher": False,
+                            "isTracer": False,
+                            "isFormLanguage": False,
+                        }
+                    }
+                ]
+            }
+        }
+
+
 def test_catalog_radial_search_uses_configured_ivf_nprobes():
     client = CatalogMatchesClient()
     store = OpenSearchStore(config, client)
@@ -169,7 +240,7 @@ def test_catalog_radial_search_uses_configured_ivf_nprobes():
     assert matches == []
     assert client.request["body"]["query"]["bool"][
         "filter"
-    ] == sentence_eligibility_filters()
+    ] == catalog_eligibility_filters()
     assert vector_query["min_score"] == pytest.approx(0.95)
     assert vector_query["method_parameters"] == {"nprobes": 64}
 
@@ -227,7 +298,7 @@ def test_catalog_page_returns_unique_keys_and_composite_cursor():
     assert result["nextAfterKey"] == {"sentenceKey": "key-2"}
 
 
-def test_source_sentence_eligibility_uses_all_matching_filters():
+def test_source_sentence_eligibility_checks_catalog_then_occurrence():
     client = EligibleSentenceClient()
     store = OpenSearchStore(config, client)
 
@@ -237,10 +308,14 @@ def test_source_sentence_eligibility_uses_all_matching_filters():
     )
 
     assert exists is True
-    assert client.request["body"]["query"]["bool"]["filter"] == [
+    assert client.catalog_request["index"] == config.asylee_catalog_alias
+    assert client.catalog_request["body"]["query"]["bool"]["filter"] == [
+        {"ids": {"values": ["key-1"]}},
+        *catalog_eligibility_filters(),
+    ]
+    assert client.count_request["body"]["query"]["bool"]["filter"] == [
         {"term": {"sentenceKey": "key-1"}},
         {"term": {"analysisGroup": "Asylee"}},
-        *sentence_eligibility_filters(),
     ]
 
 
@@ -287,7 +362,7 @@ def test_catalog_vectors_use_sentence_key_when_search_hit_has_no_id():
 
 
 
-def test_application_page_excludes_tracer_and_form_language():
+def test_application_page_queries_only_fields_in_the_occurrence_mapping():
     client = EmptySearchClient()
     store = OpenSearchStore(config, client)
 
@@ -303,11 +378,41 @@ def test_application_page_excludes_tracer_and_form_language():
     assert result["sentences"] == []
     assert {"term": {"applicationId": "A1"}} in filters
     assert {"term": {"analysisGroup": "Asylee"}} in filters
-    for eligibility_filter in sentence_eligibility_filters():
-        assert eligibility_filter in filters
+    for eligibility_filter in catalog_eligibility_filters():
+        assert eligibility_filter not in filters
 
 
-def test_tsp_page_uses_every_sentence_eligibility_filter():
+def test_application_page_filters_and_hydrates_from_the_asylee_catalog():
+    client = OccurrenceCatalogJoinClient()
+    store = OpenSearchStore(config, client)
+
+    result = store.application_occurrence_page(
+        "10",
+        "Asylee",
+        100,
+        None,
+        True,
+    )
+
+    assert result["totalSentences"] == 1
+    assert result["sentences"] == [
+        {
+            "globalId": 1,
+            "applicationId": 10,
+            "tspId": 100,
+            "sentenceKey": "eligible-key",
+            "analysisGroup": "Asylee",
+            "sentenceContent": "This sentence has five useful words",
+            "wordCount": 6,
+            "isNonMatcher": False,
+            "isTracer": False,
+            "isFormLanguage": False,
+        }
+    ]
+    assert client.requests[1]["index"] == config.asylee_catalog_alias
+
+
+def test_tsp_page_queries_only_fields_in_the_occurrence_mapping():
     client = EmptySearchClient()
     store = OpenSearchStore(config, client)
 
@@ -317,8 +422,8 @@ def test_tsp_page_uses_every_sentence_eligibility_filter():
     assert result["sentences"] == []
     assert {"term": {"tspId": "TSP-1"}} in filters
     assert {"term": {"analysisGroup": "Refugee"}} in filters
-    for eligibility_filter in sentence_eligibility_filters():
-        assert eligibility_filter in filters
+    for eligibility_filter in catalog_eligibility_filters():
+        assert eligibility_filter not in filters
 
 
 def test_sentence_key_search_uses_terms_and_never_knn():
@@ -355,8 +460,8 @@ def test_application_comparison_counts_only_eligible_other_applications():
     body = client.requests[0]["body"]
     filters = body["query"]["bool"]["filter"]
     assert {"term": {"analysisGroup": "Asylee"}} in filters
-    for eligibility_filter in sentence_eligibility_filters():
-        assert eligibility_filter in filters
+    for eligibility_filter in catalog_eligibility_filters():
+        assert eligibility_filter not in filters
     assert {"term": {"applicationId": "A1"}} in body["query"]["bool"]["must_not"]
     sources = body["aggs"]["matches"]["composite"]["sources"]
     assert sources == [
@@ -381,6 +486,6 @@ def test_application_comparison_details_filter_selected_applications():
     filters = body["query"]["bool"]["filter"]
     assert {"terms": {"applicationId": ["A2", "A3"]}} in filters
     assert {"term": {"analysisGroup": "Asylee"}} in filters
-    for eligibility_filter in sentence_eligibility_filters():
-        assert eligibility_filter in filters
+    for eligibility_filter in catalog_eligibility_filters():
+        assert eligibility_filter not in filters
     assert {"term": {"applicationId": "A1"}} in body["query"]["bool"]["must_not"]

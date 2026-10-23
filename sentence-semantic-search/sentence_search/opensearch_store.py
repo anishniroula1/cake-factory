@@ -19,10 +19,30 @@ TERMS_BATCH_SIZE = 10_000  # Sentence keys sent in one terms filter.
 VECTOR_BATCH_SIZE = 1_000  # Catalog vectors read in one OpenSearch request.
 MATCH_RESULT_BATCH_SIZE = 5_000  # Occurrences read per internal search page.
 APPLICATION_BUCKET_PAGE_SIZE = 1_000  # Application/key count buckets per page.
+OCCURRENCE_SCAN_PAGE_SIZE = 1_000  # Occurrences checked per catalog join.
+OCCURRENCE_SOURCE_FIELDS = [
+    "applicationId",
+    "tspId",
+    "sectionName",
+    "globalId",
+    "sentIdLocal",
+    "sentenceKey",
+    "sourceType",
+    "analysisGroup",
+    "isCurrent",
+]
+CATALOG_SOURCE_FIELDS = [
+    "sentenceKey",
+    "sentenceContent",
+    "wordCount",
+    "isNonMatcher",
+    "isTracer",
+    "isFormLanguage",
+]
 
 
-def sentence_eligibility_filters() -> list:
-    """Return the rules shared by every sentence matching query.
+def catalog_eligibility_filters() -> list:
+    """Return eligibility rules that exist only in sentence catalogs.
 
     A matchable sentence is not a non-matcher, tracer, or form-language
     sentence and contains at least five meaningful words.
@@ -97,7 +117,14 @@ class OpenSearchStore:
                             "format": "binary",
                         },
                     ],
-                    "query": {"ids": {"values": batch}},
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {"ids": {"values": batch}},
+                                *catalog_eligibility_filters(),
+                            ]
+                        }
+                    },
                 },
             )
             for hit in response["hits"]["hits"]:
@@ -109,6 +136,43 @@ class OpenSearchStore:
                         vector_values[0]
                     )
         return vectors
+
+    def catalog_records(
+        self,
+        sentence_keys: list,
+        analysis_group: str,
+    ) -> dict:
+        """Load eligible catalog metadata keyed by sentence key.
+
+        Occurrence documents do not contain sentence text, word count, or
+        classification flags. This method reads those values from the catalog
+        selected by the analysis group and leaves ineligible keys out.
+        """
+
+        records = {}
+        unique_keys = sorted(set(sentence_keys))
+        for offset in range(0, len(unique_keys), VECTOR_BATCH_SIZE):
+            batch = unique_keys[offset : offset + VECTOR_BATCH_SIZE]
+            response = self.client.search(
+                index=self.config.catalog_alias_for(analysis_group),
+                body={
+                    "size": len(batch),
+                    "track_total_hits": False,
+                    "_source": CATALOG_SOURCE_FIELDS,
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {"ids": {"values": batch}},
+                                *catalog_eligibility_filters(),
+                            ]
+                        }
+                    },
+                },
+            )
+            for hit in response["hits"]["hits"]:
+                source = hit["_source"]
+                records[str(source["sentenceKey"])] = source
+        return records
 
     def _decode_binary_vector(self, encoded_vector: str) -> list:
         """Convert an OpenSearch binary vector into float values."""
@@ -186,7 +250,7 @@ class OpenSearchStore:
                 "track_total_hits": False,
                 "query": {
                     "bool": {
-                        "filter": sentence_eligibility_filters(),
+                        "filter": catalog_eligibility_filters(),
                         "should": [
                             {"term": {"sentenceKey": source_key}},
                             {
@@ -265,6 +329,97 @@ class OpenSearchStore:
         response = self.client.msearch(body=request)
         return response["responses"]
 
+    def _eligible_occurrence_page(
+        self,
+        occurrence_filters: list,
+        analysis_group: str,
+        page_size: int,
+        after_global_id: int | None,
+        include_total: bool,
+    ) -> dict:
+        """Join occurrence locations to eligible catalog metadata in memory.
+
+        OpenSearch cannot join two indexes. Occurrences are therefore read in
+        global-ID order, and each batch of sentence keys is checked against the
+        selected catalog. Only keys returned by the catalog are eligible.
+        """
+
+        collected = []
+        total = 0
+        scan_after = after_global_id
+        exhausted = False
+        while True:
+            body = {
+                "size": OCCURRENCE_SCAN_PAGE_SIZE,
+                "track_total_hits": False,
+                "_source": OCCURRENCE_SOURCE_FIELDS,
+                "sort": [{"globalId": "asc"}],
+                "query": {"bool": {"filter": occurrence_filters}},
+            }
+            if scan_after is not None:
+                body["search_after"] = [scan_after]
+            response = self.client.search(
+                index=self.config.occurrence_alias,
+                body=body,
+            )
+            hits = response["hits"]["hits"]
+            if not hits:
+                exhausted = True
+                break
+
+            catalog_records = self.catalog_records(
+                [hit["_source"]["sentenceKey"] for hit in hits],
+                analysis_group,
+            )
+            eligible = []
+            for hit in hits:
+                occurrence = hit["_source"]
+                catalog = catalog_records.get(str(occurrence["sentenceKey"]))
+                if catalog is not None:
+                    eligible.append({**occurrence, **catalog})
+
+            if include_total:
+                total += len(eligible)
+            remaining = (page_size + 1) - len(collected)
+            if remaining > 0:
+                collected.extend(eligible[:remaining])
+
+            scan_after = int(hits[-1]["sort"][0])
+            exhausted = len(hits) < OCCURRENCE_SCAN_PAGE_SIZE
+            if exhausted:
+                break
+            if not include_total and len(collected) > page_size:
+                break
+
+        page = collected[:page_size]
+        has_next_page = len(collected) > page_size or not exhausted
+        next_after = None
+        if has_next_page and page:
+            next_after = int(page[-1]["globalId"])
+        return {
+            "sentences": page,
+            "nextAfterGlobalId": next_after,
+            "totalSentences": total if include_total else None,
+        }
+
+    def _hydrate_occurrences(
+        self,
+        occurrences: list,
+        analysis_group: str,
+    ) -> list:
+        """Add catalog sentence text and eligibility fields to occurrences."""
+
+        catalog_records = self.catalog_records(
+            [occurrence["sentenceKey"] for occurrence in occurrences],
+            analysis_group,
+        )
+        hydrated = []
+        for occurrence in occurrences:
+            catalog = catalog_records.get(str(occurrence["sentenceKey"]))
+            if catalog is not None:
+                hydrated.append({**occurrence, **catalog})
+        return hydrated
+
     def application_occurrence_page(
         self,
         application_id: str,
@@ -275,54 +430,16 @@ class OpenSearchStore:
     ) -> dict:
         """Return one eligible application-sentence page in global-ID order."""
 
-        body = {
-            "size": page_size + 1,
-            "track_total_hits": include_total,
-            "_source": [
-                "applicationId",
-                "tspId",
-                "sectionName",
-                "globalId",
-                "sentIdLocal",
-                "sentenceContent",
-                "sentenceKey",
-                "sourceType",
-                "analysisGroup",
-                "wordCount",
-                "isNonMatcher",
-                "isTracer",
-                "isFormLanguage",
+        return self._eligible_occurrence_page(
+            [
+                {"term": {"applicationId": application_id}},
+                {"term": {"analysisGroup": analysis_group}},
             ],
-            "sort": [{"globalId": "asc"}],
-            "query": {
-                "bool": {
-                    "filter": [
-                        {"term": {"applicationId": application_id}},
-                        {"term": {"analysisGroup": analysis_group}},
-                        *sentence_eligibility_filters(),
-                    ]
-                }
-            },
-        }
-        if after_global_id is not None:
-            body["search_after"] = [after_global_id]
-        response = self.client.search(
-            index=self.config.occurrence_alias,
-            body=body,
+            analysis_group,
+            page_size,
+            after_global_id,
+            include_total,
         )
-        hits = response["hits"]["hits"]
-        page_hits = hits[:page_size]
-        total = None
-        if include_total:
-            total = int(response["hits"]["total"]["value"])
-        next_after = None
-        if len(hits) > page_size and page_hits:
-            next_after = int(page_hits[-1]["sort"][0])
-        return {
-            "sentences": [hit["_source"] for hit in page_hits],
-            "nextAfterGlobalId": next_after,
-            "totalSentences": total,
-        }
 
     def tsp_occurrence_page(
         self,
@@ -337,47 +454,16 @@ class OpenSearchStore:
         Output: eligible source sentences and the cursor for the next page.
         """
 
-        body = {
-            "size": page_size + 1,
-            "track_total_hits": False,
-            "_source": [
-                "applicationId",
-                "tspId",
-                "sectionName",
-                "globalId",
-                "sentIdLocal",
-                "sentenceContent",
-                "sentenceKey",
-                "sourceType",
-                "analysisGroup",
-                "wordCount",
-                "isNonMatcher",
-                "isTracer",
-                "isFormLanguage",
+        return self._eligible_occurrence_page(
+            [
+                {"term": {"tspId": tsp_id}},
+                {"term": {"analysisGroup": analysis_group}},
             ],
-            "sort": [{"globalId": "asc"}],
-            "query": {
-                "bool": {
-                    "filter": [
-                        {"term": {"tspId": tsp_id}},
-                        {"term": {"analysisGroup": analysis_group}},
-                        *sentence_eligibility_filters(),
-                    ]
-                }
-            },
-        }
-        if after_global_id is not None:
-            body["search_after"] = [after_global_id]
-        response = self.client.search(index=self.config.occurrence_alias, body=body)
-        hits = response["hits"]["hits"]
-        page_hits = hits[:page_size]
-        next_after = None
-        if len(hits) > page_size and page_hits:
-            next_after = int(page_hits[-1]["sort"][0])
-        return {
-            "sentences": [hit["_source"] for hit in page_hits],
-            "nextAfterGlobalId": next_after,
-        }
+            analysis_group,
+            page_size,
+            after_global_id,
+            False,
+        )
 
     def eligible_sentence_exists(
         self,
@@ -386,6 +472,11 @@ class OpenSearchStore:
     ) -> bool:
         """Check that the key has an eligible occurrence in the analysis group."""
 
+        if sentence_key not in self.catalog_records(
+            [sentence_key],
+            analysis_group,
+        ):
+            return False
         response = self.client.count(
             index=self.config.occurrence_alias,
             body={
@@ -394,7 +485,6 @@ class OpenSearchStore:
                         "filter": [
                             {"term": {"sentenceKey": sentence_key}},
                             {"term": {"analysisGroup": analysis_group}},
-                            *sentence_eligibility_filters(),
                         ]
                     }
                 }
@@ -424,7 +514,6 @@ class OpenSearchStore:
                             "filter": [
                                 {"terms": {"sentenceKey": batch}},
                                 {"term": {"analysisGroup": analysis_group}},
-                                *sentence_eligibility_filters(),
                             ],
                             "must_not": [
                                 {"term": {"applicationId": excluded_application_id}}
@@ -494,7 +583,6 @@ class OpenSearchStore:
                                     }
                                 },
                                 {"term": {"analysisGroup": analysis_group}},
-                                *sentence_eligibility_filters(),
                             ],
                             "must_not": [
                                 {"term": {"applicationId": excluded_application_id}}
@@ -546,21 +634,7 @@ class OpenSearchStore:
             body = {
                 "size": MATCH_RESULT_BATCH_SIZE,
                 "track_total_hits": False,
-                "_source": [
-                    "applicationId",
-                    "tspId",
-                    "sectionName",
-                    "globalId",
-                    "sentIdLocal",
-                    "sentenceContent",
-                    "sentenceKey",
-                    "sourceType",
-                    "analysisGroup",
-                    "wordCount",
-                    "isNonMatcher",
-                    "isTracer",
-                    "isFormLanguage",
-                ],
+                "_source": OCCURRENCE_SOURCE_FIELDS,
                 "sort": [{"globalId": "asc"}],
                 "query": {
                     "bool": {
@@ -573,7 +647,6 @@ class OpenSearchStore:
                             },
                             {"terms": {"applicationId": unique_application_ids}},
                             {"term": {"analysisGroup": analysis_group}},
-                            *sentence_eligibility_filters(),
                         ],
                         "must_not": [
                             {"term": {"applicationId": excluded_application_id}}
@@ -588,7 +661,12 @@ class OpenSearchStore:
                 body=body,
             )
             hits = response["hits"]["hits"]
-            matches.extend(hit["_source"] for hit in hits)
+            matches.extend(
+                self._hydrate_occurrences(
+                    [hit["_source"] for hit in hits],
+                    analysis_group,
+                )
+            )
             if len(hits) < MATCH_RESULT_BATCH_SIZE:
                 return matches
             after_global_id = int(hits[-1]["sort"][0])
@@ -613,21 +691,7 @@ class OpenSearchStore:
         body = {
             "size": page_size + 1,
             "track_total_hits": include_total,
-            "_source": [
-                "applicationId",
-                "tspId",
-                "sectionName",
-                "globalId",
-                "sentIdLocal",
-                "sentenceContent",
-                "sentenceKey",
-                "sourceType",
-                "analysisGroup",
-                "wordCount",
-                "isNonMatcher",
-                "isTracer",
-                "isFormLanguage",
-            ],
+            "_source": OCCURRENCE_SOURCE_FIELDS,
             "sort": [{"globalId": "asc"}],
             "query": {
                 "bool": {
@@ -639,7 +703,6 @@ class OpenSearchStore:
                             }
                         },
                         {"term": {"analysisGroup": analysis_group}},
-                        *sentence_eligibility_filters(),
                     ],
                     "must_not": [{"term": {"applicationId": excluded_application_id}}],
                 }
@@ -660,7 +723,10 @@ class OpenSearchStore:
         if len(hits) > page_size and page_hits:
             next_after = int(page_hits[-1]["sort"][0])
         return {
-            "matches": [hit["_source"] for hit in page_hits],
+            "matches": self._hydrate_occurrences(
+                [hit["_source"] for hit in page_hits],
+                analysis_group,
+            ),
             "nextAfterGlobalId": next_after,
             "totalMatches": total,
         }

@@ -4,12 +4,12 @@ This is a read-only FastAPI service for searching sentence data that already
 exists in Amazon OpenSearch. It never creates, updates, refreshes, or deletes an
 OpenSearch document or index.
 
-The service reads two aliases:
+The service reads three aliases:
 
 - `sentence_occurrences` contains every sentence occurrence and its document
   and application identifiers.
-- `sentence_semantic_catalog` contains one vector for each unique
-  `sentenceKey`.
+- `sentence_semantic_catalog_asylee` contains unique Asylee sentence vectors.
+- `sentence_semantic_catalog_refugee` contains unique Refugee sentence vectors.
 
 The physical indexes, aliases, mappings, Titan embeddings, and IVF model are
 managed outside this application.
@@ -23,6 +23,12 @@ sentence is excluded when:
 - `isTracer` is true.
 - `isFormLanguage` is true.
 - `wordCount` is 4 or lower.
+
+These eligibility fields exist in the catalogs, not in
+`sentence_occurrences`. The service reads occurrence IDs and sentence keys,
+checks those keys in the catalog selected by `analysisGroup`, and joins the
+catalog sentence text and word count into the response. Occurrence queries use
+only fields defined by the occurrence mapping.
 
 Matching also stays inside the requested `analysisGroup` and excludes
 occurrences owned by the source application.

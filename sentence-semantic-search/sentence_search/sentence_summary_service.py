@@ -5,8 +5,8 @@ from sentence_search.opensearch_store import (
     CATALOG_PAGE_SIZE,
     VECTOR_FIELD,
     OpenSearchStore,
+    catalog_eligibility_filters,
     catalog_vector_query,
-    sentence_eligibility_filters,
 )
 from sentence_search.search_utils import (
     cosine_distance,
@@ -308,7 +308,7 @@ class SentenceSummaryService:
             "track_total_hits": False,
             "query": {
                 "bool": {
-                    "filter": sentence_eligibility_filters(),
+                    "filter": catalog_eligibility_filters(),
                     "should": [
                         {"term": {"sentenceKey": source_key}},
                         {
