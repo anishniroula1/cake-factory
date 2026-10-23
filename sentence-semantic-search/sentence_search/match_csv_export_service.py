@@ -1,8 +1,9 @@
 import csv
 import re
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 from sentence_search.opensearch_store import (
     MATCH_RESULT_BATCH_SIZE,
@@ -16,14 +17,14 @@ CSV_FIELDS = [
     "source_tsp_id",
     "source_global_id",
     "source_sent_id_local",
-    "source_sentence",
     "target_application_id",
     "target_tsp_id",
     "target_global_id",
     "target_sent_id_local",
+    "source_sentence",
     "target_sentence",
-    "distance",
     "match_percentage",
+    "distance",
     "opensearch_score",
     "match_type",
     "analysis_group",
@@ -72,10 +73,10 @@ class MatchCsvExportService:
             )
         return self._create_csv(
             source_sentences,
-            application_id,
             analysis_group,
             threshold,
             f"application_id-{self._safe_file_value(application_id)}.csv",
+            excluded_application_id=application_id,
         )
 
     def create_tsp_csv(
@@ -101,21 +102,22 @@ class MatchCsvExportService:
             raise RuntimeError("tspId belongs to more than one application")
         return self._create_csv(
             source_sentences,
-            source_application_ids.pop(),
             analysis_group,
             threshold,
             f"tsp_id-{self._safe_file_value(tsp_id)}.csv",
+            excluded_tsp_id=tsp_id,
         )
 
     def _create_csv(
         self,
         source_sentences: list,
-        source_application_id: str,
         analysis_group: str,
         threshold: int,
         file_name: str,
+        excluded_application_id: str | None = None,
+        excluded_tsp_id: str | None = None,
     ) -> MatchCsvExport:
-        """Search all unique source keys and write every occurrence pair."""
+        """Search every source key and write all matches in score order."""
 
         source_sentences_by_key = self._sentences_by_key(source_sentences)
         match_details = self.sentence_summary.matching_key_details(
@@ -127,24 +129,34 @@ class MatchCsvExportService:
 
         temporary_path = None
         try:
-            with NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                newline="",
-                suffix=".csv",
-                delete=False,
-            ) as temporary_file:
-                temporary_path = Path(temporary_file.name)
-                writer = csv.DictWriter(temporary_file, fieldnames=CSV_FIELDS)
-                writer.writeheader()
-                match_count = self._write_match_rows(
-                    writer,
-                    source_sentences_by_key,
-                    relations_by_target,
-                    source_application_id,
-                    analysis_group,
-                    threshold,
-                )
+            with TemporaryDirectory() as working_directory:
+                database_path = Path(working_directory) / "matches.sqlite3"
+                with sqlite3.connect(database_path) as connection:
+                    self._create_sort_table(connection)
+                    match_count = self._save_match_rows(
+                        connection,
+                        source_sentences_by_key,
+                        relations_by_target,
+                        analysis_group,
+                        threshold,
+                        excluded_application_id,
+                        excluded_tsp_id,
+                    )
+
+                    with NamedTemporaryFile(
+                        mode="w",
+                        encoding="utf-8",
+                        newline="",
+                        suffix=".csv",
+                        delete=False,
+                    ) as temporary_file:
+                        temporary_path = Path(temporary_file.name)
+                        writer = csv.DictWriter(
+                            temporary_file,
+                            fieldnames=CSV_FIELDS,
+                        )
+                        writer.writeheader()
+                        writer.writerows(self._sorted_rows(connection))
         except Exception:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
@@ -152,16 +164,17 @@ class MatchCsvExportService:
 
         return MatchCsvExport(temporary_path, file_name, match_count)
 
-    def _write_match_rows(
+    def _save_match_rows(
         self,
-        writer: csv.DictWriter,
+        connection: sqlite3.Connection,
         source_sentences_by_key: dict,
         relations_by_target: dict,
-        source_application_id: str,
         analysis_group: str,
         threshold: int,
+        excluded_application_id: str | None,
+        excluded_tsp_id: str | None,
     ) -> int:
-        """Page target occurrences and write each source-target pair."""
+        """Read every target page and save rows in a temporary database."""
 
         target_keys = sorted(relations_by_target)
         if not target_keys:
@@ -172,19 +185,21 @@ class MatchCsvExportService:
         while True:
             page = self.opensearch.matching_occurrence_page(
                 target_keys,
-                source_application_id,
+                excluded_application_id,
                 analysis_group,
                 MATCH_RESULT_BATCH_SIZE,
                 after_global_id,
                 False,
+                excluded_tsp_id,
             )
+            rows = []
             for target in page["matches"]:
                 for relation in relations_by_target.get(
                     target["sentenceKey"],
                     [],
                 ):
                     for source in source_sentences_by_key[relation["sourceKey"]]:
-                        writer.writerow(
+                        rows.append(
                             self._csv_row(
                                 source,
                                 target,
@@ -194,10 +209,72 @@ class MatchCsvExportService:
                             )
                         )
                         match_count += 1
+            self._insert_sort_rows(connection, rows)
 
             after_global_id = page["nextAfterGlobalId"]
             if after_global_id is None:
                 return match_count
+
+    @staticmethod
+    def _create_sort_table(connection: sqlite3.Connection) -> None:
+        """Create a temporary table used to sort large CSV exports on disk."""
+
+        connection.execute(
+            """
+            CREATE TABLE match_rows (
+                source_application_id TEXT,
+                source_tsp_id TEXT,
+                source_global_id INTEGER,
+                source_sent_id_local INTEGER,
+                target_application_id TEXT,
+                target_tsp_id TEXT,
+                target_global_id INTEGER,
+                target_sent_id_local INTEGER,
+                source_sentence TEXT,
+                target_sentence TEXT,
+                match_percentage REAL,
+                distance REAL,
+                opensearch_score REAL,
+                match_type TEXT,
+                analysis_group TEXT,
+                requested_threshold INTEGER
+            )
+            """
+        )
+
+    @staticmethod
+    def _insert_sort_rows(
+        connection: sqlite3.Connection,
+        rows: list,
+    ) -> None:
+        """Save one OpenSearch result page to the disk-backed sorter."""
+
+        if not rows:
+            return
+        placeholders = ", ".join("?" for _ in CSV_FIELDS)
+        connection.executemany(
+            f"INSERT INTO match_rows VALUES ({placeholders})",
+            [tuple(row[field] for field in CSV_FIELDS) for row in rows],
+        )
+
+    @staticmethod
+    def _sorted_rows(connection: sqlite3.Connection):
+        """Yield CSV rows with the highest match percentage first."""
+
+        columns = ", ".join(CSV_FIELDS)
+        cursor = connection.execute(
+            f"""
+            SELECT {columns}
+            FROM match_rows
+            ORDER BY
+                match_percentage DESC,
+                distance ASC,
+                source_global_id ASC,
+                target_global_id ASC
+            """
+        )
+        for values in cursor:
+            yield dict(zip(CSV_FIELDS, values, strict=True))
 
     def _application_sentences(
         self,

@@ -127,11 +127,21 @@ The downloaded files are named `tsp_id-<value>.csv` and
 sentence pair found at the requested threshold. Source and target sentences
 must both pass the non-matcher, tracer, form-language, and five-word rules.
 
+The application export excludes every target occurrence owned by the source
+application. The TSP export excludes only the source `tspId`, so another
+document in the same application can still appear when it matches. Both
+exports read every internal catalog and occurrence page.
+
 Each CSV row follows the same flat source-versus-target layout used by the SQL
 comparison report. It contains source and target application ID, TSP ID,
 global ID, local sentence ID, and sentence text. The remaining columns contain
 distance, match percentage, raw OpenSearch score, `exact` or `similar` match
 type, analysis group, and requested threshold.
+
+Rows are ordered by `match_percentage` from highest to lowest. Ties use the
+lowest distance first, followed by source and target global ID. A temporary
+SQLite file performs this sort on disk so a large complete export does not
+need to hold every CSV row in memory.
 
 The service writes the export to a temporary server-side file while processing
 all internal OpenSearch pages. The temporary file is deleted after the download

@@ -470,6 +470,24 @@ def test_sentence_key_search_uses_terms_and_never_knn():
     assert {"term": {"applicationId": "A1"}} in body["query"]["bool"]["must_not"]
 
 
+def test_tsp_csv_target_search_excludes_only_the_source_tsp():
+    client = EmptySearchClient()
+    store = OpenSearchStore(config, client)
+
+    store.matching_occurrence_page(
+        ["key-1"],
+        None,
+        "Asylee",
+        100,
+        None,
+        False,
+        "501",
+    )
+
+    must_not = client.request["body"]["query"]["bool"]["must_not"]
+    assert must_not == [{"term": {"tspId": "501"}}]
+
+
 def test_application_comparison_counts_only_eligible_other_applications():
     client = ApplicationComparisonClient()
     store = OpenSearchStore(config, client)

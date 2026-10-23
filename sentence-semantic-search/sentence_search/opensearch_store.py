@@ -691,11 +691,12 @@ class OpenSearchStore:
     def matching_occurrence_page(
         self,
         sentence_keys: list,
-        excluded_application_id: str,
+        excluded_application_id: str | None,
         analysis_group: str,
         page_size: int,
         after_global_id: int | None,
         include_total: bool,
+        excluded_tsp_id: str | None = None,
     ) -> dict:
         """Return a page found by normal key filters, without vector search."""
 
@@ -705,6 +706,14 @@ class OpenSearchStore:
         for offset in range(0, len(unique_keys), TERMS_BATCH_SIZE):
             batch = unique_keys[offset : offset + TERMS_BATCH_SIZE]
             key_filters.append({"terms": {"sentenceKey": batch}})
+
+        excluded_occurrences = []
+        if excluded_application_id is not None:
+            excluded_occurrences.append(
+                {"term": {"applicationId": excluded_application_id}}
+            )
+        if excluded_tsp_id is not None:
+            excluded_occurrences.append({"term": {"tspId": excluded_tsp_id}})
 
         body = {
             "size": page_size + 1,
@@ -722,7 +731,7 @@ class OpenSearchStore:
                         },
                         {"term": {"analysisGroup": canonical_group}},
                     ],
-                    "must_not": [{"term": {"applicationId": excluded_application_id}}],
+                    "must_not": excluded_occurrences,
                 }
             },
         }
