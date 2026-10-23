@@ -52,6 +52,69 @@ class ApplicationMatchService:
         if not 1 <= threshold <= 100:
             raise ValueError("threshold must be between 1 and 100")
 
+        source_sentences = self._source_sentences(
+            application_id,
+            analysis_group,
+        )
+        return self._compare_source_sentences(
+            application_id,
+            analysis_group,
+            threshold,
+            next_token,
+            source_sentences,
+            "applicationSentenceMatches",
+        )
+
+    def compare_tsp(
+        self,
+        tsp_id: str,
+        analysis_group: str,
+        threshold: int,
+        next_token: str | None,
+    ) -> dict:
+        """Rank applications matching the eligible sentences in one document.
+
+        Input: TSP document T1, analysis group Asylee, and threshold 90.
+        Output: ten applications and all pairs originating from document T1.
+        """
+
+        if not 1 <= threshold <= 100:
+            raise ValueError("threshold must be between 1 and 100")
+
+        source_sentences = self._tsp_source_sentences(tsp_id, analysis_group)
+        if not source_sentences:
+            raise ValueError(
+                "tspId has no eligible sentences for this analysisGroup"
+            )
+        source_application_ids = {
+            sentence["applicationId"] for sentence in source_sentences
+        }
+        if len(source_application_ids) != 1:
+            raise RuntimeError("tspId belongs to more than one application")
+        application_id = source_application_ids.pop()
+        result = self._compare_source_sentences(
+            application_id,
+            analysis_group,
+            threshold,
+            next_token,
+            source_sentences,
+            "tspSentenceMatches",
+            tsp_id,
+        )
+        return {"tspId": tsp_id, **result}
+
+    def _compare_source_sentences(
+        self,
+        application_id: str,
+        analysis_group: str,
+        threshold: int,
+        next_token: str | None,
+        source_sentences: list,
+        token_type: str,
+        tsp_id: str | None = None,
+    ) -> dict:
+        """Build one ranked application page from eligible source sentences."""
+
         offset = 0
         if next_token:
             state = decode_page_token(next_token)
@@ -60,17 +123,16 @@ class ApplicationMatchService:
                 application_id,
                 analysis_group,
                 threshold,
+                token_type,
+                tsp_id,
             )
             offset = int(state["applicationOffset"])
 
-        source_sentences = self._source_sentences(
-            application_id,
-            analysis_group,
-        )
         source_sentences_by_key = self._sentences_by_key(source_sentences)
         source_keys = sorted(source_sentences_by_key)
         scores_by_source = self.sentence_summary.matching_key_scores(
             source_keys,
+            analysis_group,
             threshold,
         )
         relations_by_target = self._relations_by_target(scores_by_source)
@@ -126,15 +188,18 @@ class ApplicationMatchService:
         returned_after = offset + len(applications)
         new_token = None
         if returned_after < total_applications:
+            token_state = {
+                "type": token_type,
+                "applicationId": application_id,
+                "analysisGroup": analysis_group,
+                "threshold": threshold,
+                "pageSize": APPLICATION_PAGE_SIZE,
+                "applicationOffset": returned_after,
+            }
+            if tsp_id is not None:
+                token_state["tspId"] = tsp_id
             new_token = encode_page_token(
-                {
-                    "type": "applicationSentenceMatches",
-                    "applicationId": application_id,
-                    "analysisGroup": analysis_group,
-                    "threshold": threshold,
-                    "pageSize": APPLICATION_PAGE_SIZE,
-                    "applicationOffset": returned_after,
-                }
+                token_state
             )
 
         total_pages = ceil(total_applications / APPLICATION_PAGE_SIZE)
@@ -176,6 +241,27 @@ class ApplicationMatchService:
                 SOURCE_PAGE_SIZE,
                 after_global_id,
                 False,
+            )
+            sentences.extend(page["sentences"])
+            after_global_id = page["nextAfterGlobalId"]
+            if after_global_id is None:
+                return sentences
+
+    def _tsp_source_sentences(
+        self,
+        tsp_id: str,
+        analysis_group: str,
+    ) -> list:
+        """Load every eligible source sentence for one TSP document."""
+
+        sentences = []
+        after_global_id = None
+        while True:
+            page = self.opensearch.tsp_occurrence_page(
+                tsp_id,
+                analysis_group,
+                SOURCE_PAGE_SIZE,
+                after_global_id,
             )
             sentences.extend(page["sentences"])
             after_global_id = page["nextAfterGlobalId"]
@@ -294,16 +380,20 @@ class ApplicationMatchService:
         application_id: str,
         analysis_group: str,
         threshold: int,
+        token_type: str = "applicationSentenceMatches",
+        tsp_id: str | None = None,
     ):
         """Stop a token from being reused for another comparison."""
 
         expected = {
-            "type": "applicationSentenceMatches",
+            "type": token_type,
             "applicationId": application_id,
             "analysisGroup": analysis_group,
             "threshold": threshold,
             "pageSize": APPLICATION_PAGE_SIZE,
         }
+        if tsp_id is not None:
+            expected["tspId"] = tsp_id
         for name, value in expected.items():
             if state.get(name) != value:
                 raise ValueError("nextToken does not belong to this request")

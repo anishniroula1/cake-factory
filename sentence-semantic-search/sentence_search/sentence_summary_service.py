@@ -5,12 +5,14 @@ from sentence_search.opensearch_store import (
     CATALOG_PAGE_SIZE,
     VECTOR_FIELD,
     OpenSearchStore,
+    catalog_vector_query,
+    sentence_eligibility_filters,
 )
 from sentence_search.search_utils import (
+    cosine_distance,
     cosine_percentage,
     decode_page_token,
     encode_page_token,
-    minimum_opensearch_score,
 )
 
 MSEARCH_BATCH_SIZE = 100  # Source sentences sent in one OpenSearch msearch call.
@@ -72,6 +74,7 @@ class SentenceSummaryService:
         source_keys = sorted({sentence["sentenceKey"] for sentence in sentences})
         similar_keys_by_source = self._similar_keys_at_threshold(
             source_keys,
+            analysis_group,
             threshold,
         )
 
@@ -153,11 +156,16 @@ class SentenceSummaryService:
     def _similar_keys_at_threshold(
         self,
         source_keys: list,
+        analysis_group: str,
         threshold: int,
     ) -> dict:
         """Find catalog matches for all source keys using batched msearch."""
 
-        scores = self.matching_key_scores(source_keys, threshold)
+        scores = self.matching_key_scores(
+            source_keys,
+            analysis_group,
+            threshold,
+        )
         similar_keys = {}
         for source_key in source_keys:
             similar_keys[source_key] = sorted(
@@ -168,6 +176,7 @@ class SentenceSummaryService:
     def matching_key_scores(
         self,
         source_keys: list,
+        analysis_group: str,
         threshold: int,
     ) -> dict:
         """Return matching catalog keys and scores for many source keys.
@@ -176,16 +185,54 @@ class SentenceSummaryService:
         Output: each source key mapped to exact and similar key percentages.
         """
 
+        details = self.matching_key_details(
+            source_keys,
+            analysis_group,
+            threshold,
+        )
+        return {
+            source_key: {
+                target_key: match["matchPercentage"]
+                for target_key, match in source_matches.items()
+            }
+            for source_key, source_matches in details.items()
+        }
+
+    def matching_key_details(
+        self,
+        source_keys: list,
+        analysis_group: str,
+        threshold: int,
+    ) -> dict:
+        """Return complete score details for batched catalog matches.
+
+        Input: saved source sentence keys and threshold 90.
+        Output: each source key mapped to exact and similar match metadata.
+        """
+
         if not source_keys:
             return {}
-        vectors = self.opensearch.catalog_vectors(source_keys)
+        vectors = self.opensearch.catalog_vectors(
+            source_keys,
+            analysis_group,
+        )
         missing_keys = [key for key in source_keys if key not in vectors]
         if missing_keys:
             raise RuntimeError(
                 f"Catalog vector does not exist for {missing_keys[0]}"
             )
 
-        qualified = {key: {key: 100.0} for key in source_keys}
+        qualified = {
+            key: {
+                key: {
+                    "matchPercentage": 100.0,
+                    "cosineDistance": 0.0,
+                    "openSearchScore": 1.0,
+                    "matchType": "exact",
+                }
+            }
+            for key in source_keys
+        }
         pending = [(key, vectors[key], None) for key in source_keys]
         while pending:
             next_pending = []
@@ -201,7 +248,10 @@ class SentenceSummaryService:
                             after_key,
                         )
                     )
-                responses = self.opensearch.multi_search_catalog(bodies)
+                responses = self.opensearch.multi_search_catalog(
+                    bodies,
+                    analysis_group,
+                )
                 if len(responses) != len(batch):
                     raise RuntimeError(
                         "OpenSearch returned an invalid msearch response"
@@ -214,9 +264,17 @@ class SentenceSummaryService:
                         candidate_key = hit["_source"]["sentenceKey"]
                         if candidate_key == source_key:
                             continue
-                        percentage = cosine_percentage(float(hit["_score"]))
+                        opensearch_score = float(hit["_score"])
+                        percentage = cosine_percentage(opensearch_score)
                         if percentage >= threshold:
-                            qualified[source_key][candidate_key] = percentage
+                            qualified[source_key][candidate_key] = {
+                                "matchPercentage": percentage,
+                                "cosineDistance": cosine_distance(
+                                    opensearch_score
+                                ),
+                                "openSearchScore": opensearch_score,
+                                "matchType": "similar",
+                            }
 
                     next_after_key = result.get("after_key")
                     if (
@@ -250,19 +308,16 @@ class SentenceSummaryService:
             "track_total_hits": False,
             "query": {
                 "bool": {
+                    "filter": sentence_eligibility_filters(),
                     "should": [
                         {"term": {"sentenceKey": source_key}},
                         {
                             "knn": {
-                                VECTOR_FIELD: {
-                                    "vector": vector,
-                                    "min_score": minimum_opensearch_score(
-                                        threshold
-                                    ),
-                                    "method_parameters": {
-                                        "nprobes": self.opensearch.config.ivf_nprobes,
-                                    },
-                                }
+                                VECTOR_FIELD: catalog_vector_query(
+                                    self.opensearch.config,
+                                    vector,
+                                    threshold,
+                                )
                             }
                         },
                     ],

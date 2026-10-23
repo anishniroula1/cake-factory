@@ -23,8 +23,9 @@ class FakeOpenSearchStore:
             sentence_key == SOURCE_KEY and analysis_group == "Asylee"
         )
 
-    def catalog_vector(self, sentence_key):
+    def catalog_vector(self, sentence_key, analysis_group):
         assert sentence_key == SOURCE_KEY
+        assert analysis_group == "Asylee"
         return [1.0, 0.0]
 
     def catalog_match_page(
@@ -34,10 +35,12 @@ class FakeOpenSearchStore:
         threshold,
         page_size,
         after_key,
+        analysis_group,
     ):
         assert sentence_key == SOURCE_KEY
         assert vector == [1.0, 0.0]
         assert threshold == 90
+        assert analysis_group == "Asylee"
         self.catalog_page_requests.append(
             {"pageSize": page_size, "afterKey": after_key}
         )

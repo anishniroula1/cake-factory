@@ -1,6 +1,7 @@
 import pytest
 
 from sentence_search.search_utils import (
+    cosine_distance,
     cosine_percentage,
     decode_page_token,
     encode_page_token,
@@ -13,6 +14,7 @@ def test_ninety_percent_uses_opensearch_cosine_score():
 
     assert score == pytest.approx(0.95)
     assert cosine_percentage(score) == 90.0
+    assert cosine_distance(score) == 0.1
 
 
 def test_application_page_token_round_trip():

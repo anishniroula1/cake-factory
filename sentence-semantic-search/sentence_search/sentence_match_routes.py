@@ -8,7 +8,7 @@ from sentence_search.components import (
     paginated_sentence_key_search_service,
     sentence_key_search_service,
 )
-from sentence_search.config import config
+from sentence_search.config import DEFAULT_MATCH_THRESHOLD
 
 router = APIRouter()
 
@@ -34,7 +34,7 @@ THRESHOLD_QUERY = Query(
 def application_sentence_matches(
     applicationId: str,
     analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
-    threshold: Annotated[int, THRESHOLD_QUERY] = config.match_threshold,
+    threshold: Annotated[int, THRESHOLD_QUERY] = DEFAULT_MATCH_THRESHOLD,
     nextToken: Annotated[
         str | None,
         Query(description="Application-page token returned by the previous page."),
@@ -56,6 +56,34 @@ def application_sentence_matches(
 
 
 @router.get(
+    "/documents/{tspId}/sentences/application-matches",
+    tags=["Sentence matches"],
+)
+def tsp_sentence_matches(
+    tspId: str,
+    analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
+    threshold: Annotated[int, THRESHOLD_QUERY] = DEFAULT_MATCH_THRESHOLD,
+    nextToken: Annotated[
+        str | None,
+        Query(description="Application-page token returned by the previous page."),
+    ] = None,
+):
+    """Rank other applications using eligible sentences from one TSP document."""
+
+    try:
+        return application_match_service.compare_tsp(
+            tspId,
+            analysisGroup,
+            threshold,
+            nextToken,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except (OpenSearchException, RuntimeError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@router.get(
     "/applications/{applicationId}/sentences/semantic-search",
     tags=["Sentence matches"],
 )
@@ -63,7 +91,7 @@ def sentence_key_semantic_search(
     applicationId: str,
     sentenceKey: Annotated[str, SENTENCE_KEY_QUERY],
     analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
-    threshold: Annotated[int, THRESHOLD_QUERY] = config.match_threshold,
+    threshold: Annotated[int, THRESHOLD_QUERY] = DEFAULT_MATCH_THRESHOLD,
 ):
     """Return every exact and similar sentence for one saved sentence key."""
 
@@ -88,7 +116,7 @@ def paginated_sentence_key_semantic_search(
     applicationId: str,
     sentenceKey: Annotated[str, SENTENCE_KEY_QUERY],
     analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
-    threshold: Annotated[int, THRESHOLD_QUERY] = config.match_threshold,
+    threshold: Annotated[int, THRESHOLD_QUERY] = DEFAULT_MATCH_THRESHOLD,
     pageSize: Annotated[
         int,
         Query(

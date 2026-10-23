@@ -1,12 +1,9 @@
 import base64
 import binascii
-import logging
 import struct
-import threading
 import time
 
-from opensearchpy import NotFoundError, TransportError, helpers
-from opensearchpy.helpers.errors import BulkIndexError
+from opensearchpy import NotFoundError
 
 from sentence_search.config import Config
 from sentence_search.open_search_client import OpenSearchClient
@@ -15,20 +12,40 @@ from sentence_search.search_utils import (
     minimum_opensearch_score,
 )
 
-SEMANTIC_TEXT_FIELD = "sentenceContent"
 VECTOR_FIELD = "sentenceContentVector"
+VECTOR_DIMENSION = 512
 CATALOG_PAGE_SIZE = 1_000  # Catalog matches read from one aggregation page.
 TERMS_BATCH_SIZE = 10_000  # Sentence keys sent in one terms filter.
 VECTOR_BATCH_SIZE = 1_000  # Catalog vectors read in one OpenSearch request.
 MATCH_RESULT_BATCH_SIZE = 5_000  # Occurrences read per internal search page.
 APPLICATION_BUCKET_PAGE_SIZE = 1_000  # Application/key count buckets per page.
-BULK_RETRY_ATTEMPTS = 10  # Temporary OpenSearch failures allowed per batch.
-BULK_RETRY_SECONDS = 5  # Catalog shares this pause; occurrence uses it locally.
-# Bedrock can return 408, 424, 429, 500, or 503. The Lasso or HTTP gateway can
-# also return 502 or 504 while forwarding the same temporary failure.
-RETRYABLE_STATUSES = {408, 424, 429, 500, 502, 503, 504}
 
-logger = logging.getLogger(__name__)
+
+def sentence_eligibility_filters() -> list:
+    """Return the rules shared by every sentence matching query.
+
+    A matchable sentence is not a non-matcher, tracer, or form-language
+    sentence and contains at least five meaningful words.
+    """
+
+    return [
+        {"term": {"isNonMatcher": False}},
+        {"term": {"isTracer": False}},
+        {"term": {"isFormLanguage": False}},
+        {"range": {"wordCount": {"gt": 4}}},
+    ]
+
+
+def catalog_vector_query(config: Config, vector: list, threshold: int) -> dict:
+    """Build a radial vector query with optional IVF search parameters."""
+
+    query = {
+        "vector": vector,
+        "min_score": minimum_opensearch_score(threshold),
+    }
+    if config.ivf_nprobes_enabled:
+        query["method_parameters"] = {"nprobes": config.ivf_nprobes}
+    return query
 
 
 class OpenSearchStore:
@@ -37,8 +54,6 @@ class OpenSearchStore:
 
         self.config = config
         self.client = client or OpenSearchClient(config).create_client()
-        self._embedding_backoff_lock = threading.Lock()
-        self._embedding_cooldown_until = 0.0
 
     def wait_until_ready(self, attempts: int = 60):
         """Wait for OpenSearch during application startup."""
@@ -49,247 +64,15 @@ class OpenSearchStore:
             time.sleep(2)
         raise RuntimeError("OpenSearch did not become ready")
 
-    def delete_indices(self) -> dict:
-        """Delete the physical indexes currently connected to project aliases."""
-
-        indexes = set()
-        for alias in (
-            self.config.occurrence_alias,
-            self.config.catalog_alias,
-            self.config.tracer_alias,
-        ):
-            if self.client.indices.exists_alias(name=alias):
-                indexes.update(self.client.indices.get_alias(name=alias))
-
-        deleted = []
-        for index in sorted(indexes):
-            if self.client.indices.exists(index=index):
-                self.client.indices.delete(index=index)
-                deleted.append(index)
-        return {"deletedIndexes": deleted}
-
-    def existing_catalog_keys(self, keys: list) -> set:
-        """Return catalog document IDs that already exist."""
-
-        existing = set()
-        for offset in range(0, len(keys), 1_000):
-            batch = keys[offset : offset + 1_000]
-            response = self.client.mget(
-                index=self.config.catalog_alias,
-                body={"ids": batch},
-                params={"_source": "false"},
-            )
-            for document in response["docs"]:
-                if document.get("found"):
-                    existing.add(str(document["_id"]))
-        return existing
-
-    def bulk_index_catalog(self, documents: list):
-        """Index new catalog texts and retry temporary embedding failures."""
-
-        if not documents:
-            return 0
-        actions = []
-        for document in documents:
-            actions.append(
-                {
-                    "_op_type": "index",
-                    "_index": self.config.catalog_alias,
-                    "_id": document["sentenceKey"],
-                    "_source": document,
-                }
-            )
-        self._bulk_with_retry(
-            actions,
-            "catalog",
-            shared_embedding_cooldown=True,
-        )
-        return len(actions)
-
-    def bulk_index_tracer_sentences(self, documents: list):
-        """Index tracer rows and let the alias ingest pipeline create vectors.
-
-        Input: validated tracer rows without an embedding field.
-        Output: number of tracer documents sent to OpenSearch.
-        """
-
-        if not documents:
-            return 0
-        actions = []
-        for document in documents:
-            actions.append(
-                {
-                    "_op_type": "index",
-                    "_index": self.config.tracer_alias,
-                    "_id": str(document["tracerId"]),
-                    "_source": document,
-                }
-            )
-        # Tracer writes call the same Lasso/Titan path as catalog writes, so
-        # both flows share one cooldown when that external service is busy.
-        self._bulk_with_retry(
-            actions,
-            "tracer sentence",
-            shared_embedding_cooldown=True,
-        )
-        return len(actions)
-
-    def bulk_index_occurrences(self, documents: list):
-        """Index sentence occurrences by globally unique sentence ID."""
-
-        if not documents:
-            return 0
-        actions = []
-        for document in documents:
-            actions.append(
-                {
-                    "_op_type": "index",
-                    "_index": self.config.occurrence_alias,
-                    "_id": str(document["globalId"]),
-                    "_source": document,
-                }
-            )
-        self._bulk_with_retry(actions, "occurrence")
-        return len(actions)
-
-    def _bulk_with_retry(
-        self,
-        actions: list,
-        label: str,
-        shared_embedding_cooldown: bool = False,
-    ):
-        """Retry temporary bulk failures inside the worker handling the batch."""
-
-        if not actions:
-            return
-        pending_actions = actions
-        last_error = None
-        for attempt in range(1, BULK_RETRY_ATTEMPTS + 1):
-            if shared_embedding_cooldown:
-                self._wait_for_embedding_cooldown()
-            try:
-                helpers.bulk(
-                    self.client,
-                    pending_actions,
-                    chunk_size=self.config.seed_batch_size,
-                    raise_on_error=True,
-                )
-                return
-            except (BulkIndexError, TransportError) as error:
-                last_error = error
-                retry_actions = self._retryable_actions(
-                    error,
-                    pending_actions,
-                )
-                if retry_actions is None:
-                    raise RuntimeError(
-                        f"Non-retryable OpenSearch {label} bulk failure: {error}"
-                    ) from error
-
-                if attempt == BULK_RETRY_ATTEMPTS:
-                    break
-                pending_actions = retry_actions
-                logger.warning(
-                    "OpenSearch %s batch attempt %s/%s failed; retrying %s "
-                    "document(s) after %s seconds",
-                    label,
-                    attempt,
-                    BULK_RETRY_ATTEMPTS,
-                    len(pending_actions),
-                    BULK_RETRY_SECONDS,
-                )
-                if shared_embedding_cooldown:
-                    # One Lasso or Titan failure pauses new embedding attempts
-                    # from every worker. Requests already in flight continue.
-                    self._start_embedding_cooldown()
-                else:
-                    # Occurrence indexing does not call Lasso or Titan, so
-                    # only its own worker needs to pause before retrying.
-                    time.sleep(BULK_RETRY_SECONDS)
-
-        raise RuntimeError(
-            f"OpenSearch {label} bulk failed after "
-            f"{BULK_RETRY_ATTEMPTS} attempts: {last_error}"
-        ) from last_error
-
-    def _start_embedding_cooldown(self):
-        """Set one shared retry time for all Titan embedding workers."""
-
-        with self._embedding_backoff_lock:
-            self._embedding_cooldown_until = max(
-                self._embedding_cooldown_until,
-                time.monotonic() + BULK_RETRY_SECONDS,
-            )
-
-    def _wait_for_embedding_cooldown(self):
-        """Wait until embedding workers may call Lasso and Titan again."""
-
-        while True:
-            with self._embedding_backoff_lock:
-                remaining = self._embedding_cooldown_until - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(remaining)
-
-    @staticmethod
-    def _retryable_actions(
-        error: BulkIndexError | TransportError,
-        actions: list,
-    ) -> list | None:
-        """Return only failed actions that are safe to send again."""
-
-        if isinstance(error, TransportError):
-            status = getattr(error, "status_code", None)
-            if status == "N/A":
-                return actions
-            try:
-                status = int(status)
-            except (TypeError, ValueError):
-                return None
-            return actions if status in RETRYABLE_STATUSES else None
-
-        failed_ids = set()
-        for item in error.errors:
-            operation = next(iter(item.values()))
-            status = operation.get("status")
-            failed_id = operation.get("_id")
-            try:
-                status = int(status)
-            except (TypeError, ValueError):
-                return None
-            if status not in RETRYABLE_STATUSES or failed_id is None:
-                return None
-            failed_ids.add(str(failed_id))
-
-        if not failed_ids:
-            return None
-        retry_actions = [
-            action for action in actions if str(action.get("_id")) in failed_ids
-        ]
-        retry_ids = {str(action.get("_id")) for action in retry_actions}
-        return retry_actions if retry_ids == failed_ids else None
-
-    def refresh_indices(self):
-        """Make newly indexed catalog and occurrence records searchable."""
-
-        self.client.indices.refresh(
-            index=(f"{self.config.catalog_alias},{self.config.occurrence_alias}")
-        )
-
-    def refresh_tracer_sentences(self):
-        """Make newly uploaded tracer rows searchable."""
-
-        self.client.indices.refresh(index=self.config.tracer_alias)
-
-    def catalog_vector(self, key: str) -> list:
+    def catalog_vector(self, key: str, analysis_group: str) -> list:
         """Read one saved vector using fast binary doc values."""
 
-        vectors = self.catalog_vectors([key])
+        vectors = self.catalog_vectors([key], analysis_group)
         if key not in vectors:
             raise RuntimeError(f"Catalog vector does not exist for {key}")
         return vectors[key]
 
-    def catalog_vectors(self, sentence_keys: list) -> dict:
+    def catalog_vectors(self, sentence_keys: list, analysis_group: str) -> dict:
         """Read saved vectors for sentence keys without loading `_source`.
 
         Input: two sentence keys already present in the catalog.
@@ -301,7 +84,7 @@ class OpenSearchStore:
         for offset in range(0, len(unique_keys), VECTOR_BATCH_SIZE):
             batch = unique_keys[offset : offset + VECTOR_BATCH_SIZE]
             response = self.client.search(
-                index=self.config.catalog_alias,
+                index=self.config.catalog_alias_for(analysis_group),
                 body={
                     "size": len(batch),
                     "track_total_hits": False,
@@ -338,7 +121,7 @@ class OpenSearchStore:
         except (binascii.Error, ValueError) as error:
             raise RuntimeError("OpenSearch returned an invalid vector") from error
 
-        expected_bytes = self.config.vector_dimension * 4
+        expected_bytes = VECTOR_DIMENSION * 4
         if len(vector_bytes) != expected_bytes:
             raise RuntimeError(
                 "OpenSearch returned a vector with "
@@ -346,7 +129,7 @@ class OpenSearchStore:
             )
         return list(
             struct.unpack(
-                f"<{self.config.vector_dimension}f",
+                f"<{VECTOR_DIMENSION}f",
                 vector_bytes,
             )
         )
@@ -356,6 +139,7 @@ class OpenSearchStore:
         source_key: str,
         vector: list,
         threshold: int,
+        analysis_group: str,
     ) -> list:
         """Return every unique catalog key meeting the cosine threshold."""
 
@@ -368,6 +152,7 @@ class OpenSearchStore:
                 threshold,
                 CATALOG_PAGE_SIZE,
                 after_key,
+                analysis_group,
             )
             matches.extend(page["matches"])
             after_key = page["nextAfterKey"]
@@ -382,6 +167,7 @@ class OpenSearchStore:
         threshold: int,
         page_size: int,
         after_key: dict | None,
+        analysis_group: str,
     ) -> dict:
         """Return one unique catalog-match page and its composite cursor."""
 
@@ -394,25 +180,22 @@ class OpenSearchStore:
         if after_key:
             composite["after"] = after_key
         response = self.client.search(
-            index=self.config.catalog_alias,
+            index=self.config.catalog_alias_for(analysis_group),
             body={
                 "size": 0,
                 "track_total_hits": False,
                 "query": {
                     "bool": {
+                        "filter": sentence_eligibility_filters(),
                         "should": [
                             {"term": {"sentenceKey": source_key}},
                             {
                                 "knn": {
-                                    VECTOR_FIELD: {
-                                        "vector": vector,
-                                        "min_score": minimum_opensearch_score(
-                                            threshold
-                                        ),
-                                        "method_parameters": {
-                                            "nprobes": self.config.ivf_nprobes,
-                                        },
-                                    }
+                                    VECTOR_FIELD: catalog_vector_query(
+                                        self.config,
+                                        vector,
+                                        threshold,
+                                    )
                                 }
                             },
                         ],
@@ -468,12 +251,17 @@ class OpenSearchStore:
             "nextAfterKey": next_after_key,
         }
 
-    def multi_search_catalog(self, bodies: list) -> list:
+    def multi_search_catalog(
+        self,
+        bodies: list,
+        analysis_group: str,
+    ) -> list:
         """Send many catalog searches in one OpenSearch request."""
 
+        catalog_alias = self.config.catalog_alias_for(analysis_group)
         request = []
         for body in bodies:
-            request.extend(({"index": self.config.catalog_alias}, body))
+            request.extend(({"index": catalog_alias}, body))
         response = self.client.msearch(body=request)
         return response["responses"]
 
@@ -500,6 +288,10 @@ class OpenSearchStore:
                 "sentenceKey",
                 "sourceType",
                 "analysisGroup",
+                "wordCount",
+                "isNonMatcher",
+                "isTracer",
+                "isFormLanguage",
             ],
             "sort": [{"globalId": "asc"}],
             "query": {
@@ -507,8 +299,7 @@ class OpenSearchStore:
                     "filter": [
                         {"term": {"applicationId": application_id}},
                         {"term": {"analysisGroup": analysis_group}},
-                        {"term": {"isTracer": False}},
-                        {"term": {"isFormLanguage": False}},
+                        *sentence_eligibility_filters(),
                     ]
                 }
             },
@@ -533,6 +324,61 @@ class OpenSearchStore:
             "totalSentences": total,
         }
 
+    def tsp_occurrence_page(
+        self,
+        tsp_id: str,
+        analysis_group: str,
+        page_size: int,
+        after_global_id: int | None,
+    ) -> dict:
+        """Return one eligible document-sentence page in global-ID order.
+
+        Input: tsp_id="TSP-10", analysis_group="Asylee", page_size=1000.
+        Output: eligible source sentences and the cursor for the next page.
+        """
+
+        body = {
+            "size": page_size + 1,
+            "track_total_hits": False,
+            "_source": [
+                "applicationId",
+                "tspId",
+                "sectionName",
+                "globalId",
+                "sentIdLocal",
+                "sentenceContent",
+                "sentenceKey",
+                "sourceType",
+                "analysisGroup",
+                "wordCount",
+                "isNonMatcher",
+                "isTracer",
+                "isFormLanguage",
+            ],
+            "sort": [{"globalId": "asc"}],
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"tspId": tsp_id}},
+                        {"term": {"analysisGroup": analysis_group}},
+                        *sentence_eligibility_filters(),
+                    ]
+                }
+            },
+        }
+        if after_global_id is not None:
+            body["search_after"] = [after_global_id]
+        response = self.client.search(index=self.config.occurrence_alias, body=body)
+        hits = response["hits"]["hits"]
+        page_hits = hits[:page_size]
+        next_after = None
+        if len(hits) > page_size and page_hits:
+            next_after = int(page_hits[-1]["sort"][0])
+        return {
+            "sentences": [hit["_source"] for hit in page_hits],
+            "nextAfterGlobalId": next_after,
+        }
+
     def eligible_sentence_exists(
         self,
         sentence_key: str,
@@ -548,8 +394,7 @@ class OpenSearchStore:
                         "filter": [
                             {"term": {"sentenceKey": sentence_key}},
                             {"term": {"analysisGroup": analysis_group}},
-                            {"term": {"isTracer": False}},
-                            {"term": {"isFormLanguage": False}},
+                            *sentence_eligibility_filters(),
                         ]
                     }
                 }
@@ -579,8 +424,7 @@ class OpenSearchStore:
                             "filter": [
                                 {"terms": {"sentenceKey": batch}},
                                 {"term": {"analysisGroup": analysis_group}},
-                                {"term": {"isTracer": False}},
-                                {"term": {"isFormLanguage": False}},
+                                *sentence_eligibility_filters(),
                             ],
                             "must_not": [
                                 {"term": {"applicationId": excluded_application_id}}
@@ -650,8 +494,7 @@ class OpenSearchStore:
                                     }
                                 },
                                 {"term": {"analysisGroup": analysis_group}},
-                                {"term": {"isTracer": False}},
-                                {"term": {"isFormLanguage": False}},
+                                *sentence_eligibility_filters(),
                             ],
                             "must_not": [
                                 {"term": {"applicationId": excluded_application_id}}
@@ -713,6 +556,10 @@ class OpenSearchStore:
                     "sentenceKey",
                     "sourceType",
                     "analysisGroup",
+                    "wordCount",
+                    "isNonMatcher",
+                    "isTracer",
+                    "isFormLanguage",
                 ],
                 "sort": [{"globalId": "asc"}],
                 "query": {
@@ -726,8 +573,7 @@ class OpenSearchStore:
                             },
                             {"terms": {"applicationId": unique_application_ids}},
                             {"term": {"analysisGroup": analysis_group}},
-                            {"term": {"isTracer": False}},
-                            {"term": {"isFormLanguage": False}},
+                            *sentence_eligibility_filters(),
                         ],
                         "must_not": [
                             {"term": {"applicationId": excluded_application_id}}
@@ -777,6 +623,10 @@ class OpenSearchStore:
                 "sentenceKey",
                 "sourceType",
                 "analysisGroup",
+                "wordCount",
+                "isNonMatcher",
+                "isTracer",
+                "isFormLanguage",
             ],
             "sort": [{"globalId": "asc"}],
             "query": {
@@ -789,8 +639,7 @@ class OpenSearchStore:
                             }
                         },
                         {"term": {"analysisGroup": analysis_group}},
-                        {"term": {"isTracer": False}},
-                        {"term": {"isFormLanguage": False}},
+                        *sentence_eligibility_filters(),
                     ],
                     "must_not": [{"term": {"applicationId": excluded_application_id}}],
                 }
@@ -841,12 +690,16 @@ class OpenSearchStore:
                 return matches
 
     def stats(self) -> dict:
-        """Return both OpenSearch document counts and cluster health."""
+        """Return occurrence and both catalog counts with cluster health."""
 
         return {
             "occurrenceDocuments": self._count(self.config.occurrence_alias),
-            "catalogDocuments": self._count(self.config.catalog_alias),
-            "tracerDocuments": self._count(self.config.tracer_alias),
+            "asyleeCatalogDocuments": self._count(
+                self.config.asylee_catalog_alias
+            ),
+            "refugeeCatalogDocuments": self._count(
+                self.config.refugee_catalog_alias
+            ),
             "clusterHealth": self.client.cluster.health()["status"],
         }
 
@@ -862,11 +715,11 @@ class OpenSearchStore:
         """Return unfiltered documents and include catalog vectors."""
 
         body = {"size": size, "query": {"match_all": {}}}
-        vector_indexes = {
-            self.config.catalog_alias,
-            self.config.tracer_alias,
+        catalog_aliases = {
+            self.config.asylee_catalog_alias,
+            self.config.refugee_catalog_alias,
         }
-        if index in vector_indexes:
+        if index in catalog_aliases:
             body["_source"] = {"excludes": [VECTOR_FIELD]}
             body["docvalue_fields"] = [
                 {
@@ -878,7 +731,7 @@ class OpenSearchStore:
         documents = []
         for hit in response["hits"]["hits"]:
             document = {"id": hit["_id"], **hit["_source"]}
-            if index in vector_indexes:
+            if index in catalog_aliases:
                 encoded_vector = hit.get("fields", {}).get(VECTOR_FIELD)
                 if encoded_vector:
                     document[VECTOR_FIELD] = self._decode_binary_vector(
@@ -889,111 +742,3 @@ class OpenSearchStore:
             "count": len(documents),
             "documents": documents,
         }
-
-    def delete_occurrences(
-        self,
-        application_id: str | None = None,
-        tsp_id: str | None = None,
-    ) -> int:
-        """Delete occurrence documents for one application or TSP document."""
-
-        filters = []
-        if application_id is not None:
-            filters.append({"term": {"applicationId": application_id}})
-        if tsp_id is not None:
-            filters.append({"term": {"tspId": tsp_id}})
-        if not filters:
-            raise ValueError("applicationId or tspId is required for deletion")
-        response = self.client.delete_by_query(
-            index=self.config.occurrence_alias,
-            body={"query": {"bool": {"filter": filters}}},
-            params={
-                "conflicts": "proceed",
-                "refresh": "true",
-                "wait_for_completion": "true",
-            },
-        )
-        return int(response.get("deleted", 0))
-
-    def deletion_catalog_keys(
-        self,
-        application_id: str | None = None,
-        tsp_id: str | None = None,
-    ) -> list:
-        """Return unique sentence keys before deleting occurrence documents."""
-
-        filters = []
-        if application_id is not None:
-            filters.append({"term": {"applicationId": application_id}})
-        if tsp_id is not None:
-            filters.append({"term": {"tspId": tsp_id}})
-        if not filters:
-            raise ValueError("applicationId or tspId is required for deletion")
-
-        keys = []
-        after_key = None
-        while True:
-            composite = {
-                "size": CATALOG_PAGE_SIZE,
-                "sources": [{"sentenceKey": {"terms": {"field": "sentenceKey"}}}],
-            }
-            if after_key:
-                composite["after"] = after_key
-            response = self.client.search(
-                index=self.config.occurrence_alias,
-                body={
-                    "size": 0,
-                    "track_total_hits": False,
-                    "query": {"bool": {"filter": filters}},
-                    "aggs": {"keys": {"composite": composite}},
-                },
-            )
-            result = response["aggregations"]["keys"]
-            keys.extend(bucket["key"]["sentenceKey"] for bucket in result["buckets"])
-            after_key = result.get("after_key")
-            if not after_key or not result["buckets"]:
-                break
-        return keys
-
-    def delete_unused_catalog_keys(self, keys: list) -> dict:
-        """Delete unused vectors and return the keys removed with them."""
-
-        deleted = 0
-        deleted_keys = []
-        for offset in range(0, len(keys), 1_000):
-            batch = keys[offset : offset + 1_000]
-            response = self.client.search(
-                index=self.config.occurrence_alias,
-                body={
-                    "size": 0,
-                    "track_total_hits": False,
-                    "query": {"terms": {"sentenceKey": batch}},
-                    "aggs": {
-                        "usedKeys": {
-                            "terms": {
-                                "field": "sentenceKey",
-                                "size": len(batch),
-                            }
-                        }
-                    },
-                },
-            )
-            used_keys = {
-                bucket["key"]
-                for bucket in response["aggregations"]["usedKeys"]["buckets"]
-            }
-            unused_keys = [key for key in batch if key not in used_keys]
-            if not unused_keys:
-                continue
-            delete_response = self.client.delete_by_query(
-                index=self.config.catalog_alias,
-                body={"query": {"ids": {"values": unused_keys}}},
-                params={
-                    "conflicts": "proceed",
-                    "refresh": "true",
-                    "wait_for_completion": "true",
-                },
-            )
-            deleted += int(delete_response.get("deleted", 0))
-            deleted_keys.extend(unused_keys)
-        return {"deleted": deleted, "sentenceKeys": deleted_keys}

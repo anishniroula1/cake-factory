@@ -1,11 +1,15 @@
 from types import SimpleNamespace
 
+from sentence_search.opensearch_store import sentence_eligibility_filters
 from sentence_search.sentence_summary_service import SentenceSummaryService
 
 
 class FakeOpenSearchStore:
     def __init__(self):
-        self.config = SimpleNamespace(ivf_nprobes=16)
+        self.config = SimpleNamespace(
+            ivf_nprobes_enabled=True,
+            ivf_nprobes=16,
+        )
         self.msearch_calls = 0
 
     def application_occurrence_page(
@@ -51,14 +55,17 @@ class FakeOpenSearchStore:
         all_counts = {"key-a": 2, "key-b": 1, "key-c": 4, "key-d": 5}
         return {key: all_counts[key] for key in sentence_keys}
 
-    def catalog_vectors(self, sentence_keys):
+    def catalog_vectors(self, sentence_keys, analysis_group):
+        assert analysis_group == "Asylee"
         return {key: [1.0, 0.0] for key in sentence_keys}
 
-    def multi_search_catalog(self, bodies):
+    def multi_search_catalog(self, bodies, analysis_group):
+        assert analysis_group == "Asylee"
         self.msearch_calls += 1
         responses = []
         for body in bodies:
             bool_query = body["query"]["bool"]
+            assert bool_query["filter"] == sentence_eligibility_filters()
             source_key = bool_query["should"][0]["term"]["sentenceKey"]
             minimum_score = bool_query["should"][1]["knn"][
                 "sentenceContentVector"
@@ -127,3 +134,17 @@ def test_lower_threshold_adds_matches_to_the_current_page_count():
         {"sectionName": "B1", "matchingCount": 1},
     ]
     assert result["sentences"][0]["similarMatchCount"] == 9
+
+
+def test_matching_key_details_keep_raw_score_and_distance():
+    service = SentenceSummaryService(FakeOpenSearchStore())
+
+    details = service.matching_key_details(["key-a"], "Asylee", 90)
+
+    assert details["key-a"]["key-a"]["matchType"] == "exact"
+    assert details["key-a"]["key-c"] == {
+        "matchPercentage": 92.0,
+        "cosineDistance": 0.08,
+        "openSearchScore": 0.96,
+        "matchType": "similar",
+    }

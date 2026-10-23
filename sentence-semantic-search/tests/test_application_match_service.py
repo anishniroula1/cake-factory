@@ -5,8 +5,9 @@ class FakeSentenceSummaryService:
     def __init__(self, scores):
         self.scores = scores
 
-    def matching_key_scores(self, source_keys, threshold):
+    def matching_key_scores(self, source_keys, analysis_group, threshold):
         assert sorted(source_keys) == sorted(self.scores)
+        assert analysis_group == "Asylee"
         return self.scores
 
 
@@ -47,6 +48,21 @@ class FakeApplicationMatchStore:
             row["sentenceKey"] for row in self.count_rows
         }.issubset(set(sentence_keys))
         return self.count_rows
+
+    def tsp_occurrence_page(
+        self,
+        tsp_id,
+        analysis_group,
+        page_size,
+        after_global_id,
+    ):
+        assert tsp_id == "T-A1234"
+        assert analysis_group == "Asylee"
+        assert after_global_id is None
+        return {
+            "sentences": self.source_sentences,
+            "nextAfterGlobalId": None,
+        }
 
     def matching_occurrences_for_applications(
         self,
@@ -118,6 +134,32 @@ def test_application_match_count_is_every_source_target_pair():
     assert len(result["applications"][0]["matches"]) == 3
     assert result["applications"][1]["applicationId"] == "A789"
     assert result["applications"][1]["exactMatchCount"] == 1
+
+
+def test_tsp_match_uses_only_sentences_from_the_requested_document():
+    source_key = "source-key"
+    similar_key = "similar-key"
+    source = _sentence("A1234", 20, source_key, "Source sentence")
+    target = _sentence("A456", 1, similar_key, "Target sentence")
+    count_rows = [
+        {
+            "applicationId": "A456",
+            "sentenceKey": similar_key,
+            "occurrenceCount": 1,
+        }
+    ]
+    store = FakeApplicationMatchStore([source], count_rows, [target])
+    summary = FakeSentenceSummaryService(
+        {source_key: {source_key: 100.0, similar_key: 94.0}}
+    )
+    service = ApplicationMatchService(store, summary)
+
+    result = service.compare_tsp("T-A1234", "Asylee", 90, None)
+
+    assert result["tspId"] == "T-A1234"
+    assert result["applicationId"] == "A1234"
+    assert result["totalMatchCount"] == 1
+    assert result["applications"][0]["applicationId"] == "A456"
 
 
 def test_application_match_pagination_returns_ten_ranked_applications():

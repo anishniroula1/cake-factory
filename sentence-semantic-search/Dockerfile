@@ -9,8 +9,6 @@ COPY pyproject.toml README.md ./
 COPY sentence_search ./sentence_search
 RUN pip install --no-cache-dir .
 
-COPY data ./data
-
 EXPOSE 8000
 
 CMD ["uvicorn", "sentence_search.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -21,13 +21,21 @@ class FakeOpenSearchStore:
         assert analysis_group == "Asylee"
         return self.source_is_eligible
 
-    def catalog_vector(self, sentence_key):
+    def catalog_vector(self, sentence_key, analysis_group):
         assert sentence_key == SOURCE_KEY
+        assert analysis_group == "Asylee"
         return [1.0, 0.0]
 
-    def catalog_matches(self, sentence_key, vector, threshold):
+    def catalog_matches(
+        self,
+        sentence_key,
+        vector,
+        threshold,
+        analysis_group,
+    ):
         assert sentence_key == SOURCE_KEY
         assert vector == [1.0, 0.0]
+        assert analysis_group == "Asylee"
         return [
             {
                 "sentenceKey": SOURCE_KEY,

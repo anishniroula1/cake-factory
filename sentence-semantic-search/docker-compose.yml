@@ -5,8 +5,6 @@ services:
       - .env
     ports:
       - "8008:8000"
-    volumes:
-      - ./data:/app/data:ro
     healthcheck:
       test:
         - CMD

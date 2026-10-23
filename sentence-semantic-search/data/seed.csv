@@ -1,4 +1,0 @@
-applicationId,tspId,sectionName,globalId,sentIdLocal,sentenceContent,isTracer,isFormLanguage,sentenceKey,sourceType,createdAt,updatedAt,analysisGroup
-A0001,TSP-1,Written Statement,1001,1,The Government of the United States issued the notice.,false,false,,document,2026-09-17T12:00:00Z,2026-09-17T12:00:00Z,group-1
-A0002,TSP-2,Written Statement,2001,1,The United States Government issued a notice.,false,false,,document,2026-09-17T12:01:00Z,2026-09-17T12:01:00Z,group-1
-A0002,TSP-2,Written Statement,2002,2,Ethiopian Airlines operates international flights.,false,false,,document,2026-09-17T12:02:00Z,2026-09-17T12:02:00Z,group-1

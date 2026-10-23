@@ -7,6 +7,9 @@ from opensearchpy import (
 
 from sentence_search.config import Config
 
+OPENSEARCH_PORT = 443
+OPENSEARCH_SERVICE = "es"
+
 
 class OpenSearchClient:
     def __init__(self, config: Config):
@@ -24,13 +27,13 @@ class OpenSearchClient:
         auth = AWSV4SignerAuth(
             credentials,
             self.config.aws_region,
-            self.config.opensearch_service,
+            OPENSEARCH_SERVICE,
         )
         return OpenSearch(
             hosts=[
                 {
                     "host": self.config.opensearch_host,
-                    "port": self.config.opensearch_port,
+                    "port": OPENSEARCH_PORT,
                 }
             ],
             http_auth=auth,

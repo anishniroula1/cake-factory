@@ -35,6 +35,22 @@ def cosine_percentage(opensearch_score: float) -> float:
     return round(max(0.0, cosine_similarity) * 100.0, 2)
 
 
+def cosine_distance(opensearch_score: float) -> float:
+    """Convert an OpenSearch cosine score into cosine distance.
+
+    Input:
+        opensearch_score=0.95
+    Output:
+        0.10, which represents 90 percent cosine similarity.
+    """
+
+    if opensearch_score <= 0:
+        raise ValueError("opensearch_score must be greater than zero")
+    cosine_similarity = (2.0 * opensearch_score) - 1.0
+    cosine_similarity = max(-1.0, min(1.0, cosine_similarity))
+    return round(1.0 - cosine_similarity, 8)
+
+
 def encode_page_token(state: dict) -> str:
     """Put the OpenSearch cursor and request state into one token."""
 

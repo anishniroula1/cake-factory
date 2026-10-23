@@ -166,11 +166,11 @@ Restore these project pieces when PostgreSQL is enabled again:
 - postgres_store.py.
 - match_service.py.
 - PostgreSQL wiring in components.py and main.py.
-- Matching and summary writes in seed_service.py and sentence_service.py.
+- Matching and summary writes in sentence_service.py.
 - PostgreSQL cleanup in deletion_service.py.
 - PostgreSQL counts in /health and /stats.
-- Tests for models, bidirectional relationships, summaries, deletion, seeding,
-  and transaction-safe updates.
+- Tests for models, bidirectional relationships, summaries, deletion, and
+  transaction-safe updates.
 
 ## Prompt to use later
 

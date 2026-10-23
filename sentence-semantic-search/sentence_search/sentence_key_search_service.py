@@ -39,7 +39,9 @@ class SentenceKeySearchService:
             analysis_group,
         )
         sentence_key, search_keys, score_by_key = self.matching_keys(
-            sentence_key, threshold
+            sentence_key,
+            analysis_group,
+            threshold,
         )
         occurrences = self.opensearch.matching_occurrences(
             search_keys,
@@ -96,6 +98,7 @@ class SentenceKeySearchService:
     def matching_keys(
         self,
         sentence_key: str,
+        analysis_group: str,
         threshold: int,
     ) -> tuple:
         """Return the source key, matching keys, and scores.
@@ -110,11 +113,15 @@ class SentenceKeySearchService:
         if not 1 <= threshold <= 100:
             raise ValueError("threshold must be between 1 and 100")
 
-        source_vector = self.opensearch.catalog_vector(sentence_key)
+        source_vector = self.opensearch.catalog_vector(
+            sentence_key,
+            analysis_group,
+        )
         catalog_matches = self.opensearch.catalog_matches(
             sentence_key,
             source_vector,
             threshold,
+            analysis_group,
         )
         score_by_key = {sentence_key: 100.0}
         similar_keys = []

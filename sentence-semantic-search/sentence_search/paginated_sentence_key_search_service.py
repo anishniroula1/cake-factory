@@ -55,7 +55,10 @@ class PaginatedSentenceKeySearchService:
             after_key = None
             returned_before = 0
 
-        source_vector = self.opensearch.catalog_vector(sentence_key)
+        source_vector = self.opensearch.catalog_vector(
+            sentence_key,
+            analysis_group,
+        )
         catalog_matches, matches, next_after_key = (
             self._catalog_page_with_occurrences(
                 application_id,
@@ -136,6 +139,7 @@ class PaginatedSentenceKeySearchService:
                 threshold,
                 remaining,
                 next_after_key,
+                analysis_group,
             )
             candidates = page["matches"]
             next_after_key = page["nextAfterKey"]

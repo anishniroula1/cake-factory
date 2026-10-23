@@ -7,7 +7,7 @@ from sentence_search.components import (
     all_sentence_summary_service,
     sentence_summary_service,
 )
-from sentence_search.config import config
+from sentence_search.config import DEFAULT_MATCH_THRESHOLD
 
 router = APIRouter()
 
@@ -19,7 +19,7 @@ router = APIRouter()
 def application_semantic_summary(
     applicationId: str,
     analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
-    threshold: Annotated[int, Query(ge=1, le=100)] = config.match_threshold,
+    threshold: Annotated[int, Query(ge=1, le=100)] = DEFAULT_MATCH_THRESHOLD,
     pageSize: Annotated[int, Query(ge=1, le=100)] = 100,
     nextToken: str | None = None,
 ):
@@ -46,7 +46,7 @@ def application_semantic_summary(
 def all_application_semantic_summary(
     applicationId: str,
     analysisGroup: Annotated[str, Query(min_length=1)] = "Asylee",
-    threshold: Annotated[int, Query(ge=1, le=100)] = config.match_threshold,
+    threshold: Annotated[int, Query(ge=1, le=100)] = DEFAULT_MATCH_THRESHOLD,
 ):
     """Return summaries and totals for every eligible application sentence."""
 
