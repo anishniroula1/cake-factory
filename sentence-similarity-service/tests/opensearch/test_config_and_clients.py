@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 from botocore.exceptions import NoCredentialsError
@@ -29,7 +30,14 @@ class ActiveCredentialsSession:
 
 class AssumeRoleStsClient:
     def assume_role(self, **values):
-        return {"Credentials": {"AccessKeyId": "key", "SecretAccessKey": "secret", "SessionToken": "token"}}
+        return {
+            "Credentials": {
+                "AccessKeyId": "key",
+                "SecretAccessKey": "secret",
+                "SessionToken": "token",
+                "Expiration": datetime(2030, 1, 1, tzinfo=UTC),
+            }
+        }
 
 
 class BaseRoleSession:
@@ -121,7 +129,7 @@ def test_opensearch_client_can_assume_role(monkeypatch, service_config):
     assumed_session = object()
 
     def session_factory(**values):
-        if "aws_access_key_id" in values:
+        if "botocore_session" in values:
             return assumed_session
         return BaseRoleSession()
 

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +31,7 @@ class StsClientFake:
                 "AccessKeyId": "access-key",
                 "SecretAccessKey": "secret-key",
                 "SessionToken": "session-token",
+                "Expiration": datetime(2030, 1, 1, tzinfo=UTC),
             }
         }
 
@@ -102,9 +104,4 @@ def test_client_can_assume_the_configured_role(monkeypatch):
         "RoleArn": "arn:aws:iam::123456789012:role/opensearch",
         "RoleSessionName": "doc2vecSentenceIngestion",
     }
-    assert session_calls[1] == {
-        "aws_access_key_id": "access-key",
-        "aws_secret_access_key": "secret-key",
-        "aws_session_token": "session-token",
-        "region_name": "us-east-1",
-    }
+    assert list(session_calls[1]) == ["botocore_session"]

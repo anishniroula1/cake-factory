@@ -1,4 +1,7 @@
 import boto3
+from botocore.client import BaseClient
+from botocore.credentials import RefreshableCredentials
+from botocore.session import get_session
 from opensearchpy import (
     AWSV4SignerAuth,
     OpenSearch,
@@ -50,23 +53,46 @@ class OpenSearchClient:
         )
 
     def _session(self) -> boto3.Session:
-        """Resolve the AWS session used to sign OpenSearch requests.
+        """Resolve the refreshable AWS session used to sign OpenSearch requests.
 
         Input: aws_region="us-east-1" and an optional IAM role ARN.
-        Output: the pod session or an assumed-role boto3 Session.
+        Output: the pod session or an automatically refreshed assumed-role session.
         """
 
         base_session = boto3.Session(region_name=self.config.aws_region)
         if not self.config.opensearch_iam_access_role:
             return base_session
-        response = base_session.client("sts").assume_role(
+
+        sts_client = base_session.client("sts")
+
+        def refresh_credentials() -> dict[str, str]:
+            return self._assume_role_credentials(sts_client)
+
+        refreshable_credentials = RefreshableCredentials.create_from_metadata(
+            metadata=refresh_credentials(),
+            refresh_using=refresh_credentials,
+            method="sts-assume-role",
+        )
+        botocore_session = get_session()
+        botocore_session._credentials = refreshable_credentials
+        botocore_session.set_config_variable("region", self.config.aws_region)
+        return boto3.Session(botocore_session=botocore_session)
+
+    def _assume_role_credentials(self, sts_client: BaseClient) -> dict[str, str]:
+        """Assume the OpenSearch role and return botocore refresh metadata.
+
+        Botocore calls this method again before the temporary credentials expire,
+        so the shared OpenSearch client can continue signing requests.
+        """
+
+        response = sts_client.assume_role(
             RoleArn=self.config.opensearch_iam_access_role,
             RoleSessionName="doc2vecSentenceIngestion",
         )
         credentials = response["Credentials"]
-        return boto3.Session(
-            aws_access_key_id=credentials["AccessKeyId"],
-            aws_secret_access_key=credentials["SecretAccessKey"],
-            aws_session_token=credentials["SessionToken"],
-            region_name=self.config.aws_region,
-        )
+        return {
+            "access_key": credentials["AccessKeyId"],
+            "secret_key": credentials["SecretAccessKey"],
+            "token": credentials["SessionToken"],
+            "expiry_time": credentials["Expiration"].isoformat(),
+        }
