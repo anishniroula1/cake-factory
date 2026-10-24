@@ -11,8 +11,8 @@ from ta_utils.logger.CustomLogger import CustomLogger
 RETRYABLE_STATUS_CODES = {408, 424, 425, 429, 500, 502, 503, 504}
 
 
-class OpenSearchDocumentStore:
-    """Read and write Doc2Vec documents in the configured OpenSearch aliases."""
+class OpenSearchHelper:
+    """Provide shared bulk, retry, cooldown, validation, and refresh operations."""
 
     def __init__(
         self,

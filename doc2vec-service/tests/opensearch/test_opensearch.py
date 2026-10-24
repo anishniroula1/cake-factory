@@ -2,12 +2,9 @@ import pytest
 from opensearchpy import OpenSearchException, TransportError
 
 from doc2vec_completed.opensearch.errors import PermanentDataError
-from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
+from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
 
-BULK_PATH = (
-    "doc2vec_completed.opensearch.opensearch_store."
-    "open_search_document_store.helpers.bulk"
-)
+BULK_PATH = "doc2vec_completed.opensearch.open_search_helper.helpers.bulk"
 
 
 class ClientFake:
@@ -43,7 +40,7 @@ def test_existing_ids_and_bulk_pipeline_selection(
         return len(actions), []
 
     monkeypatch.setattr(BULK_PATH, bulk)
-    store = OpenSearchDocumentStore(service_config, ClientFake({"A"}), custom_logger)
+    store = OpenSearchHelper(service_config, ClientFake({"A"}), custom_logger)
     assert store.find_existing_document_ids("catalog", ["A", "B", "A"]) == {"A"}
 
     documents = [{"_id": "A", "value": 1}]
@@ -59,7 +56,7 @@ def test_empty_opensearch_operations_are_skipped(
     service_config,
     custom_logger,
 ):
-    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
+    store = OpenSearchHelper(service_config, ClientFake(), custom_logger)
 
     assert store.find_existing_document_ids("catalog", []) == set()
     assert store.index_documents("catalog", [], needs_embedding=False) == 0
@@ -70,7 +67,7 @@ def test_refresh_makes_supplied_aliases_searchable(
     custom_logger,
 ):
     client = ClientFake()
-    store = OpenSearchDocumentStore(service_config, client, custom_logger)
+    store = OpenSearchHelper(service_config, client, custom_logger)
 
     store.refresh_aliases(["catalog-asylee", "occurrence"])
 
@@ -96,7 +93,7 @@ def test_bulk_reports_temporary_failed_documents_to_the_caller(
         return len(actions), []
 
     monkeypatch.setattr(BULK_PATH, bulk)
-    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
+    store = OpenSearchHelper(service_config, ClientFake(), custom_logger)
     documents = [{"_id": "A"}, {"_id": "B"}]
     with pytest.raises(OpenSearchException):
         store.index_documents("catalog", documents, needs_embedding=False)
@@ -117,7 +114,7 @@ def test_bulk_reports_transport_failure_to_the_caller(
         return len(actions), []
 
     monkeypatch.setattr(BULK_PATH, bulk)
-    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
+    store = OpenSearchHelper(service_config, ClientFake(), custom_logger)
     with pytest.raises(TransportError):
         store.index_documents("catalog", [{"_id": "A"}], False)
     assert len(calls) == 1
@@ -140,7 +137,7 @@ def test_existing_id_lookup_returns_temporary_and_permanent_failures(
             return super().mget(index, body, params)
 
     retry_client = RetryLookupClient()
-    store = OpenSearchDocumentStore(service_config, retry_client, custom_logger)
+    store = OpenSearchHelper(service_config, retry_client, custom_logger)
 
     with pytest.raises(TransportError):
         store.find_existing_document_ids("catalog", ["A"])
@@ -150,7 +147,7 @@ def test_existing_id_lookup_returns_temporary_and_permanent_failures(
         def mget(self, index, body, params):
             raise TransportError(401, "unauthorized")
 
-    failed_store = OpenSearchDocumentStore(
+    failed_store = OpenSearchHelper(
         service_config,
         FailedLookupClient(),
         custom_logger,
@@ -168,7 +165,7 @@ def test_permanent_opensearch_errors_are_not_retried(
         return 0, [{"index": {"_id": "A", "status": 400, "error": "bad mapping"}}]
 
     monkeypatch.setattr(BULK_PATH, bad_mapping)
-    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
+    store = OpenSearchHelper(service_config, ClientFake(), custom_logger)
     with pytest.raises(PermanentDataError):
         store.index_documents("catalog", [{"_id": "A"}], False)
 
@@ -181,7 +178,7 @@ def test_permanent_opensearch_errors_are_not_retried(
 
 
 def test_vector_validation_and_retryable_status(service_config, custom_logger):
-    store = OpenSearchDocumentStore(service_config, ClientFake(), custom_logger)
+    store = OpenSearchHelper(service_config, ClientFake(), custom_logger)
     store.validate_vector([0.1, 0.2])
     with pytest.raises(PermanentDataError):
         store.validate_vector([0.1])

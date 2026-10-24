@@ -16,7 +16,7 @@ from doc2vec_completed.opensearch.db_store import (
     SentenceVectorDBStore,
 )
 from doc2vec_completed.opensearch.errors import QueueSendError
-from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
+from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
 from doc2vec_completed.opensearch.retry import retry_operation
 from doc2vec_completed.opensearch.sentence_batch_processor import (
     SentenceBatchProcessor,
@@ -33,12 +33,12 @@ class HistoricalHandler:
         self,
         config: Config,
         session_factory: Callable[[], Session],
-        opensearch_store: OpenSearchDocumentStore,
+        opensearch_helper: OpenSearchHelper,
         aws_sqs: AwsSQS,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
-        self.opensearch_store = opensearch_store
+        self.opensearch_helper = opensearch_helper
         self.aws_sqs = aws_sqs
         self.logger = custom_logger
         self.sentence_vector_db_store = SentenceVectorDBStore(session_factory)
@@ -47,7 +47,7 @@ class HistoricalHandler:
             config,
             self.sentence_vector_db_store,
             self.embedding_db_store,
-            opensearch_store,
+            opensearch_helper,
             custom_logger,
         )
 
@@ -136,7 +136,7 @@ class HistoricalHandler:
         # before Sentence Similarity receives its SQS message.
         retry_operation(
             "Refresh indexed sentences",
-            self.opensearch_store.refresh_aliases,
+            self.opensearch_helper.refresh_aliases,
             [catalog_alias, self.config.occurrence_alias],
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,

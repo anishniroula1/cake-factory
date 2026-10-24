@@ -15,7 +15,10 @@ from doc2vec_completed.opensearch.db_store import (
     EmbeddingDBStore,
     SentenceVectorDBStore,
 )
-from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
+from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
+from doc2vec_completed.opensearch.opensearch_store import (
+    TrainingOpenSearchStore,
+)
 from doc2vec_completed.opensearch.retry import retry_operation
 from doc2vec_completed.opensearch.text import sentence_key
 from ta_db_connection.atables import SentencesVector
@@ -29,11 +32,14 @@ class TrainModelHandler:
         self,
         config: Config,
         session_factory: Callable[[], Session],
-        opensearch_store: OpenSearchDocumentStore,
+        opensearch_helper: OpenSearchHelper,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
-        self.opensearch_store = opensearch_store
+        self.training_open_search_store = TrainingOpenSearchStore(
+            config,
+            opensearch_helper,
+        )
         self.logger = custom_logger
         self.sentence_vector_db_store = SentenceVectorDBStore(session_factory)
         self.embedding_db_store = EmbeddingDBStore(session_factory)
@@ -117,8 +123,7 @@ class TrainModelHandler:
         if indexed_count:
             retry_operation(
                 "Refresh the model-training index",
-                self.opensearch_store.refresh_aliases,
-                [self.config.training_alias],
+                self.training_open_search_store.refresh,
                 wait_seconds=self.config.retry_seconds,
                 custom_logger=self.logger,
             )
@@ -175,7 +180,7 @@ class TrainModelHandler:
             }
             vector = embeddings.get(row.global_id)
             if vector is not None:
-                self.opensearch_store.validate_vector(vector)
+                self.training_open_search_store.validate_vector(vector)
                 document["sentenceContentVector"] = vector
 
             current = documents_by_key.get(key)
@@ -204,8 +209,7 @@ class TrainModelHandler:
         keys = [document["sentenceKey"] for document in documents]
         existing_keys = retry_operation(
             f"Check existing {batch_label}",
-            self.opensearch_store.find_existing_document_ids,
-            self.config.training_alias,
+            self.training_open_search_store.find_existing_sentence_keys,
             keys,
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
@@ -227,20 +231,16 @@ class TrainModelHandler:
         ]
         retry_operation(
             f"Write saved vectors for {batch_label}",
-            self.opensearch_store.index_documents,
-            self.config.training_alias,
+            self.training_open_search_store.index_saved_vectors,
             saved_vectors,
-            False,
             wait_seconds=self.config.retry_seconds,
             max_attempts=self.config.opensearch_bulk_retry_count + 1,
             custom_logger=self.logger,
         )
         retry_operation(
             f"Create Bedrock vectors for {batch_label}",
-            self.opensearch_store.index_documents,
-            self.config.training_alias,
+            self.training_open_search_store.index_with_bedrock,
             bedrock_vectors,
-            True,
             wait_seconds=self.config.retry_seconds,
             max_attempts=self.config.opensearch_bulk_retry_count + 1,
             custom_logger=self.logger,

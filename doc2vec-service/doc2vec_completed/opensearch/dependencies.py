@@ -6,7 +6,7 @@ from doc2vec_completed.opensearch.handlers.live_handler import LiveHandler
 from doc2vec_completed.opensearch.handlers.tracer_handler import TracerHandler
 from doc2vec_completed.opensearch.handlers.train_model_handler import TrainModelHandler
 from doc2vec_completed.opensearch.open_search_client import OpenSearchClient
-from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
+from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
 from ta_db_connection.database_connection import DatabaseConnection
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
@@ -30,7 +30,7 @@ class Dependencies:
         )
 
         opensearch_client = OpenSearchClient(self.config).create_client()
-        self.opensearch_store = OpenSearchDocumentStore(
+        self.opensearch_helper = OpenSearchHelper(
             self.config,
             opensearch_client,
             self.logger,
@@ -48,27 +48,27 @@ class Dependencies:
         self.live_handler = LiveHandler(
             self.config,
             self.session_factory,
-            self.opensearch_store,
+            self.opensearch_helper,
             self.aws_sqs,
             self.logger,
         )
         self.historical_handler = HistoricalHandler(
             self.config,
             self.session_factory,
-            self.opensearch_store,
+            self.opensearch_helper,
             self.aws_sqs,
             self.logger,
         )
         self.tracer_handler = TracerHandler(
             self.config,
             self.session_factory,
-            self.opensearch_store,
+            self.opensearch_helper,
             self.logger,
         )
         self.train_model_handler = TrainModelHandler(
             self.config,
             self.session_factory,
-            self.opensearch_store,
+            self.opensearch_helper,
             self.logger,
         )
 

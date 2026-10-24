@@ -18,7 +18,7 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     engine = EngineFake()
     database = SimpleNamespace(engine=engine)
     opensearch_client = object()
-    opensearch_store = object()
+    opensearch_helper = object()
     aws_sqs = object()
     historical_handler = object()
     live_handler = object()
@@ -63,18 +63,18 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
         OpenSearchClientFake,
     )
 
-    def build_opensearch_store(received_config, client, received_logger):
+    def build_opensearch_helper(received_config, client, received_logger):
         assert (received_config, client, received_logger) == (
             config,
             opensearch_client,
             logger,
         )
-        return opensearch_store
+        return opensearch_helper
 
     monkeypatch.setattr(
         dependencies_module,
-        "OpenSearchDocumentStore",
-        build_opensearch_store,
+        "OpenSearchHelper",
+        build_opensearch_helper,
     )
 
     def build_sqs(**arguments):
@@ -116,7 +116,7 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     assert dependencies.logger is logger
     assert dependencies.database is database
     assert dependencies.session_factory is session_factory
-    assert dependencies.opensearch_store is opensearch_store
+    assert dependencies.opensearch_helper is opensearch_helper
     assert dependencies.aws_sqs is aws_sqs
     assert dependencies.historical_handler is historical_handler
     assert dependencies.live_handler is live_handler
@@ -142,27 +142,27 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     assert captured["handler"] == (
         config,
         session_factory,
-        opensearch_store,
+        opensearch_helper,
         aws_sqs,
         logger,
     )
     assert captured["live_handler"] == (
         config,
         session_factory,
-        opensearch_store,
+        opensearch_helper,
         aws_sqs,
         logger,
     )
     assert captured["tracer_handler"] == (
         config,
         session_factory,
-        opensearch_store,
+        opensearch_helper,
         logger,
     )
     assert captured["train_model_handler"] == (
         config,
         session_factory,
-        opensearch_store,
+        opensearch_helper,
         logger,
     )
 

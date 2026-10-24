@@ -1,0 +1,33 @@
+from doc2vec_completed.opensearch.config import Config
+from doc2vec_completed.opensearch.contracts import OccurrenceDocument
+from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
+
+
+class SentenceOccurrenceOpenSearchStore:
+    """Write sentence occurrence documents to their configured alias."""
+
+    def __init__(
+        self,
+        config: Config,
+        opensearch_helper: OpenSearchHelper,
+    ) -> None:
+        self.alias = config.occurrence_alias
+        self.opensearch_helper = opensearch_helper
+
+    def index_occurrences(self, documents: list[OccurrenceDocument]) -> int:
+        """Index occurrence records without running an embedding pipeline.
+
+        Input: documents=[{"_id": 10, "globalId": 10, ...}]
+        Output: the number of occurrence documents accepted by OpenSearch.
+        """
+
+        return self.opensearch_helper.index_documents(
+            self.alias,
+            documents,
+            needs_embedding=False,
+        )
+
+    def refresh(self) -> None:
+        """Make newly indexed sentence occurrences searchable."""
+
+        self.opensearch_helper.refresh_aliases([self.alias])

@@ -4,8 +4,11 @@ from doc2vec_completed.opensearch.db_store import (
     EmbeddingDBStore,
     SentenceVectorDBStore,
 )
-from doc2vec_completed.opensearch.errors import PermanentDataError
-from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
+from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
+from doc2vec_completed.opensearch.opensearch_store import (
+    SentenceCatalogOpenSearchStore,
+    SentenceOccurrenceOpenSearchStore,
+)
 from doc2vec_completed.opensearch.retry import retry_operation
 from doc2vec_completed.opensearch.text import sentence_word_count
 from ta_db_connection.atables import SentencesVector
@@ -20,13 +23,19 @@ class SentenceBatchProcessor:
         config: Config,
         sentence_vector_db_store: SentenceVectorDBStore,
         embedding_db_store: EmbeddingDBStore,
-        opensearch_store: OpenSearchDocumentStore,
+        opensearch_helper: OpenSearchHelper,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
         self.sentence_vector_db_store = sentence_vector_db_store
         self.embedding_db_store = embedding_db_store
-        self.opensearch_store = opensearch_store
+        self.sentence_catalog_open_search_store = SentenceCatalogOpenSearchStore(
+            config,
+            opensearch_helper,
+        )
+        self.sentence_occurrence_open_search_store = (
+            SentenceOccurrenceOpenSearchStore(config, opensearch_helper)
+        )
         self.logger = custom_logger
 
     def process(self, rows: list[SentencesVector], label: str) -> int:
@@ -65,10 +74,8 @@ class SentenceBatchProcessor:
         occurrences = self._occurrence_documents(rows)
         retry_operation(
             f"Write occurrences for {label}",
-            self.opensearch_store.index_documents,
-            self.config.occurrence_alias,
+            self.sentence_occurrence_open_search_store.index_occurrences,
             occurrences,
-            False,
             wait_seconds=self.config.retry_seconds,
             max_attempts=self.config.opensearch_bulk_retry_count + 1,
             custom_logger=self.logger,
@@ -91,12 +98,7 @@ class SentenceBatchProcessor:
             PermanentDataError: If the analysis group is unsupported.
         """
 
-        normalized_group = analysis_group.strip().casefold()
-        if normalized_group == "asylee":
-            return self.config.asylee_catalog_alias
-        if normalized_group == "refugee":
-            return self.config.refugee_catalog_alias
-        raise PermanentDataError(f"unsupported analysis_group {analysis_group!r}")
+        return self.sentence_catalog_open_search_store.select_alias(analysis_group)
 
     def _index_catalog_rows(
         self,
@@ -115,7 +117,7 @@ class SentenceBatchProcessor:
 
         existing_keys = retry_operation(
             f"Check existing catalog keys for {label}",
-            self.opensearch_store.find_existing_document_ids,
+            self.sentence_catalog_open_search_store.find_existing_sentence_keys,
             catalog_alias,
             [row.sentence_key for row in rows],
             wait_seconds=self.config.retry_seconds,
@@ -141,26 +143,24 @@ class SentenceBatchProcessor:
             if vector is None:
                 need_vectors.append(document)
                 continue
-            self.opensearch_store.validate_vector(vector)
+            self.sentence_catalog_open_search_store.validate_vector(vector)
             document["sentenceContentVector"] = vector
             with_vectors.append(document)
 
         retry_operation(
             f"Write saved vectors to {catalog_alias} for {label}",
-            self.opensearch_store.index_documents,
+            self.sentence_catalog_open_search_store.index_saved_vectors,
             catalog_alias,
             with_vectors,
-            False,
             wait_seconds=self.config.retry_seconds,
             max_attempts=self.config.opensearch_bulk_retry_count + 1,
             custom_logger=self.logger,
         )
         retry_operation(
             f"Create Bedrock vectors in {catalog_alias} for {label}",
-            self.opensearch_store.index_documents,
+            self.sentence_catalog_open_search_store.index_with_bedrock,
             catalog_alias,
             need_vectors,
-            True,
             wait_seconds=self.config.retry_seconds,
             max_attempts=self.config.opensearch_bulk_retry_count + 1,
             custom_logger=self.logger,

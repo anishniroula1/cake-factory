@@ -11,7 +11,10 @@ from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import TracerDocument, TracerResult
 from doc2vec_completed.opensearch.db_store import TracerSentenceDBStore
 from doc2vec_completed.opensearch.errors import PermanentDataError
-from doc2vec_completed.opensearch.opensearch_store import OpenSearchDocumentStore
+from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
+from doc2vec_completed.opensearch.opensearch_store import (
+    TracerOpenSearchStore,
+)
 from doc2vec_completed.opensearch.retry import retry_operation
 from ta_db_connection.atables import TracerSentence
 from ta_utils.logger.CustomLogger import CustomLogger
@@ -24,11 +27,14 @@ class TracerHandler:
         self,
         config: Config,
         session_factory: Callable[[], Session],
-        opensearch_store: OpenSearchDocumentStore,
+        opensearch_helper: OpenSearchHelper,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
-        self.opensearch_store = opensearch_store
+        self.tracer_open_search_store = TracerOpenSearchStore(
+            config,
+            opensearch_helper,
+        )
         self.logger = custom_logger
         self.tracer_sentence_db_store = TracerSentenceDBStore(session_factory)
 
@@ -69,20 +75,16 @@ class TracerHandler:
             ]
             indexed_count += retry_operation(
                 "Write tracer references with saved vectors",
-                self.opensearch_store.index_documents,
-                self.config.tracer_alias,
+                self.tracer_open_search_store.index_saved_vectors,
                 saved_vectors,
-                False,
                 wait_seconds=self.config.retry_seconds,
                 max_attempts=self.config.opensearch_bulk_retry_count + 1,
                 custom_logger=self.logger,
             )
             indexed_count += retry_operation(
                 "Create Bedrock vectors for tracer references",
-                self.opensearch_store.index_documents,
-                self.config.tracer_alias,
+                self.tracer_open_search_store.index_with_bedrock,
                 bedrock_vectors,
-                True,
                 wait_seconds=self.config.retry_seconds,
                 max_attempts=self.config.opensearch_bulk_retry_count + 1,
                 custom_logger=self.logger,
@@ -96,8 +98,7 @@ class TracerHandler:
 
         retry_operation(
             "Refresh the tracer catalog",
-            self.opensearch_store.refresh_aliases,
-            [self.config.tracer_alias],
+            self.tracer_open_search_store.refresh,
             wait_seconds=self.config.retry_seconds,
             custom_logger=self.logger,
         )
@@ -162,7 +163,7 @@ class TracerHandler:
             raise PermanentDataError(
                 "saved tracer embedding is not a list of numbers"
             ) from error
-        self.opensearch_store.validate_vector(vector)
+        self.tracer_open_search_store.validate_vector(vector)
         return vector
 
     def _raw_float_vector(self, value: bytes) -> list[float]:
