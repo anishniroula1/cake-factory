@@ -8,9 +8,6 @@ class ScalarRows:
     def __iter__(self):
         return iter(self.rows)
 
-    def all(self):
-        return self.rows
-
 
 class SessionFake:
     def __init__(self, rows=None, scalar_value=0, document=None):

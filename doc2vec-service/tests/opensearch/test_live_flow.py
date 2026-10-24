@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from doc2vec_completed.opensearch.db_store import SentenceVectorDBStore
@@ -11,15 +12,21 @@ from tests.opensearch.fakes import OpenSearchFake, SessionFake, SessionSequence,
 class DocumentStoreFake:
     def __init__(self, document):
         self.document = document
+        self.calls = []
 
     def load_document(self, tsp_id):
+        self.calls.append(tsp_id)
         return self.document
 
 
 class LiveSentenceStoreFake:
-    def __init__(self):
+    def __init__(self, existing_rows=None):
         self.calls = []
         self.next_global_id = 1
+        self.existing_rows = existing_rows or []
+
+    def load_live_sentence_rows(self, tsp_id):
+        return self.existing_rows
 
     def save_live_sentence_batch(self, document, sentences):
         self.calls.append(sentences)
@@ -42,23 +49,12 @@ class LiveSentenceStoreFake:
                 is_tracer=False,
                 in_scope=True,
                 sentence_key=str(self.next_global_id) * 64,
+                last_modified=datetime.now(UTC),
                 tsp=document,
             )
             rows.append(row)
             self.next_global_id += 1
         return rows
-
-
-class BatchProcessorFake:
-    def __init__(self):
-        self.calls = []
-
-    def catalog_alias(self, analysis_group):
-        return f"catalog-{analysis_group.lower()}"
-
-    def process(self, rows, label):
-        self.calls.append((rows, label))
-        return len(rows)
 
 
 class HandlerFake:
@@ -83,7 +79,7 @@ def live_document(content="First sentence. Second sentence."):
     )
 
 
-def build_handler(service_config, custom_logger, document, sentences):
+def build_handler(service_config, custom_logger, document):
     opensearch = OpenSearchFake()
     sqs = SqsFake()
     handler = LiveHandler(
@@ -92,11 +88,9 @@ def build_handler(service_config, custom_logger, document, sentences):
         opensearch,
         sqs,
         custom_logger,
-        sentence_splitter=lambda content: sentences,
     )
     handler.document_db_store = DocumentStoreFake(document)
     handler.sentence_vector_db_store = LiveSentenceStoreFake()
-    handler.batch_processor = BatchProcessorFake()
     return handler, opensearch, sqs
 
 
@@ -109,7 +103,6 @@ def test_live_handler_saves_indexes_refreshes_and_publishes(
         service_config,
         custom_logger,
         live_document(),
-        sentences,
     )
 
     result = handler.process(10)
@@ -117,6 +110,10 @@ def test_live_handler_saves_indexes_refreshes_and_publishes(
     assert result["indexed_count"] == 2
     assert handler.sentence_vector_db_store.calls == [
         [(1, sentences[0]), (2, sentences[1])]
+    ]
+    assert [needs_embedding for _, _, needs_embedding in opensearch.bulk_calls] == [
+        True,
+        False,
     ]
     assert opensearch.refresh_alias_calls == [["catalog-asylee", "occurrence"]]
     assert sqs.sent[0]["message_body"] == {
@@ -136,7 +133,6 @@ def test_live_handler_reports_no_content_without_indexing(
         service_config,
         custom_logger,
         live_document(" ¶  "),
-        [],
     )
 
     result = handler.process(10)
@@ -144,6 +140,34 @@ def test_live_handler_reports_no_content_without_indexing(
     assert result["reason"] == "no_content"
     assert opensearch.refresh_alias_calls == []
     assert sqs.sent[0]["message_body"]["success"] is False
+
+
+def test_live_handler_reuses_saved_keyed_rows(service_config, custom_logger):
+    document = live_document()
+    existing_row = SentencesVector(
+        global_id=20,
+        tsp_id=10,
+        sent_id_local=1,
+        sentence_content="Already saved sentence.",
+        source_type="affidavit",
+        sentence_key="a" * 64,
+        last_modified=datetime.now(UTC),
+        tsp=document,
+    )
+    handler, opensearch, sqs = build_handler(
+        service_config,
+        custom_logger,
+        document,
+    )
+    handler.sentence_vector_db_store = LiveSentenceStoreFake([existing_row])
+
+    result = handler.process(10)
+
+    assert result["indexed_count"] == 1
+    assert handler.document_db_store.calls == []
+    assert handler.sentence_vector_db_store.calls == []
+    assert opensearch.refresh_alias_calls == [["catalog-asylee", "occurrence"]]
+    assert sqs.sent[0]["message_body"]["success"] is True
 
 
 def test_message_without_reason_uses_live_handler(custom_logger):

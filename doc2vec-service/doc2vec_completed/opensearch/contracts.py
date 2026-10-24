@@ -107,7 +107,6 @@ class OccurrenceDocument(TypedDict):
     tspId: int
     sectionName: str
     sentIdLocal: int
-    sentenceContent: str
     sentenceKey: str
     sourceType: str
     analysisGroup: str

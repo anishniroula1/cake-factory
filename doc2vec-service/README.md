@@ -12,7 +12,7 @@ All OpenSearch flow code lives under `doc2vec_completed/opensearch`. All tests
 for this flow live under `tests/opensearch`.
 
 `dependencies.py` creates the configuration, database connection, OpenSearch
-store, SQS helper, and all four handlers. The SQS processor receives only this
+helper, SQS helper, and all four handlers. The SQS processor receives only this
 one dependency object.
 `doc2vec_completed.opensearch.main.run_opensearch_flow(custom_logger=...)` can
 still receive the team's logger, while `ta_utils/logger/CustomLogger.py`
@@ -81,7 +81,7 @@ are:
 SqsMessage -> TspId -> list[SentencesVector] -> HistoricalResult
 SqsMessage -> TspId -> list[SentencesVector] -> TrainModelResult
 SqsMessage -> list[tracer_sentence_ids] -> list[TracerSentence] -> TracerResult
-SqsMessage -> TextSimilarityInput -> list[SentencesVector] -> LiveResult
+SqsMessage -> TspId -> existing or new list[SentencesVector] -> LiveResult
 ```
 
 OpenSearch catalog and occurrence documents also have separate named types, so
@@ -102,10 +102,9 @@ Database access is separated under `db_store`:
 - `TracerSentenceDBStore` loads tracer reference rows by tracer ID.
 
 OpenSearch access is separated under `opensearch_store`.
-`OpenSearchDocumentStore` handles existing-ID lookups, bulk indexing, pipeline
-selection, vector validation, refreshes, and temporary embedding cooldowns.
-The same low-level store is shared because occurrence, catalog, training, and
-tracer ingestion all use the same bulk-write behavior.
+Each index has its own store, while `OpenSearchHelper` handles shared existing-ID
+lookups, bulk indexing, vector validation, refreshes, and temporary embedding
+cooldowns.
 
 Handlers now coordinate the processing steps only. They call the stores for
 database and OpenSearch work instead of containing SQL or low-level indexing
@@ -114,25 +113,34 @@ code.
 ## Live document flow
 
 1. Receive the existing live message containing `tsp_id` and no `reason`.
-2. Load the `text_similarity_input` row and its document text.
-3. Split the text with the same Syntok rules used by the old Doc2Vec flow. The
+2. Check `sentences_vector` first. If the document already has saved sentence
+   rows and every row has a `sentence_key`, reuse those rows and continue
+   directly with OpenSearch. This is the normal retry path after PostgreSQL was
+   completed earlier.
+3. When complete keyed rows are not available, load the `text_similarity_input`
+   row and its document text.
+4. Split the text with the same Syntok rules used by the old Doc2Vec flow. Trim
+   the sentence boundaries and remove empty values. The
    original text is saved; temporary tokenizer masks are never stored.
-4. Create `sent_id_local` values starting at 1 and create a stable SHA-256
+5. Create `sent_id_local` values starting at 1 and create a stable SHA-256
    `sentence_key` for every sentence.
-5. Save up to 1000 sentence rows per database commit. A retried message reuses
+6. Save up to 1000 sentence rows per database commit and keep the generated
+   `global_id` values. A retried message reuses
    `(tsp_id, sent_id_local)` rows instead of inserting the same sentence again.
-6. Split the saved rows into 30-sentence worker jobs and index them concurrently.
-7. Check the selected Asylee or Refugee catalog before creating a vector. Reuse
-   a saved Titan type-2 embedding when available; otherwise let the Bedrock
-   pipeline create the vector.
-8. Write every sentence to the occurrence index, including sentences with fewer
+7. Split the saved or reused rows into 30-sentence worker jobs and index them
+   concurrently.
+8. Check the selected Asylee or Refugee catalog by `sentence_key` before
+   creating a vector. Live processing does not read the embeddings table. Every
+   missing catalog key is sent through the Bedrock embedding pipeline.
+9. Write every sentence identity and location to the occurrence index by
+   `global_id`, including sentences with fewer
    than five words. Sentence Similarity applies that matching rule later.
    The catalog `wordCount` preserves Unicode words and counts a consecutive run
    of three or more identical words once. This prevents text such as
    `yes yes yes yes yes` from passing the five-word rule without reducing a
    normal sentence such as `The man said the man escaped`.
-9. Refresh the selected catalog and occurrence aliases once after all writes.
-10. Send the existing state-machine result and delete the source SQS message
+10. Refresh the selected catalog and occurrence aliases once after all writes.
+11. Send the existing state-machine result and delete the source SQS message
     only after the state-machine message is accepted.
 
 The successful state-machine message is:
@@ -274,8 +282,9 @@ default Bedrock pipeline creates a vector when the field is missing. A saved
 vector is sent with `pipeline=_none`, which avoids another Bedrock call. The
 same sentence key may correctly exist once in each catalog.
 
-The occurrence document stores identity, content, location, `analysisGroup`,
-and `isCurrent`. It does not store `isNonMatcher`, `isTracer`,
+The occurrence document stores identity, location, `analysisGroup`, and
+`isCurrent`. Sentence text stays in the selected catalog. The occurrence does
+not store `isNonMatcher`, `isTracer`,
 `isFormLanguage`, or `nonMatcherChecked`. Sentence Similarity stores the
 reusable classification on the selected group catalog and the occurrence-level
 classification in PostgreSQL.
@@ -312,5 +321,5 @@ Copy `generate_project.py` to another machine and run:
 python3 generate_project.py /path/to/parent-folder
 ```
 
-It creates `/path/to/parent-folder/doc2vec-completed` with all three handlers
+It creates `/path/to/parent-folder/doc2vec-completed` with all four handlers
 and a safe `.env` copied from `.env.example`.

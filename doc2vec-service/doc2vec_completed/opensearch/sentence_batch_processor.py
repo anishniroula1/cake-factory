@@ -1,5 +1,5 @@
 from doc2vec_completed.opensearch.config import Config
-from doc2vec_completed.opensearch.contracts import CatalogDocument, OccurrenceDocument
+from doc2vec_completed.opensearch.contracts import CatalogDocument
 from doc2vec_completed.opensearch.db_store import (
     EmbeddingDBStore,
     SentenceVectorDBStore,
@@ -33,8 +33,8 @@ class SentenceBatchProcessor:
             config,
             opensearch_helper,
         )
-        self.sentence_occurrence_open_search_store = (
-            SentenceOccurrenceOpenSearchStore(config, opensearch_helper)
+        self.sentence_occurrence_open_search_store = SentenceOccurrenceOpenSearchStore(
+            config, opensearch_helper
         )
         self.logger = custom_logger
 
@@ -71,7 +71,7 @@ class SentenceBatchProcessor:
             label,
         )
 
-        occurrences = self._occurrence_documents(rows)
+        occurrences = self.sentence_occurrence_open_search_store.build_documents(rows)
         retry_operation(
             f"Write occurrences for {label}",
             self.sentence_occurrence_open_search_store.index_occurrences,
@@ -166,36 +166,3 @@ class SentenceBatchProcessor:
             custom_logger=self.logger,
         )
         return len(existing_keys), len(with_vectors), len(need_vectors)
-
-    def _occurrence_documents(
-        self,
-        rows: list[SentencesVector],
-    ) -> list[OccurrenceDocument]:
-        """Build one occurrence document for every sentence row. Sentence fields
-        come from SentencesVector, while application fields come from its tsp row.
-
-        Input: rows=[SentencesVector(global_id=10, sentence_key="abc123", ...)]
-        Output: [{"_id": 10, "globalId": 10, "sentenceKey": "abc123", ...}]
-        """
-
-        document = rows[0].tsp
-        occurrences: list[OccurrenceDocument] = []
-        for row in rows:
-            occurrences.append(
-                {
-                    "_id": row.global_id,
-                    "globalId": row.global_id,
-                    "applicationId": document.application_id,
-                    "tspId": document.tsp_id,
-                    "sectionName": document.section_name,
-                    "sentIdLocal": row.sent_id_local,
-                    "sentenceContent": row.sentence_content,
-                    "sentenceKey": row.sentence_key,
-                    "sourceType": row.source_type,
-                    "analysisGroup": document.analysis_group,
-                    "isCurrent": document.is_current,
-                    "createdAt": row.last_modified.isoformat(),
-                    "updatedAt": row.last_modified.isoformat(),
-                }
-            )
-        return occurrences

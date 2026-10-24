@@ -71,8 +71,3 @@ class SentenceCatalogOpenSearchStore:
         """Validate one saved Titan vector before catalog indexing."""
 
         self.opensearch_helper.validate_vector(vector)
-
-    def refresh(self, alias: str) -> None:
-        """Make newly indexed catalog documents searchable."""
-
-        self.opensearch_helper.refresh_aliases([alias])

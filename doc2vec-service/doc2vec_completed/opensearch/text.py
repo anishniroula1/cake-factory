@@ -64,9 +64,7 @@ def sentence_word_count(value: str) -> int:
     for _, repeated_words in groupby(words):
         repeated_count = sum(1 for _ in repeated_words)
         adjusted_count += (
-            1
-            if repeated_count >= EXCESSIVE_REPEAT_MINIMUM
-            else repeated_count
+            1 if repeated_count >= EXCESSIVE_REPEAT_MINIMUM else repeated_count
         )
 
     return adjusted_count

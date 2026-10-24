@@ -1,6 +1,7 @@
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import OccurrenceDocument
 from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
+from ta_db_connection.atables import SentencesVector
 
 
 class SentenceOccurrenceOpenSearchStore:
@@ -27,7 +28,29 @@ class SentenceOccurrenceOpenSearchStore:
             needs_embedding=False,
         )
 
-    def refresh(self) -> None:
-        """Make newly indexed sentence occurrences searchable."""
+    @staticmethod
+    def build_documents(rows: list[SentencesVector]) -> list[OccurrenceDocument]:
+        """Build one occurrence document for every saved sentence row.
 
-        self.opensearch_helper.refresh_aliases([self.alias])
+        Sentence text stays in the catalog. The occurrence keeps only the
+        identity and location fields needed to find that catalog record.
+        """
+
+        document = rows[0].tsp
+        return [
+            {
+                "_id": row.global_id,
+                "globalId": row.global_id,
+                "applicationId": document.application_id,
+                "tspId": document.tsp_id,
+                "sectionName": document.section_name,
+                "sentIdLocal": row.sent_id_local,
+                "sentenceKey": row.sentence_key,
+                "sourceType": row.source_type,
+                "analysisGroup": document.analysis_group,
+                "isCurrent": document.is_current,
+                "createdAt": row.last_modified.isoformat(),
+                "updatedAt": row.last_modified.isoformat(),
+            }
+            for row in rows
+        ]

@@ -30,6 +30,43 @@ class SentenceVectorDBStore:
             )
             return int(session.scalar(statement) or 0)
 
+    def load_live_sentence_rows(self, tsp_id: TspId) -> list[SentencesVector]:
+        """Load saved live sentences and the document fields needed by OpenSearch.
+
+        Input: tsp_id=1040
+        Output: the saved SentencesVector rows ordered by sent_id_local.
+
+        The live handler uses these rows to resume after PostgreSQL finished but
+        OpenSearch or the next SQS send failed. The legacy embedding_list column
+        is not loaded because it is not needed for this check or indexing.
+        """
+
+        with self.session_factory() as session:
+            statement = (
+                select(SentencesVector)
+                .options(
+                    load_only(
+                        SentencesVector.global_id,
+                        SentencesVector.tsp_id,
+                        SentencesVector.sent_id_local,
+                        SentencesVector.sentence_content,
+                        SentencesVector.sentence_key,
+                        SentencesVector.source_type,
+                        SentencesVector.last_modified,
+                    ),
+                    joinedload(SentencesVector.tsp).load_only(
+                        TextSimilarityInput.tsp_id,
+                        TextSimilarityInput.application_id,
+                        TextSimilarityInput.section_name,
+                        TextSimilarityInput.analysis_group,
+                        TextSimilarityInput.is_current,
+                    ),
+                )
+                .where(SentencesVector.tsp_id == tsp_id)
+                .order_by(SentencesVector.sent_id_local)
+            )
+            return list(session.scalars(statement))
+
     def load_historical_sentence_page(
         self,
         tsp_id: TspId,
@@ -192,14 +229,7 @@ class SentenceVectorDBStore:
                         source_type=document.source_type.strip().lower(),
                         analysis_group=document.analysis_group,
                         is_current=document.is_current,
-                        embedding_list=[],
-                        is_non_matcher=False,
-                        closest_non_matcher=None,
-                        closest_nn_score=None,
-                        is_form_language=False,
-                        is_tracer=False,
                         last_modified=current_time,
-                        in_scope=True,
                         sentence_key=sentence_key(content),
                     )
                     new_rows.append(row)
