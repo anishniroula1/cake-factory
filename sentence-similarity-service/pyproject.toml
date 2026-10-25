@@ -44,6 +44,7 @@ split-on-trailing-comma = false
 skip-magic-trailing-comma = true
 
 [tool.ruff.lint.per-file-ignores]
+"ta_utils/aws/opensearch/OpenSearchClient.py" = ["N999"]
 "ta_utils/aws/sqs/AwsSQS.py" = ["N999"]
 "ta_utils/logger/CustomLogger.py" = ["N999"]
 "ta_utils/vault/VaultSecrets.py" = ["N999"]

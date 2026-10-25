@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from doc2vec_completed.opensearch.config import Config, read_integer
+from doc2vec_completed.opensearch.config import Config, _aws_hostname
 
 
 class VaultSecretsFake:
@@ -13,81 +13,75 @@ class VaultSecretsFake:
             "pgHost": "database-host",
             "pgDatabase": "database-name",
             "pgPort": "5432",
-            "awsReceiveSqsQueueEndpoint": ("https://sqs.example.com/doc2vec.fifo"),
-            "awsSqsSendEventQueueEndpoint": ("https://sqs.example.com/state.fifo"),
+            "awsReceiveSqsQueueEndpoint": "https://sqs.example.com/doc2vec.fifo",
+            "awsSqsSendEventQueueEndpoint": "https://sqs.example.com/state.fifo",
         }
 
     def get(self, name, default=None):
         return self.values.get(name, default)
 
 
-def test_config_reads_vault_and_environment_values(monkeypatch):
-    monkeypatch.setattr(
-        "doc2vec_completed.opensearch.config.VaultSecrets",
-        VaultSecretsFake,
-    )
-    monkeypatch.setenv("OPENSEARCH_HOST", "search.example.com")
-    monkeypatch.setenv(
-        "OPENSEARCH_ASYLEE_CATALOG_ALIAS",
-        "sentence_semantic_catalog_asylee",
-    )
-    monkeypatch.setenv(
-        "OPENSEARCH_REFUGEE_CATALOG_ALIAS",
-        "sentence_semantic_catalog_refugee",
-    )
+def required_environment(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    monkeypatch.setenv("OPENSEARCH_HOST", "https://search.example.com/")
+    monkeypatch.setenv("AWS_LOCAL_ENDPOINT_URL", "http://localhost:4566")
     monkeypatch.setenv(
         "SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL",
         "https://sqs.example.com/similarity.fifo",
     )
+    # Fixed service values come from constants, so old env values are ignored.
+    monkeypatch.setenv("OPENSEARCH_OCCURRENCE_ALIAS", "ignored-occurrence")
+    monkeypatch.setenv("AWS_SQS_VISIBILITY_TIMEOUT", "1")
+    monkeypatch.setattr(
+        "doc2vec_completed.opensearch.config.VaultSecrets",
+        VaultSecretsFake,
+    )
+
+
+def test_config_reads_only_vault_and_environment_values(monkeypatch):
+    required_environment(monkeypatch)
 
     config = Config.from_environment()
 
-    assert config.pg_db_user == "user"
-    assert config.pg_db_password == "password"
-    assert config.pg_db_host == "database-host"
-    assert config.pg_db_database == "database-name"
-    assert config.pg_db_port == 5432
-    assert config.doc2vec_queue_url.endswith("doc2vec.fifo")
-    assert config.state_machine_queue_url.endswith("state.fifo")
-    assert config.sentence_similarity_backfill_queue_url.endswith("similarity.fifo")
-    assert config.thread_worker_count == 100
-    assert config.worker_batch_size == 30
-    assert config.opensearch_bulk_retry_count == 15
-    assert config.vector_dimension == 512
-    assert config.asylee_catalog_alias == "sentence_semantic_catalog_asylee"
-    assert config.refugee_catalog_alias == "sentence_semantic_catalog_refugee"
-    assert config.training_alias == "sentence_semantic_training"
-    assert config.tracer_alias == "tracer_form_language_catalog"
-    assert config.train_model_worker_count == 16
+    assert (
+        config.environment,
+        config.opensearch_host,
+        config.aws_local_endpoint_url,
+        config.doc2vec_queue_url,
+        config.sentence_similarity_backfill_queue_url,
+        config.state_machine_queue_url,
+    ) == (
+        "local",
+        "search.example.com",
+        "http://localhost:4566",
+        "https://sqs.example.com/doc2vec.fifo",
+        "https://sqs.example.com/similarity.fifo",
+        "https://sqs.example.com/state.fifo",
+    )
 
-    with pytest.raises(ValueError):
-        replace(config, thread_worker_count=101).validate()
-    with pytest.raises(ValueError):
-        replace(config, vector_dimension=1024).validate()
-    with pytest.raises(ValueError):
-        replace(config, sqs_wait_seconds=21).validate()
-    with pytest.raises(ValueError):
-        replace(config, opensearch_host="").validate()
-    with pytest.raises(ValueError):
-        replace(config, doc2vec_queue_url="").validate()
-    with pytest.raises(ValueError):
-        replace(config, state_machine_queue_url=None).validate()
-    with pytest.raises(ValueError):
-        replace(config, asylee_catalog_alias="").validate()
-    with pytest.raises(ValueError):
-        replace(config, refugee_catalog_alias="").validate()
-    with pytest.raises(ValueError):
-        replace(config, training_alias="").validate()
-    with pytest.raises(ValueError):
-        replace(config, tracer_alias="").validate()
-    with pytest.raises(ValueError):
-        replace(config, train_model_worker_count=101).validate()
+    invalid_values = [
+        replace(config, pg_db_user=""),
+        replace(config, pg_db_password=""),
+        replace(config, pg_db_host=""),
+        replace(config, pg_db_database=""),
+        replace(config, pg_db_port=0),
+        replace(config, environment="int", dynamic_credential_file=""),
+        replace(config, opensearch_iam_access_role="not-an-arn"),
+        replace(config, opensearch_host=""),
+        replace(config, doc2vec_queue_url=""),
+        replace(config, state_machine_queue_url=None),
+    ]
+    for invalid in invalid_values:
+        with pytest.raises(ValueError):
+            invalid.validate()
 
 
-def test_environment_integer_reader_rejects_bad_values(monkeypatch):
-    monkeypatch.setenv("NUMBER", "word")
+def test_opensearch_host_accepts_https_or_a_bare_hostname():
+    assert [_aws_hostname(value) for value in ("https://search.example.com/", "search.example.com", "")] == [
+        "search.example.com",
+        "search.example.com",
+        "",
+    ]
+
     with pytest.raises(ValueError):
-        read_integer("NUMBER", 1)
-    monkeypatch.setenv("NUMBER", "0")
-    with pytest.raises(ValueError):
-        read_integer("NUMBER", 1)
+        _aws_hostname("http://search.example.com")

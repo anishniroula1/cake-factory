@@ -4,6 +4,7 @@ from time import perf_counter
 
 from sqlalchemy.orm import Session
 
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import (
@@ -57,7 +58,7 @@ class TrainModelHandler:
             "Count model-training sentences",
             self.sentence_vector_db_store.count_training_sentences_by_tsp_id,
             tsp_id,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         if total == 0:
@@ -74,7 +75,7 @@ class TrainModelHandler:
         page_number = 0
 
         with ThreadPoolExecutor(
-            max_workers=self.config.train_model_worker_count,
+            max_workers=constants.TRAIN_MODEL_WORKER_COUNT,
             thread_name_prefix="training",
         ) as executor:
             while True:
@@ -84,8 +85,8 @@ class TrainModelHandler:
                     self.sentence_vector_db_store.load_training_sentence_page,
                     tsp_id,
                     after_global_id,
-                    self.config.opensearch_batch_size,
-                    wait_seconds=self.config.retry_seconds,
+                    constants.OPENSEARCH_BATCH_SIZE,
+                    wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
                 if not rows:
@@ -98,8 +99,8 @@ class TrainModelHandler:
                     f"Load saved vectors for model-training page {page_number}",
                     self.embedding_db_store.load_titan_embeddings_by_global_ids,
                     [row.global_id for row in eligible_rows],
-                    self.config.titan_embedding_type,
-                    wait_seconds=self.config.retry_seconds,
+                    constants.TITAN_EMBEDDING_TYPE,
+                    wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
                 documents = self._prepare_unique_documents(
@@ -107,7 +108,7 @@ class TrainModelHandler:
                     embeddings,
                     seen_keys,
                 )
-                worker_batches = list(batches(documents, self.config.worker_batch_size))
+                worker_batches = list(batches(documents, constants.WORKER_BATCH_SIZE))
                 self.logger.info(
                     f"Processing model-training page {page_number} with "
                     f"{len(eligible_rows)} eligible sentence(s), "
@@ -124,7 +125,7 @@ class TrainModelHandler:
             retry_operation(
                 "Refresh the model-training index",
                 self.training_open_search_store.refresh,
-                wait_seconds=self.config.retry_seconds,
+                wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
         self.logger.info(
@@ -211,7 +212,7 @@ class TrainModelHandler:
             f"Check existing {batch_label}",
             self.training_open_search_store.find_existing_sentence_keys,
             keys,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         new_documents = [
@@ -233,16 +234,16 @@ class TrainModelHandler:
             f"Write saved vectors for {batch_label}",
             self.training_open_search_store.index_saved_vectors,
             saved_vectors,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
             custom_logger=self.logger,
         )
         retry_operation(
             f"Create Bedrock vectors for {batch_label}",
             self.training_open_search_store.index_with_bedrock,
             bedrock_vectors,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
             custom_logger=self.logger,
         )
         return len(new_documents)

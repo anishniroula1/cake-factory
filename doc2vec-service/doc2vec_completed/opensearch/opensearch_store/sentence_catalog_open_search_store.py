@@ -1,3 +1,4 @@
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import CatalogDocument
 from doc2vec_completed.opensearch.errors import PermanentDataError
@@ -24,9 +25,9 @@ class SentenceCatalogOpenSearchStore:
 
         normalized_group = analysis_group.strip().casefold()
         if normalized_group == "asylee":
-            return self.config.asylee_catalog_alias
+            return constants.ASYLEE_CATALOG_ALIAS
         if normalized_group == "refugee":
-            return self.config.refugee_catalog_alias
+            return constants.REFUGEE_CATALOG_ALIAS
         raise PermanentDataError(f"unsupported analysis_group {analysis_group!r}")
 
     def find_existing_sentence_keys(

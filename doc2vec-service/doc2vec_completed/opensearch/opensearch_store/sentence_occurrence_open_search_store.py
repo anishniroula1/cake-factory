@@ -1,3 +1,4 @@
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import OccurrenceDocument
 from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
@@ -12,7 +13,7 @@ class SentenceOccurrenceOpenSearchStore:
         config: Config,
         opensearch_helper: OpenSearchHelper,
     ) -> None:
-        self.alias = config.occurrence_alias
+        self.alias = constants.SENTENCE_OCCURRENCE_ALIAS
         self.opensearch_helper = opensearch_helper
 
     def index_occurrences(self, documents: list[OccurrenceDocument]) -> int:

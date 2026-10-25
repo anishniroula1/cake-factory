@@ -1,11 +1,8 @@
 from dataclasses import replace
-from datetime import UTC, datetime
 
 import pytest
-from botocore.exceptions import NoCredentialsError
 
 from similarity_completed.opensearch.config import Config, _aws_hostname
-from similarity_completed.opensearch.open_search_client import OpenSearchClient
 
 
 class Secrets:
@@ -18,36 +15,6 @@ class Secrets:
             "pgPort": 5432,
         }
         return values.get(name, default)
-
-
-class ActiveCredentialsSession:
-    def __init__(self, credentials):
-        self.credentials = credentials
-
-    def get_credentials(self):
-        return self.credentials
-
-
-class AssumeRoleStsClient:
-    def assume_role(self, **values):
-        return {
-            "Credentials": {
-                "AccessKeyId": "key",
-                "SecretAccessKey": "secret",
-                "SessionToken": "token",
-                "Expiration": datetime(2030, 1, 1, tzinfo=UTC),
-            }
-        }
-
-
-class BaseRoleSession:
-    def client(self, name):
-        return AssumeRoleStsClient()
-
-
-class MissingCredentialsSession:
-    def get_credentials(self):
-        return None
 
 
 def required_environment(monkeypatch):
@@ -100,46 +67,3 @@ def test_opensearch_host_accepts_https_or_a_bare_hostname():
 
     with pytest.raises(ValueError):
         _aws_hostname("http://search.example.com")
-
-
-def test_opensearch_client_uses_active_aws_credentials(monkeypatch, service_config):
-    credentials = object()
-
-    captured = {}
-    monkeypatch.setattr(
-        "similarity_completed.opensearch.open_search_client.boto3.Session",
-        lambda **values: ActiveCredentialsSession(credentials),
-    )
-    monkeypatch.setattr("similarity_completed.opensearch.open_search_client.AWSV4SignerAuth", lambda *values: "auth")
-    monkeypatch.setattr(
-        "similarity_completed.opensearch.open_search_client.OpenSearch",
-        lambda **values: captured.update(values) or "client",
-    )
-
-    assert (OpenSearchClient(service_config).create_client(), captured["pool_maxsize"], captured["max_retries"]) == (
-        "client",
-        1,
-        5,
-    )
-
-
-def test_opensearch_client_can_assume_role(monkeypatch, service_config):
-    service_config = replace(service_config, opensearch_iam_access_role="arn:aws:iam::1:role/opensearch")
-
-    assumed_session = object()
-
-    def session_factory(**values):
-        if "botocore_session" in values:
-            return assumed_session
-        return BaseRoleSession()
-
-    monkeypatch.setattr("similarity_completed.opensearch.open_search_client.boto3.Session", session_factory)
-    assert OpenSearchClient(service_config)._session() is assumed_session
-
-
-def test_opensearch_client_requires_credentials(monkeypatch, service_config):
-    monkeypatch.setattr(
-        "similarity_completed.opensearch.open_search_client.boto3.Session", lambda **values: MissingCredentialsSession()
-    )
-    with pytest.raises(NoCredentialsError):
-        OpenSearchClient(service_config).create_client()

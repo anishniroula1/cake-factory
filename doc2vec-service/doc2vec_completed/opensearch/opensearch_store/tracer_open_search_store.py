@@ -1,3 +1,4 @@
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import TracerDocument
 from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
@@ -11,7 +12,7 @@ class TracerOpenSearchStore:
         config: Config,
         opensearch_helper: OpenSearchHelper,
     ) -> None:
-        self.alias = config.tracer_alias
+        self.alias = constants.TRACER_ALIAS
         self.opensearch_helper = opensearch_helper
 
     def index_saved_vectors(self, documents: list[TracerDocument]) -> int:

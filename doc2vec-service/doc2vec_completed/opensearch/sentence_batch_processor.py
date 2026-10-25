@@ -1,3 +1,4 @@
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import CatalogDocument
 from doc2vec_completed.opensearch.db_store import (
@@ -50,7 +51,7 @@ class SentenceBatchProcessor:
             f"Save sentence keys for {label}",
             self.sentence_vector_db_store.save_missing_sentence_keys,
             rows,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
 
@@ -60,8 +61,8 @@ class SentenceBatchProcessor:
             f"Load saved embeddings for {label}",
             self.embedding_db_store.load_titan_embeddings_by_global_ids,
             [row.global_id for row in rows],
-            self.config.titan_embedding_type,
-            wait_seconds=self.config.retry_seconds,
+            constants.TITAN_EMBEDDING_TYPE,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         existing_count, saved_vector_count, bedrock_count = self._index_catalog_rows(
@@ -76,8 +77,8 @@ class SentenceBatchProcessor:
             f"Write occurrences for {label}",
             self.sentence_occurrence_open_search_store.index_occurrences,
             occurrences,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
             custom_logger=self.logger,
         )
         self.logger.info(
@@ -120,7 +121,7 @@ class SentenceBatchProcessor:
             self.sentence_catalog_open_search_store.find_existing_sentence_keys,
             catalog_alias,
             [row.sentence_key for row in rows],
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         with_vectors: list[CatalogDocument] = []
@@ -152,8 +153,8 @@ class SentenceBatchProcessor:
             self.sentence_catalog_open_search_store.index_saved_vectors,
             catalog_alias,
             with_vectors,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
             custom_logger=self.logger,
         )
         retry_operation(
@@ -161,8 +162,8 @@ class SentenceBatchProcessor:
             self.sentence_catalog_open_search_store.index_with_bedrock,
             catalog_alias,
             need_vectors,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
             custom_logger=self.logger,
         )
         return len(existing_keys), len(with_vectors), len(need_vectors)

@@ -4,6 +4,7 @@ from time import perf_counter
 
 from sqlalchemy.orm import Session
 
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import (
@@ -72,7 +73,7 @@ class LiveHandler:
             "Check for saved live sentences",
             self.sentence_vector_db_store.load_live_sentence_rows,
             tsp_id,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
 
@@ -87,7 +88,7 @@ class LiveHandler:
                 "Load the incoming document",
                 self.document_db_store.load_document,
                 tsp_id,
-                wait_seconds=self.config.retry_seconds,
+                wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
             if document is None:
@@ -104,7 +105,7 @@ class LiveHandler:
                     tsp_id,
                     False,
                     "no_content",
-                    wait_seconds=self.config.retry_seconds,
+                    wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
                 self.logger.info("The document has no sentence content to index.")
@@ -126,8 +127,8 @@ class LiveHandler:
         retry_operation(
             "Refresh indexed live sentences",
             self.opensearch_helper.refresh_aliases,
-            [catalog_alias, self.config.occurrence_alias],
-            wait_seconds=self.config.retry_seconds,
+            [catalog_alias, constants.SENTENCE_OCCURRENCE_ALIAS],
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         retry_operation(
@@ -136,7 +137,7 @@ class LiveHandler:
             tsp_id,
             True,
             "",
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         self.logger.info(
@@ -182,7 +183,7 @@ class LiveHandler:
         numbered_sentences = list(enumerate(sentences, start=1))
         saved_rows: list[SentencesVector] = []
         for batch_number, sentence_batch in enumerate(
-            batches(numbered_sentences, self.config.live_database_batch_size),
+            batches(numbered_sentences, constants.LIVE_DATABASE_BATCH_SIZE),
             start=1,
         ):
             rows = retry_operation(
@@ -190,7 +191,7 @@ class LiveHandler:
                 self.sentence_vector_db_store.save_live_sentence_batch,
                 document,
                 sentence_batch,
-                wait_seconds=self.config.retry_seconds,
+                wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
             saved_rows.extend(rows)
@@ -207,13 +208,13 @@ class LiveHandler:
         Output: 65 after three worker batches finish.
         """
 
-        worker_batches = list(batches(rows, self.config.worker_batch_size))
+        worker_batches = list(batches(rows, constants.WORKER_BATCH_SIZE))
         self.logger.info(
             f"Indexing {len(rows)} live sentence(s) in "
             f"{len(worker_batches)} worker batch(es)."
         )
         with ThreadPoolExecutor(
-            max_workers=self.config.thread_worker_count,
+            max_workers=constants.THREAD_WORKER_COUNT,
             thread_name_prefix="live-sentence",
         ) as executor:
             return sum(executor.map(self._run_worker, worker_batches))
@@ -240,7 +241,7 @@ class LiveHandler:
             self.sentence_catalog_open_search_store.find_existing_sentence_keys,
             catalog_alias,
             sentence_keys,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         catalog_documents = self._missing_catalog_documents(rows, existing_keys)
@@ -249,8 +250,8 @@ class LiveHandler:
             self.sentence_catalog_open_search_store.index_with_bedrock,
             catalog_alias,
             catalog_documents,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
             custom_logger=self.logger,
         )
 
@@ -261,8 +262,8 @@ class LiveHandler:
             f"Write occurrences for {label}",
             self.sentence_occurrence_open_search_store.index_occurrences,
             occurrence_documents,
-            wait_seconds=self.config.retry_seconds,
-            max_attempts=self.config.opensearch_bulk_retry_count + 1,
+            wait_seconds=constants.RETRY_SECONDS,
+            max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
             custom_logger=self.logger,
         )
         self.logger.info(

@@ -4,6 +4,7 @@ from time import perf_counter
 
 from sqlalchemy.orm import Session
 
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import (
@@ -70,7 +71,7 @@ class HistoricalHandler:
             "Count document sentences",
             self.sentence_vector_db_store.count_sentences_by_tsp_id,
             tsp_id,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         if total == 0:
@@ -86,7 +87,7 @@ class HistoricalHandler:
         catalog_alias: str | None = None
 
         with ThreadPoolExecutor(
-            max_workers=self.config.thread_worker_count,
+            max_workers=constants.THREAD_WORKER_COUNT,
             thread_name_prefix="sentence",
         ) as executor:
             while True:
@@ -96,8 +97,8 @@ class HistoricalHandler:
                     self.sentence_vector_db_store.load_historical_sentence_page,
                     tsp_id,
                     after_global_id,
-                    self.config.worker_batch_size * self.config.thread_worker_count,
-                    wait_seconds=self.config.retry_seconds,
+                    constants.WORKER_BATCH_SIZE * constants.THREAD_WORKER_COUNT,
+                    wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
                 if not rows:
@@ -110,7 +111,7 @@ class HistoricalHandler:
 
                 # Example: 3,000 rows become 100 jobs with 30 rows in each job.
                 # The workers can run those small jobs at the same time.
-                worker_batches = list(batches(rows, self.config.worker_batch_size))
+                worker_batches = list(batches(rows, constants.WORKER_BATCH_SIZE))
                 self.logger.info(
                     f"Processing sentence page {page_number} with {len(rows)} "
                     f"sentence(s) in {len(worker_batches)} worker batch(es); "
@@ -137,8 +138,8 @@ class HistoricalHandler:
         retry_operation(
             "Refresh indexed sentences",
             self.opensearch_helper.refresh_aliases,
-            [catalog_alias, self.config.occurrence_alias],
-            wait_seconds=self.config.retry_seconds,
+            [catalog_alias, constants.SENTENCE_OCCURRENCE_ALIAS],
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
 
@@ -147,7 +148,7 @@ class HistoricalHandler:
             "Send the completed document message",
             self._publish,
             tsp_id,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         self.logger.info(

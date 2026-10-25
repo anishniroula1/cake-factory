@@ -3,8 +3,8 @@ from sqlalchemy.orm import sessionmaker
 from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.handlers.sentence_similarity_handler import SentenceSimilarityHandler
-from similarity_completed.opensearch.open_search_client import OpenSearchClient
 from ta_db_connection.database_connection import DatabaseConnection
+from ta_utils.aws.opensearch.OpenSearchClient import OpenSearchClient
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -20,7 +20,15 @@ class Dependencies:
         self.database = database_connection or self._create_database_connection()
         self.session_factory = sessionmaker(bind=self.database.engine, autoflush=False, expire_on_commit=False)
 
-        self.opensearch_client = OpenSearchClient(self.config).create_client()
+        self.opensearch_client = OpenSearchClient(
+            opensearch_host=self.config.opensearch_host,
+            opensearch_iam_access_role=self.config.opensearch_iam_access_role,
+            aws_region=self.config.aws_region,
+            opensearch_port=constants.OPENSEARCH_PORT,
+            opensearch_service=constants.OPENSEARCH_SERVICE,
+            pool_maxsize=constants.THREAD_WORKER_COUNT,
+            role_session_name="sentenceSimilarity",
+        ).create_client()
         self.aws_sqs = AwsSQS(
             queue_url=self.config.receive_sqs_endpoint,
             aws_region=self.config.aws_region,

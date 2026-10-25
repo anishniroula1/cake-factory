@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from doc2vec_completed.opensearch import constants
 from ta_db_connection.atables import SentencesVector, TextSimilarityInput
 from tests.opensearch.fakes import LoggerFake
 
@@ -17,66 +18,43 @@ def dependency_config():
         pg_db_host="database-host",
         pg_db_database="database-name",
         pg_db_port=5432,
-        database_pool_size=20,
-        database_max_overflow=10,
         dynamic_credential_file="",
         environment="local",
         aws_region="us-east-1",
-        aws_endpoint_url="",
+        aws_local_endpoint_url="",
         opensearch_host="search.example.com",
-        opensearch_port=443,
-        opensearch_service="es",
         opensearch_iam_access_role="",
-        opensearch_batch_size=1000,
-        opensearch_bulk_retry_count=15,
-        occurrence_alias="sentence_occurrences",
-        asylee_catalog_alias="sentence_semantic_catalog_asylee",
-        refugee_catalog_alias="sentence_semantic_catalog_refugee",
-        training_alias="sentence_semantic_training",
-        tracer_alias="tracer_form_language_catalog",
-        vector_dimension=512,
         doc2vec_queue_url="https://sqs.example.com/doc2vec.fifo",
-        sqs_wait_seconds=10,
-        sqs_visibility_seconds=7200,
-        retry_seconds=5,
         sentence_similarity_backfill_queue_url=(
             "https://sqs.example.com/similarity.fifo"
         ),
         state_machine_queue_url="https://sqs.example.com/state.fifo",
-        live_database_batch_size=1000,
-        worker_batch_size=30,
-        thread_worker_count=100,
-        train_model_worker_count=16,
-        titan_embedding_type=2,
     )
 
 
 @pytest.fixture
-def service_config():
+def service_config(monkeypatch):
+    monkeypatch.setattr(constants, "OPENSEARCH_BATCH_SIZE", 1000)
+    monkeypatch.setattr(constants, "OPENSEARCH_BULK_RETRY_COUNT", 15)
+    monkeypatch.setattr(constants, "WORKER_BATCH_SIZE", 30)
+    monkeypatch.setattr(constants, "THREAD_WORKER_COUNT", 2)
+    monkeypatch.setattr(constants, "TRAIN_MODEL_WORKER_COUNT", 2)
+    monkeypatch.setattr(constants, "RETRY_SECONDS", 1)
+    monkeypatch.setattr(constants, "VECTOR_DIMENSION", 2)
+    monkeypatch.setattr(constants, "TITAN_EMBEDDING_TYPE", 2)
+    monkeypatch.setattr(constants, "ASYLEE_CATALOG_ALIAS", "catalog-asylee")
+    monkeypatch.setattr(constants, "REFUGEE_CATALOG_ALIAS", "catalog-refugee")
+    monkeypatch.setattr(constants, "TRAINING_ALIAS", "training")
+    monkeypatch.setattr(constants, "TRACER_ALIAS", "tracer")
+    monkeypatch.setattr(constants, "SENTENCE_OCCURRENCE_ALIAS", "occurrence")
     return SimpleNamespace(
-        opensearch_batch_size=1000,
-        opensearch_bulk_retry_count=15,
-        worker_batch_size=30,
-        thread_worker_count=2,
-        train_model_worker_count=2,
-        retry_seconds=1,
-        vector_dimension=2,
-        titan_embedding_type=2,
-        asylee_catalog_alias="catalog-asylee",
-        refugee_catalog_alias="catalog-refugee",
-        training_alias="training",
-        tracer_alias="tracer",
-        occurrence_alias="occurrence",
         sentence_similarity_backfill_queue_url=(
             "https://sqs.us-east-1.amazonaws.com/1/next.fifo"
         ),
         state_machine_queue_url=(
             "https://sqs.us-east-1.amazonaws.com/1/state-machine.fifo"
         ),
-        live_database_batch_size=1000,
         doc2vec_queue_url="https://sqs.us-east-1.amazonaws.com/1/source.fifo",
-        sqs_wait_seconds=1,
-        sqs_visibility_seconds=7200,
     )
 
 

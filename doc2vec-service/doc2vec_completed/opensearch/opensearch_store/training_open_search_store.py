@@ -1,3 +1,4 @@
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import TrainingDocument
 from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
@@ -11,7 +12,7 @@ class TrainingOpenSearchStore:
         config: Config,
         opensearch_helper: OpenSearchHelper,
     ) -> None:
-        self.alias = config.training_alias
+        self.alias = constants.TRAINING_ALIAS
         self.opensearch_helper = opensearch_helper
 
     def find_existing_sentence_keys(self, sentence_keys: list[str]) -> set[str]:

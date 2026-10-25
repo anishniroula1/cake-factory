@@ -3,6 +3,7 @@ import time
 
 from opensearchpy import OpenSearch, OpenSearchException, TransportError, helpers
 
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import OpenSearchDocument
 from doc2vec_completed.opensearch.errors import PermanentDataError
@@ -43,8 +44,8 @@ class OpenSearchHelper:
         if not unique_ids:
             return existing
 
-        for offset in range(0, len(unique_ids), self.config.opensearch_batch_size):
-            batch = unique_ids[offset : offset + self.config.opensearch_batch_size]
+        for offset in range(0, len(unique_ids), constants.OPENSEARCH_BATCH_SIZE):
+            batch = unique_ids[offset : offset + constants.OPENSEARCH_BATCH_SIZE]
             try:
                 response = self.client.mget(
                     index=alias,
@@ -98,7 +99,7 @@ class OpenSearchHelper:
             for document in documents
         ]
         bulk_arguments = {
-            "chunk_size": self.config.opensearch_batch_size,
+            "chunk_size": constants.OPENSEARCH_BATCH_SIZE,
             "raise_on_error": False,
             "raise_on_exception": True,
         }
@@ -135,10 +136,10 @@ class OpenSearchHelper:
             PermanentDataError: If the vector length differs from 512.
         """
 
-        if len(vector) != self.config.vector_dimension:
+        if len(vector) != constants.VECTOR_DIMENSION:
             raise PermanentDataError(
                 f"embedding has {len(vector)} values; expected "
-                f"{self.config.vector_dimension}"
+                f"{constants.VECTOR_DIMENSION}"
             )
 
     def refresh_aliases(self, aliases: list[str]) -> None:
@@ -190,7 +191,7 @@ class OpenSearchHelper:
         with self.cooldown_lock:
             self.embedding_cooldown_until = max(
                 self.embedding_cooldown_until,
-                time.monotonic() + self.config.retry_seconds,
+                time.monotonic() + constants.RETRY_SECONDS,
             )
 
     def _wait_for_embedding_cooldown(self) -> None:

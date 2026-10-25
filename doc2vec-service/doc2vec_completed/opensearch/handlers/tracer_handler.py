@@ -6,6 +6,7 @@ from time import perf_counter
 
 from sqlalchemy.orm import Session
 
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import TracerDocument, TracerResult
@@ -53,12 +54,12 @@ class TracerHandler:
 
         indexed_count = 0
         loaded_ids: set[int] = set()
-        for id_batch in batches(unique_ids, self.config.opensearch_batch_size):
+        for id_batch in batches(unique_ids, constants.OPENSEARCH_BATCH_SIZE):
             rows = retry_operation(
                 "Load tracer sentence batch",
                 self.tracer_sentence_db_store.load_tracer_sentences_by_ids,
                 id_batch,
-                wait_seconds=self.config.retry_seconds,
+                wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
             loaded_ids.update(row.tracer_sentence_id for row in rows)
@@ -77,16 +78,16 @@ class TracerHandler:
                 "Write tracer references with saved vectors",
                 self.tracer_open_search_store.index_saved_vectors,
                 saved_vectors,
-                wait_seconds=self.config.retry_seconds,
-                max_attempts=self.config.opensearch_bulk_retry_count + 1,
+                wait_seconds=constants.RETRY_SECONDS,
+                max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
                 custom_logger=self.logger,
             )
             indexed_count += retry_operation(
                 "Create Bedrock vectors for tracer references",
                 self.tracer_open_search_store.index_with_bedrock,
                 bedrock_vectors,
-                wait_seconds=self.config.retry_seconds,
-                max_attempts=self.config.opensearch_bulk_retry_count + 1,
+                wait_seconds=constants.RETRY_SECONDS,
+                max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
                 custom_logger=self.logger,
             )
 
@@ -99,7 +100,7 @@ class TracerHandler:
         retry_operation(
             "Refresh the tracer catalog",
             self.tracer_open_search_store.refresh,
-            wait_seconds=self.config.retry_seconds,
+            wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
         self.logger.info(
@@ -171,7 +172,7 @@ class TracerHandler:
 
         for type_code in ("f", "d"):
             item_size = array(type_code).itemsize
-            if len(value) != self.config.vector_dimension * item_size:
+            if len(value) != constants.VECTOR_DIMENSION * item_size:
                 continue
             decoded = array(type_code)
             decoded.frombytes(value)

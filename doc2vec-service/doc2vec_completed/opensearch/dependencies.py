@@ -1,13 +1,14 @@
 from sqlalchemy.orm import sessionmaker
 
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.handlers.historical_handler import HistoricalHandler
 from doc2vec_completed.opensearch.handlers.live_handler import LiveHandler
 from doc2vec_completed.opensearch.handlers.tracer_handler import TracerHandler
 from doc2vec_completed.opensearch.handlers.train_model_handler import TrainModelHandler
-from doc2vec_completed.opensearch.open_search_client import OpenSearchClient
 from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
 from ta_db_connection.database_connection import DatabaseConnection
+from ta_utils.aws.opensearch.OpenSearchClient import OpenSearchClient
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -29,7 +30,15 @@ class Dependencies:
             expire_on_commit=False,
         )
 
-        opensearch_client = OpenSearchClient(self.config).create_client()
+        opensearch_client = OpenSearchClient(
+            opensearch_host=self.config.opensearch_host,
+            opensearch_iam_access_role=self.config.opensearch_iam_access_role,
+            aws_region=self.config.aws_region,
+            opensearch_port=constants.OPENSEARCH_PORT,
+            opensearch_service=constants.OPENSEARCH_SERVICE,
+            pool_maxsize=20,
+            role_session_name="doc2vecSentenceIngestion",
+        ).create_client()
         self.opensearch_helper = OpenSearchHelper(
             self.config,
             opensearch_client,
@@ -38,12 +47,12 @@ class Dependencies:
         self.aws_sqs = AwsSQS(
             queue_url=self.config.doc2vec_queue_url,
             aws_region=self.config.aws_region,
-            aws_endpoint_url=self.config.aws_endpoint_url or None,
+            aws_endpoint_url=self.config.aws_local_endpoint_url or None,
             max_number_of_messages=1,
-            wait_time=self.config.sqs_wait_seconds,
+            wait_time=constants.SQS_WAIT_SECONDS,
             logger=self.logger,
-            visibility_timeout=self.config.sqs_visibility_seconds,
-            retry_wait_seconds=self.config.retry_seconds,
+            visibility_timeout=constants.SQS_VISIBILITY_SECONDS,
+            retry_wait_seconds=constants.RETRY_SECONDS,
         )
         self.live_handler = LiveHandler(
             self.config,
@@ -94,8 +103,8 @@ class Dependencies:
             pg_db_host=self.config.pg_db_host,
             pg_db_database=self.config.pg_db_database,
             pg_db_port=self.config.pg_db_port,
-            pool_size=self.config.database_pool_size,
-            max_overflow=self.config.database_max_overflow,
+            pool_size=constants.DATABASE_POOL_SIZE,
+            max_overflow=constants.DATABASE_MAX_OVERFLOW,
             application_name="doc2vec_opensearch",
             **credential_arguments,
         )

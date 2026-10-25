@@ -51,8 +51,8 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     )
 
     class OpenSearchClientFake:
-        def __init__(self, received_config):
-            assert received_config is config
+        def __init__(self, **arguments):
+            captured["opensearch_client"] = arguments
 
         def create_client(self):
             return opensearch_client
@@ -137,6 +137,15 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
         "bind": engine,
         "autoflush": False,
         "expire_on_commit": False,
+    }
+    assert captured["opensearch_client"] == {
+        "opensearch_host": "search.example.com",
+        "opensearch_iam_access_role": "",
+        "aws_region": "us-east-1",
+        "opensearch_port": 443,
+        "opensearch_service": "es",
+        "pool_maxsize": 20,
+        "role_session_name": "doc2vecSentenceIngestion",
     }
     assert captured["sqs"]["queue_url"].endswith("doc2vec.fifo")
     assert captured["handler"] == (

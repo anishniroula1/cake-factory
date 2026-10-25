@@ -35,6 +35,8 @@ class Dependencies:
             opensearch_host=self.config.opensearch_host,
             opensearch_iam_access_role=self.config.opensearch_iam_access_role,
             aws_region=self.config.aws_region,
+            opensearch_port=constants.OPENSEARCH_PORT,
+            opensearch_service=constants.OPENSEARCH_SERVICE,
         ).create_client()
         self.aws_sqs = AwsSQS(
             queue_url=self.config.receive_sqs_endpoint,

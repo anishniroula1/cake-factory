@@ -16,12 +16,16 @@ class OpenSearchClient:
         aws_region: str = "us-east-1",
         opensearch_port: int = 443,
         opensearch_service: str = "es",
+        pool_maxsize: int = 10,
+        role_session_name: str = "openSearchClient",
     ) -> None:
         self.aws_region = aws_region
         self.opensearch_host = opensearch_host
         self.opensearch_port = opensearch_port
         self.opensearch_service = opensearch_service
         self.opensearch_iam_access_role = opensearch_iam_access_role
+        self.pool_maxsize = pool_maxsize
+        self.role_session_name = role_session_name
 
     def create_client(self) -> OpenSearch:
         """Create a pooled client that automatically refreshes an assumed-role token."""
@@ -39,7 +43,7 @@ class OpenSearchClient:
             ssl_assert_hostname=True,
             ssl_show_warn=False,
             connection_class=RequestsHttpConnection,
-            pool_maxsize=10,
+            pool_maxsize=self.pool_maxsize,
             timeout=60,
             max_retries=5,
             retry_on_timeout=True,
@@ -72,7 +76,7 @@ class OpenSearchClient:
 
         response = sts_client.assume_role(
             RoleArn=self.opensearch_iam_access_role,
-            RoleSessionName="documentDeletion",
+            RoleSessionName=self.role_session_name,
         )
         credentials = response["Credentials"]
         return {
