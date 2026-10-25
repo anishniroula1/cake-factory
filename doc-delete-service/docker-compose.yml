@@ -1,0 +1,25 @@
+services:
+  localstack:
+    image: localstack/localstack:3.8
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init.sh:ro
+    healthcheck:
+      test: ["CMD", "awslocal", "sqs", "list-queues"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  document-delete:
+    build: .
+    env_file: .env
+    volumes:
+      - ./localVaultSecret.yaml:/app/localVaultSecret.yaml:ro
+    depends_on:
+      localstack:
+        condition: service_healthy
+
