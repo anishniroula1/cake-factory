@@ -51,7 +51,7 @@ class HandlerFake:
         self.historical_values = []
         self.fail = fail
 
-    def process(self, tsp_id, historical=False):
+    def process_document(self, tsp_id, historical=False):
         self.calls.append(tsp_id)
         self.historical_values.append(historical)
         if self.fail:
@@ -73,7 +73,7 @@ class ApplicationStoreFake:
     def load_application_reference(self, tsp_id):
         return ApplicationReference(100, 900001, "Asylee")
 
-    def load_application_records(self, references):
+    def load_application_payload_records(self, application_references):
         return {
             100: {
                 "application_id": 100,
@@ -95,10 +95,10 @@ class ApplicantStoreFake:
 
 
 class ContentStoreFake:
-    def load_documents(self, application_ids):
+    def load_document_payload_records(self, application_ids):
         return {100: [{"tsp_id": 10, "section_name": "affidavit", "match_count": 1}]}
 
-    def load_sentences(self, application_ids, reduce_kafka_size):
+    def load_sentence_payload_records(self, application_ids, reduce_kafka_size):
         return {
             100: [
                 {
@@ -114,7 +114,7 @@ class ContentStoreFake:
             ]
         }
 
-    def load_public_templates(self, application_ids):
+    def load_public_template_payload_records(self, application_ids):
         return {100: {"a_number": 900001, "url": "https://template.local"}}
 
 
@@ -123,26 +123,26 @@ class TransmissionStoreFake:
         self.errors = []
         self.deliveries = []
 
-    def save_deliveries(self, deliveries, retention_days):
-        self.deliveries.extend(deliveries)
+    def save_confirmed_kafka_deliveries(self, confirmed_deliveries, retention_days):
+        self.deliveries.extend(confirmed_deliveries)
 
-    def save_etl_error(self, message, error):
+    def save_transform_error(self, message, error):
         self.errors.append((message, error))
 
     @staticmethod
-    def audit_value(event, verbose_logging):
+    def build_kafka_audit_value(application_event, verbose_logging):
         import json
 
-        return json.dumps(event)
+        return json.dumps(application_event)
 
 
 class KafkaProcessorFake:
     def __init__(self) -> None:
         self.events = []
 
-    def publish(self, events):
-        self.events.extend(events)
-        return len(events)
+    def publish_application_events(self, application_events):
+        self.events.extend(application_events)
+        return len(application_events)
 
 
 class KafkaMessageFake:

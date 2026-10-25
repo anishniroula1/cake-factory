@@ -39,7 +39,7 @@ class ApiTransformHandler:
         self.kafka_processor = kafka_processor
         self.logger = custom_logger
 
-    def process(self, tsp_id: TspId, historical: bool = False) -> TransformResult:
+    def process_document(self, tsp_id: TspId, historical: bool = False) -> TransformResult:
         """Rebuild and publish the application affected by one document.
 
         Input: tsp_id=10 and historical=True for a historical SQS message.
@@ -48,42 +48,44 @@ class ApiTransformHandler:
 
         started_at = perf_counter()
         try:
-            reference: ApplicationReference | None = retry_operation(
+            application_reference: ApplicationReference | None = retry_operation(
                 "Load the application for API Transform",
                 self.application_db_store.load_application_reference,
                 tsp_id,
                 wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
-            if reference is None:
+            if application_reference is None:
                 raise PermanentDataError(f"No current application was found for tsp_id={tsp_id}")
 
-            published_count = self._process_application(reference, historical)
+            published_event_count = self._build_and_publish_application_events(application_reference, historical)
             self.logger.info(
-                f"API Transform completed one document, one application, and {published_count} Kafka event(s)."
+                f"API Transform completed one document, one application, and {published_event_count} Kafka event(s)."
             )
             self.logger.info(f"API Transform took {perf_counter() - started_at:.2f} seconds to complete.")
-            return {"source_message_count": 1, "application_count": 1, "kafka_event_count": published_count}
+            return {"source_message_count": 1, "application_count": 1, "kafka_event_count": published_event_count}
         except ApiTransformError as error:
-            self.transmission_db_store.save_etl_error("API Transform failed", error)
+            self.transmission_db_store.save_transform_error("API Transform failed", error)
             raise
 
-    def _process_application(self, reference: ApplicationReference, historical: bool) -> int:
+    def _build_and_publish_application_events(
+        self, application_reference: ApplicationReference, historical: bool
+    ) -> int:
         """Load all API sections, build events, and publish one affected application.
 
         Input: a reference with application_id=100 and historical=True.
         Output: the number of application events confirmed by Kafka.
         """
 
-        application_ids = [reference.application_id]
-        records = retry_operation(
+        application_ids = [application_reference.application_id]
+        application_payload_records = retry_operation(
             "Load application records",
-            self.application_db_store.load_application_records,
-            [reference],
+            self.application_db_store.load_application_payload_records,
+            [application_reference],
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
-        applicants = retry_operation(
+        applicant_payloads = retry_operation(
             "Load applicant details",
             self.applicant_db_store.load_applicant_details,
             application_ids,
@@ -91,48 +93,48 @@ class ApiTransformHandler:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
-        documents = retry_operation(
+        document_payload_records = retry_operation(
             "Load application documents",
-            self.content_db_store.load_documents,
+            self.content_db_store.load_document_payload_records,
             application_ids,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
-        sentences = retry_operation(
+        sentence_payload_records = retry_operation(
             "Load Titan sentence matches",
-            self.content_db_store.load_sentences,
+            self.content_db_store.load_sentence_payload_records,
             application_ids,
             self.config.reduce_kafka_size,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
-        templates = (
+        public_template_payloads = (
             retry_operation(
                 "Load public templates",
-                self.content_db_store.load_public_templates,
+                self.content_db_store.load_public_template_payload_records,
                 application_ids,
                 wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
-            if reference.analysis_group == "Asylee"
+            if application_reference.analysis_group == "Asylee"
             else {}
         )
 
-        application_id = reference.application_id
-        record = records.get(application_id)
-        if record is None:
+        application_id = application_reference.application_id
+        application_payload_record = application_payload_records.get(application_id)
+        if application_payload_record is None:
             raise PermanentDataError(f"Application record is missing for application_id={application_id}")
-        events = self.payload_builder.build_application_events(
-            record,
-            applicants.get(application_id),
-            documents.get(application_id, []),
-            sentences.get(application_id, []),
-            templates.get(application_id),
+        application_events = self.payload_builder.build_application_events(
+            application_payload_record,
+            applicant_payloads.get(application_id),
+            document_payload_records.get(application_id, []),
+            sentence_payload_records.get(application_id, []),
+            public_template_payloads.get(application_id),
             historical,
         )
-        return self._publish_with_buffer_limit(events)
+        return self._publish_events_in_size_limited_batches(application_events)
 
-    def _publish_with_buffer_limit(self, events: list[dict]) -> int:
+    def _publish_events_in_size_limited_batches(self, application_events: list[dict]) -> int:
         """Publish before buffered event bytes approach PostgreSQL and worker limits.
 
         Input: application events produced by PayloadBuilder.
@@ -140,29 +142,29 @@ class ApiTransformHandler:
         before their combined size passes the configured 450 MB safety limit.
         """
 
-        published_count = 0
-        buffered_size = 0
-        buffered_events = []
-        for event in events:
-            event_size = self.payload_builder.serialized_size(event)
-            if buffered_events and buffered_size + event_size > constants.KAFKA_BUFFER_LIMIT_BYTES:
-                published_count += retry_operation(
+        published_event_count = 0
+        buffered_event_size = 0
+        buffered_application_events = []
+        for application_event in application_events:
+            event_size = self.payload_builder.calculate_serialized_size(application_event)
+            if buffered_application_events and (buffered_event_size + event_size > constants.KAFKA_BUFFER_LIMIT_BYTES):
+                published_event_count += retry_operation(
                     "Publish API events to Kafka",
-                    self.kafka_processor.publish,
-                    buffered_events,
+                    self.kafka_processor.publish_application_events,
+                    buffered_application_events,
                     wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
-                buffered_events = []
-                buffered_size = 0
-            buffered_events.append(event)
-            buffered_size += event_size
-        if buffered_events:
-            published_count += retry_operation(
+                buffered_application_events = []
+                buffered_event_size = 0
+            buffered_application_events.append(application_event)
+            buffered_event_size += event_size
+        if buffered_application_events:
+            published_event_count += retry_operation(
                 "Publish API events to Kafka",
-                self.kafka_processor.publish,
-                buffered_events,
+                self.kafka_processor.publish_application_events,
+                buffered_application_events,
                 wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
-        return published_count
+        return published_event_count

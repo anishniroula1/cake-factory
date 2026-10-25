@@ -20,7 +20,9 @@ def application_record(group="Asylee"):
 
 
 def test_refugee_payload_normalizes_receipt_and_has_no_template(service_config):
-    event = PayloadBuilder(service_config).build_application_events(application_record("Refugee"), None, [], [], None)[0]
+    event = PayloadBuilder(service_config).build_application_events(application_record("Refugee"), None, [], [], None)[
+        0
+    ]
 
     assert event["after"]["payload"]["a_records"]["receipt_number"] == "ABC-00000123"
     assert "public_templates" not in event["after"]["payload"]
@@ -40,7 +42,7 @@ def test_kafka_publishes_string_payload_and_saves_acknowledgement(service_config
     store = TransmissionStoreFake()
     processor = KafkaProcessor(service_config, producer, store, LoggerFake())
 
-    assert processor.publish([event]) == 1
+    assert processor.publish_application_events([event]) == 1
     published = json.loads(producer.published[0][2])
     assert isinstance(published["after"]["payload"], str)
     assert len(store.deliveries) == 1
@@ -54,6 +56,6 @@ def test_kafka_failure_does_not_save_delivery(service_config, producer):
     store = TransmissionStoreFake()
 
     with pytest.raises(KafkaPublishError):
-        KafkaProcessor(service_config, producer, store, LoggerFake()).publish([event])
+        KafkaProcessor(service_config, producer, store, LoggerFake()).publish_application_events([event])
 
     assert store.deliveries == []

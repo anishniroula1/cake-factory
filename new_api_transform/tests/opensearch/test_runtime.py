@@ -86,7 +86,7 @@ def test_sqs_send_failure_keeps_source_message(service_config):
     sent = SqsFake(send_status="FAILED")
     processor = SqsProcessor(DependenciesFake(service_config, source, sent, HandlerFake(), LoggerFake()))
 
-    assert processor._process_message(message) is False
+    assert processor._process_document_message(message) is False
     assert (len(sent.sent), source.deleted) == (1, [])
 
 
@@ -110,7 +110,7 @@ def test_dependency_kafka_config_adds_ssl_files(service_config):
         ssl_key_file="client.key",
     )
 
-    values = dependency._kafka_config()
+    values = dependency._build_kafka_producer_config()
 
     assert values["ssl.ca.location"] == "ca.pem"
 

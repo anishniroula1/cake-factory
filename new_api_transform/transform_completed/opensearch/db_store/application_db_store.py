@@ -133,16 +133,18 @@ class ApplicationDBStore:
         """
 
         with self.session_factory() as session:
-            row = session.execute(LOAD_APPLICATION_REFERENCE, {"tsp_id": tsp_id}).mappings().one_or_none()
-        if row is None:
+            application_reference_record = (
+                session.execute(LOAD_APPLICATION_REFERENCE, {"tsp_id": tsp_id}).mappings().one_or_none()
+            )
+        if application_reference_record is None:
             return None
         return ApplicationReference(
-            application_id=int(row["application_id"]),
-            a_number=int(row["a_number"]),
-            analysis_group=str(row["analysis_group"]),
+            application_id=int(application_reference_record["application_id"]),
+            a_number=int(application_reference_record["a_number"]),
+            analysis_group=str(application_reference_record["analysis_group"]),
         )
 
-    def load_application_records(self, references: list[ApplicationReference]) -> dict[int, dict]:
+    def load_application_payload_records(self, application_references: list[ApplicationReference]) -> dict[int, dict]:
         """Load the case fields placed in each Kafka event's a_records section.
 
         Input: references=[ApplicationReference(application_id=50,
@@ -153,12 +155,15 @@ class ApplicationDBStore:
         to the A-number list required by the existing API contract.
         """
 
-        if not references:
+        if not application_references:
             return {}
-        parameters = {
-            "application_ids": [reference.application_id for reference in references],
-            "a_numbers": [reference.a_number for reference in references],
+        query_parameters = {
+            "application_ids": [reference.application_id for reference in application_references],
+            "a_numbers": [reference.a_number for reference in application_references],
         }
         with self.session_factory() as session:
-            rows = session.execute(LOAD_APPLICATION_RECORDS, parameters).mappings().all()
-        return {int(row["application_id"]): dict(row) for row in rows}
+            application_payload_records = session.execute(LOAD_APPLICATION_RECORDS, query_parameters).mappings().all()
+        return {
+            int(application_payload_record["application_id"]): dict(application_payload_record)
+            for application_payload_record in application_payload_records
+        }

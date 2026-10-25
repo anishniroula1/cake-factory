@@ -26,7 +26,7 @@ def test_one_sqs_message_runs_complete_api_transform_flow(service_config):
     handler = HandlerFake()
     processor = SqsProcessor(DependenciesFake(service_config, source, sent, handler, LoggerFake()))
 
-    completed = processor._process_message(message)
+    completed = processor._process_document_message(message)
 
     assert (completed, handler.calls, handler.historical_values, len(source.deleted), len(sent.sent)) == (
         True,
@@ -51,7 +51,7 @@ def test_historical_reason_is_added_to_kafka_event(service_config):
         LoggerFake(),
     )
 
-    handler.process(10, historical=True)
+    handler.process_document(10, historical=True)
 
     assert kafka.events[0]["after"]["historical"] is True
 
@@ -91,7 +91,7 @@ def test_failed_transform_keeps_source_messages(service_config):
     source = SqsFake([[message], []])
     processor = SqsProcessor(DependenciesFake(service_config, source, SqsFake(), HandlerFake(fail=True), LoggerFake()))
 
-    assert processor._process_message(message) is False
+    assert processor._process_document_message(message) is False
     assert source.deleted == []
 
 
@@ -100,7 +100,7 @@ def test_invalid_message_is_left_for_sqs_retry(service_config):
     source = SqsFake([[invalid]])
     processor = SqsProcessor(DependenciesFake(service_config, source, SqsFake(), HandlerFake(), LoggerFake()))
 
-    assert processor._process_message(invalid) is False
+    assert processor._process_document_message(invalid) is False
     assert source.deleted == []
 
 
@@ -109,7 +109,7 @@ def test_delete_failure_returns_false(service_config):
     source = SqsFake(delete_status="FAILED")
     processor = SqsProcessor(DependenciesFake(service_config, source, SqsFake(), HandlerFake(), LoggerFake()))
 
-    assert processor._process_message(message) is False
+    assert processor._process_document_message(message) is False
 
 
 def test_handler_builds_same_payload_without_ner(service_config):
@@ -125,7 +125,7 @@ def test_handler_builds_same_payload_without_ner(service_config):
         LoggerFake(),
     )
 
-    result = handler.process(10)
+    result = handler.process_document(10)
     payload = kafka.events[0]["after"]["payload"]
 
     assert result == {"source_message_count": 1, "application_count": 1, "kafka_event_count": 1}

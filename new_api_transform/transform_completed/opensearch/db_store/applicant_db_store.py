@@ -126,66 +126,76 @@ class ApplicantDBStore:
         if not application_ids:
             return {}
         with self.session_factory() as session:
-            rows = (
+            applicant_records = (
                 session.execute(
                     LOAD_APPLICANT_DETAILS, {"application_ids": application_ids, "reduce_kafka_size": reduce_kafka_size}
                 )
                 .mappings()
                 .all()
             )
-        applicant_details = {}
-        for row in rows:
-            values = dict(row)
-            application_id = int(values.pop("application_id"))
-            applicant_details[application_id] = self._build_applicant(values)
-        return applicant_details
+        applicant_payloads = {}
+        for applicant_record in applicant_records:
+            applicant_payload = dict(applicant_record)
+            application_id = int(applicant_payload.pop("application_id"))
+            applicant_payloads[application_id] = self._build_applicant_payload(applicant_payload)
+        return applicant_payloads
 
-    def _build_applicant(self, row: dict) -> dict:
+    def _build_applicant_payload(self, applicant_payload: dict) -> dict:
         """Convert OCR source columns into UI fault flags and remove private fields.
 
-        Input: row containing first_name_ocr="000100" and other applicant values.
+        Input: applicant_payload containing first_name_ocr="000100" and other applicant values.
         Output: applicant values containing ocr_name_fault=True without OCR bit fields.
         """
 
-        source_type = row.pop("source_type")
+        source_type = applicant_payload.pop("source_type")
         if source_type in NO_OCR_CALCULATION_SOURCE_TYPES:
-            faults = self._empty_ocr_faults()
+            ocr_faults = self._empty_ocr_faults()
         else:
-            faults = {
-                "ocr_name_fault": self.calculate_ocr(
-                    [row.pop("first_name_ocr"), row.pop("middle_name_ocr"), row.pop("last_name_ocr")]
+            ocr_faults = {
+                "ocr_name_fault": self.has_ocr_fault(
+                    [
+                        applicant_payload.pop("first_name_ocr"),
+                        applicant_payload.pop("middle_name_ocr"),
+                        applicant_payload.pop("last_name_ocr"),
+                    ]
                 ),
-                "ocr_residence_address_fault": self.calculate_ocr(
-                    [row.pop(name) for name in self._residence_ocr_fields()]
+                "ocr_residence_address_fault": self.has_ocr_fault(
+                    [applicant_payload.pop(name) for name in self._residence_ocr_fields()]
                 ),
-                "ocr_mailing_address_fault": self.calculate_ocr([row.pop(name) for name in self._mailing_ocr_fields()]),
-                "ocr_dob_fault": self.calculate_ocr(row.pop("dob_ocr")),
-                "ocr_country_of_citizenship_fault": self.calculate_ocr(row.pop("country_of_citizenship_ocr")),
+                "ocr_mailing_address_fault": self.has_ocr_fault(
+                    [applicant_payload.pop(name) for name in self._mailing_ocr_fields()]
+                ),
+                "ocr_dob_fault": self.has_ocr_fault(applicant_payload.pop("dob_ocr")),
+                "ocr_country_of_citizenship_fault": self.has_ocr_fault(
+                    applicant_payload.pop("country_of_citizenship_ocr")
+                ),
             }
         # GLOBAL sources skip calculation, but their private OCR columns still
         # need to be removed from the API payload.
         for name in self._all_ocr_fields():
-            row.pop(name, None)
-        if row.get("last_modified") is not None:
-            row["last_modified"] = row["last_modified"].strftime("%Y-%m-%d %H:%M:%S.%f") + "+00"
-        row.update(faults)
-        return row
+            applicant_payload.pop(name, None)
+        if applicant_payload.get("last_modified") is not None:
+            applicant_payload["last_modified"] = (
+                applicant_payload["last_modified"].strftime("%Y-%m-%d %H:%M:%S.%f") + "+00"
+            )
+        applicant_payload.update(ocr_faults)
+        return applicant_payload
 
     @staticmethod
-    def calculate_ocr(values: object) -> bool:
+    def has_ocr_fault(ocr_values: object) -> bool:
         """Return whether more than ten percent of available OCR bits are 1.
 
         Input: values="000100"
         Output: True because one of six available bits is 1.
         """
 
-        if values is None:
+        if ocr_values is None:
             return False
-        if isinstance(values, str):
-            zeros = values.count("0")
-            ones = values.count("1")
+        if isinstance(ocr_values, str):
+            zeros = ocr_values.count("0")
+            ones = ocr_values.count("1")
             return zeros + ones > 0 and ones / (zeros + ones) > 0.1
-        return any(ApplicantDBStore.calculate_ocr(value) for value in values)
+        return any(ApplicantDBStore.has_ocr_fault(ocr_value) for ocr_value in ocr_values)
 
     @staticmethod
     def _empty_ocr_faults() -> dict[str, bool]:

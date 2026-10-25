@@ -150,7 +150,7 @@ LOAD_DOCUMENTS = text(
 # Output: {"application_id": 50, "a_number": 900001,
 #          "url": "https://example/template.pdf", "load_date": "..."}
 #
-# Rows are newest first. The Python store keeps the first row for each
+# Records are newest first. The Python store keeps the first record for each
 # application, which gives the API payload its newest public template.
 LOAD_PUBLIC_TEMPLATES = text(
     f"""
@@ -175,7 +175,9 @@ class ContentDBStore:
         self.session_factory = session_factory
         self.sentence_match_limit = sentence_match_limit
 
-    def load_sentences(self, application_ids: list[int], reduce_kafka_size: bool) -> dict[int, list[dict]]:
+    def load_sentence_payload_records(
+        self, application_ids: list[int], reduce_kafka_size: bool
+    ) -> dict[int, list[dict]]:
         """Build the existing sentence response from all 16 Titan match buckets.
 
         Input: application_ids=[50], reduce_kafka_size=False, with bucket values
@@ -187,7 +189,7 @@ class ContentDBStore:
         if not application_ids:
             return {}
         with self.session_factory() as session:
-            rows = (
+            sentence_records = (
                 session.execute(
                     LOAD_SENTENCES,
                     {"application_ids": application_ids, "sentence_match_limit": self.sentence_match_limit},
@@ -195,19 +197,25 @@ class ContentDBStore:
                 .mappings()
                 .all()
             )
-        grouped: dict[int, list[dict]] = {}
-        for row in rows:
-            sentence = dict(row)
-            application_id = int(sentence.pop("application_id"))
-            matches_modified = sentence.pop("matches_last_modified", None)
-            sentence_modified = sentence.pop("sentences_last_modified", None)
-            sentence["matches"] = [self._small_match(match) for match in sentence.get("matches") or []]
-            if reduce_kafka_size and self._is_match_only_update(matches_modified, sentence_modified):
-                sentence = {"global_id": sentence["global_id"], "matches": sentence["matches"], "op": "u"}
-            grouped.setdefault(application_id, []).append(sentence)
-        return grouped
+        sentence_payloads_by_application: dict[int, list[dict]] = {}
+        for sentence_record in sentence_records:
+            sentence_payload = dict(sentence_record)
+            application_id = int(sentence_payload.pop("application_id"))
+            matches_modified = sentence_payload.pop("matches_last_modified", None)
+            sentence_modified = sentence_payload.pop("sentences_last_modified", None)
+            sentence_payload["matches"] = [
+                self._build_compact_match(match_record) for match_record in sentence_payload.get("matches") or []
+            ]
+            if reduce_kafka_size and self._has_only_match_changes(matches_modified, sentence_modified):
+                sentence_payload = {
+                    "global_id": sentence_payload["global_id"],
+                    "matches": sentence_payload["matches"],
+                    "op": "u",
+                }
+            sentence_payloads_by_application.setdefault(application_id, []).append(sentence_payload)
+        return sentence_payloads_by_application
 
-    def load_documents(self, application_ids: list[int]) -> dict[int, list[dict]]:
+    def load_document_payload_records(self, application_ids: list[int]) -> dict[int, list[dict]]:
         """Load document metadata and count sentences with at least one Titan match.
 
         Input: application_ids=[50]
@@ -215,9 +223,9 @@ class ContentDBStore:
         "match_count": 3, ...}]}
         """
 
-        return self._load_grouped(LOAD_DOCUMENTS, application_ids)
+        return self._load_records_grouped_by_application(LOAD_DOCUMENTS, application_ids)
 
-    def load_public_templates(self, application_ids: list[int]) -> dict[int, dict]:
+    def load_public_template_payload_records(self, application_ids: list[int]) -> dict[int, dict]:
         """Load the newest public-template row for each Asylee application.
 
         Input: application_ids=[50]
@@ -227,45 +235,47 @@ class ContentDBStore:
         if not application_ids:
             return {}
         with self.session_factory() as session:
-            rows = session.execute(LOAD_PUBLIC_TEMPLATES, {"application_ids": application_ids}).mappings().all()
-        templates: dict[int, dict] = {}
-        for row in rows:
-            values = dict(row)
-            application_id = int(values.pop("application_id"))
-            templates.setdefault(application_id, values)
-        return templates
+            public_template_records = (
+                session.execute(LOAD_PUBLIC_TEMPLATES, {"application_ids": application_ids}).mappings().all()
+            )
+        public_template_payloads: dict[int, dict] = {}
+        for public_template_record in public_template_records:
+            public_template_payload = dict(public_template_record)
+            application_id = int(public_template_payload.pop("application_id"))
+            public_template_payloads.setdefault(application_id, public_template_payload)
+        return public_template_payloads
 
-    def _load_grouped(self, statement, application_ids: list[int]) -> dict[int, list[dict]]:
-        """Execute a shared query and group its rows by application ID.
+    def _load_records_grouped_by_application(self, statement, application_ids: list[int]) -> dict[int, list[dict]]:
+        """Execute a shared query and group its records by application ID.
 
         Input: application_ids=[50, 60]
-        Output: {50: [rows for 50], 60: [rows for 60]}
+        Output: {50: [records for 50], 60: [records for 60]}
         """
 
         if not application_ids:
             return {}
         with self.session_factory() as session:
-            rows = session.execute(statement, {"application_ids": application_ids}).mappings().all()
-        grouped: dict[int, list[dict]] = {}
-        for row in rows:
-            values = dict(row)
-            application_id = int(values.pop("application_id"))
-            grouped.setdefault(application_id, []).append(values)
-        return grouped
+            application_records = session.execute(statement, {"application_ids": application_ids}).mappings().all()
+        payload_records_by_application: dict[int, list[dict]] = {}
+        for application_record in application_records:
+            payload_record = dict(application_record)
+            application_id = int(payload_record.pop("application_id"))
+            payload_records_by_application.setdefault(application_id, []).append(payload_record)
+        return payload_records_by_application
 
     @staticmethod
-    def _small_match(match: dict) -> dict:
+    def _build_compact_match(match_record: dict) -> dict:
         """Keep API match fields and floor distance to four decimal places.
 
         Input: match={"global_id": "20", "distance": 0.123456}
         Output: {"global_id": 20, "distance": 0.1234}
         """
 
-        distance = float(match["distance"])
-        return {"global_id": int(match["global_id"]), "distance": math.floor(distance * 10000) / 10000}
+        distance = float(match_record["distance"])
+        return {"global_id": int(match_record["global_id"]), "distance": math.floor(distance * 10000) / 10000}
 
     @staticmethod
-    def _is_match_only_update(matches_modified: datetime | None, sentence_modified: datetime | None) -> bool:
+    def _has_only_match_changes(matches_modified: datetime | None, sentence_modified: datetime | None) -> bool:
         """Determine whether only sentence-match data changed.
 
         Input: matches_modified more than 30 minutes after sentence_modified.
