@@ -8,7 +8,6 @@ from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import (
-    CatalogDocument,
     LiveNextQueueMessage,
     LiveResult,
     TspId,
@@ -19,13 +18,11 @@ from doc2vec_completed.opensearch.db_store import (
 )
 from doc2vec_completed.opensearch.errors import QueueSendError
 from doc2vec_completed.opensearch.open_search_helper import OpenSearchHelper
-from doc2vec_completed.opensearch.opensearch_store import (
-    SentenceCatalogOpenSearchStore,
-    SentenceOccurrenceOpenSearchStore,
-)
 from doc2vec_completed.opensearch.retry import retry_operation
+from doc2vec_completed.opensearch.sentence_batch_processor import (
+    SentenceBatchProcessor,
+)
 from doc2vec_completed.opensearch.sentence_splitter import split_document
-from doc2vec_completed.opensearch.text import sentence_word_count
 from ta_db_connection.atables import SentencesVector, TextSimilarityInput
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
@@ -46,18 +43,16 @@ class LiveHandler:
         self.opensearch_helper = opensearch_helper
         self.aws_sqs = aws_sqs
         self.logger = custom_logger
-        self.document_db_store = TextSimilarityInputDBStore(session_factory)
+        self.text_similarity_input_db_store = TextSimilarityInputDBStore(session_factory)
         self.sentence_vector_db_store = SentenceVectorDBStore(session_factory)
-        self.sentence_catalog_open_search_store = SentenceCatalogOpenSearchStore(
+        self.batch_processor = SentenceBatchProcessor(
             config,
             opensearch_helper,
-        )
-        self.sentence_occurrence_open_search_store = SentenceOccurrenceOpenSearchStore(
-            config, opensearch_helper
+            custom_logger,
         )
 
     def process(self, tsp_id: TspId) -> LiveResult | None:
-        """Create or reuse sentence rows, then write them to OpenSearch.
+        """Create or reuse sentence records, then write them to OpenSearch.
 
         Input: tsp_id=1040
         Output: {"tsp_id": 1040, "source_count": 65,
@@ -68,92 +63,180 @@ class LiveHandler:
         """
 
         started_at = perf_counter()
-        self.logger.info("Live sentence processing started.")
-        rows = retry_operation(
-            "Check for saved live sentences",
-            self.sentence_vector_db_store.load_live_sentence_rows,
-            tsp_id,
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
-        )
+        self.logger.info("Sentence processing started.")
+        sentence_vector_records = self._load_saved_document_sentences(tsp_id)
 
-        if rows and all(row.sentence_key for row in rows):
-            document = rows[0].tsp
+        if sentence_vector_records and all(
+            sentence_vector_record.sentence_key
+            for sentence_vector_record in sentence_vector_records
+        ):
+            document = sentence_vector_records[0].tsp
             self.logger.info(
-                f"Found {len(rows)} saved sentence(s) with sentence keys. "
+                f"Found {len(sentence_vector_records)} saved sentence(s) with "
+                "sentence keys. "
                 "Skipping sentence splitting and continuing with OpenSearch."
             )
         else:
-            document = retry_operation(
-                "Load the incoming document",
-                self.document_db_store.load_document,
-                tsp_id,
-                wait_seconds=constants.RETRY_SECONDS,
-                custom_logger=self.logger,
+            document, sentence_vector_records, completed_result = (
+                self._load_and_save_new_document_sentences(tsp_id, started_at)
             )
+            if completed_result is not None:
+                return completed_result
             if document is None:
-                self.logger.error(
-                    "No text_similarity_input row exists for this document."
-                )
                 return None
 
-            sentences = self._clean_sentences(split_document(document.content or ""))
-            if not sentences:
-                retry_operation(
-                    "Send the no-content document message",
-                    self._publish,
-                    tsp_id,
-                    False,
-                    "no_content",
-                    wait_seconds=constants.RETRY_SECONDS,
-                    custom_logger=self.logger,
-                )
-                self.logger.info("The document has no sentence content to index.")
-                return {
-                    "tsp_id": tsp_id,
-                    "source_count": 0,
-                    "indexed_count": 0,
-                    "success": False,
-                    "reason": "no_content",
-                }
-
-            rows = self._save_sentences(document, sentences)
-
-        catalog_alias = self.sentence_catalog_open_search_store.select_alias(
+        catalog_alias = self.batch_processor.select_catalog_alias(
             document.analysis_group
         )
-        indexed = self._index_sentences(rows)
+        indexed = self._save_sentences_in_opensearch(sentence_vector_records)
 
         retry_operation(
-            "Refresh indexed live sentences",
+            "Refresh indexed sentences",
             self.opensearch_helper.refresh_aliases,
             [catalog_alias, constants.SENTENCE_OCCURRENCE_ALIAS],
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
-        retry_operation(
-            "Send the completed live document message",
-            self._publish,
-            tsp_id,
-            True,
-            "",
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
+        result = self._send_processing_result(
+            tsp_id=tsp_id,
+            source_count=len(sentence_vector_records),
+            indexed_count=indexed,
+            success=True,
+            reason="",
         )
         self.logger.info(
-            f"Live sentence processing completed. Source count: {len(rows)}. "
+            f"Sentence processing completed. Source count: "
+            f"{len(sentence_vector_records)}. "
             f"Indexed count: {indexed}."
         )
         self.logger.info(
-            f"Live sentence processing took {perf_counter() - started_at:.2f} "
+            f"Sentence processing took {perf_counter() - started_at:.2f} "
             "seconds to complete."
+        )
+        return result
+
+    def _load_and_save_new_document_sentences(
+        self,
+        tsp_id: TspId,
+        started_at: float,
+    ) -> tuple[
+        TextSimilarityInput | None,
+        list[SentencesVector],
+        LiveResult | None,
+    ]:
+        """Load, split, and save sentences when no reusable records were found.
+
+        Input: tsp_id=1040 and the processing start time.
+        Output: (document, saved sentence records, None) after a successful save.
+
+        A missing document returns (None, [], None). A document without usable
+        sentences sends its no_content result and returns it in the last value.
+        """
+
+        document = retry_operation(
+            "Load the incoming document",
+            self.text_similarity_input_db_store.load_document,
+            tsp_id,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
+        )
+        if document is None:
+            self.logger.error(
+                "No text_similarity_input record exists for this document."
+            )
+            self.logger.info(
+                f"Sentence processing stopped after "
+                f"{perf_counter() - started_at:.2f} seconds because the "
+                "document was not found."
+            )
+            return None, [], None
+
+        sentences = self._clean_sentences(split_document(document.content or ""))
+        # A document can contain only spaces or separators after splitting.
+        # Send no_content so the existing state-machine flow can handle it.
+        if not sentences:
+            result = self._send_processing_result(
+                tsp_id=tsp_id,
+                source_count=0,
+                indexed_count=0,
+                success=False,
+                reason="no_content",
+            )
+            self.logger.info(
+                "Sentence processing finished without indexing because the "
+                "document has no sentence content."
+            )
+            self.logger.info(
+                f"Sentence processing took {perf_counter() - started_at:.2f} "
+                "seconds to complete."
+            )
+            return document, [], result
+
+        sentence_vector_records = self._save_document_sentences(document, sentences)
+        return document, sentence_vector_records, None
+
+    def _load_saved_document_sentences(
+        self,
+        tsp_id: TspId,
+    ) -> list[SentencesVector]:
+        """Load saved sentence records in pages for resume processing.
+
+        Input: tsp_id=1040 with 1,200 saved sentences
+        Output: all 1,200 SentencesVector records loaded in 500-record pages.
+        """
+
+        sentence_vector_records: list[SentencesVector] = []
+        after_global_id = 0
+        page_number = 0
+        while True:
+            page_number += 1
+            sentence_vector_page = retry_operation(
+                f"Load saved sentence page {page_number}",
+                self.sentence_vector_db_store.load_document_sentence_page,
+                tsp_id,
+                after_global_id,
+                constants.DOCUMENT_SENTENCE_PAGE_SIZE,
+                wait_seconds=constants.RETRY_SECONDS,
+                custom_logger=self.logger,
+            )
+            if not sentence_vector_page:
+                break
+
+            sentence_vector_records.extend(sentence_vector_page)
+            after_global_id = sentence_vector_page[-1].global_id
+            if len(sentence_vector_page) < constants.DOCUMENT_SENTENCE_PAGE_SIZE:
+                break
+        return sentence_vector_records
+
+    def _send_processing_result(
+        self,
+        tsp_id: TspId,
+        source_count: int,
+        indexed_count: int,
+        success: bool,
+        reason: str,
+    ) -> LiveResult:
+        """Send the SQS result and return the document processing counts.
+
+        Input: source_count=65, indexed_count=65, success=True, reason=""
+        Output: a successful LiveResult after sending the next SQS message.
+        """
+
+        retry_operation(
+            "Send sentence processing result to next queue",
+            self._send_sqs_message,
+            tsp_id,
+            success,
+            reason,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
         )
         return {
             "tsp_id": tsp_id,
-            "source_count": len(rows),
-            "indexed_count": indexed,
-            "success": True,
-            "reason": "",
+            "source_count": source_count,
+            "indexed_count": indexed_count,
+            "success": success,
+            "reason": reason,
         }
 
     @staticmethod
@@ -169,137 +252,94 @@ class LiveHandler:
 
         return [cleaned for sentence in sentences if (cleaned := sentence.strip())]
 
-    def _save_sentences(
+    def _save_document_sentences(
         self,
         document: TextSimilarityInput,
         sentences: list[str],
     ) -> list[SentencesVector]:
-        """Save sentence rows in ordered commits and return their global IDs.
+        """Save every sentence in one transaction and return its global ID.
 
         Input: 2,300 sentence strings with a database batch size of 1,000.
-        Output: 2,300 SentencesVector rows saved in three commits.
+        Output: 2,300 records flushed in three batches and saved by one commit.
+
+        If any batch fails, PostgreSQL rolls back every sentence for the
+        document. The retry therefore starts again without partial records.
         """
 
         numbered_sentences = list(enumerate(sentences, start=1))
-        saved_rows: list[SentencesVector] = []
-        for batch_number, sentence_batch in enumerate(
-            batches(numbered_sentences, constants.LIVE_DATABASE_BATCH_SIZE),
-            start=1,
-        ):
-            rows = retry_operation(
-                f"Save live sentence batch {batch_number}",
-                self.sentence_vector_db_store.save_live_sentence_batch,
-                document,
-                sentence_batch,
-                wait_seconds=constants.RETRY_SECONDS,
-                custom_logger=self.logger,
-            )
-            saved_rows.extend(rows)
-            self.logger.info(
-                f"Saved live sentence batch {batch_number} with {len(rows)} "
-                "sentence(s)."
-            )
-        return saved_rows
+        sentence_vector_records = retry_operation(
+            "Save all document sentences",
+            self.sentence_vector_db_store.save_document_sentences,
+            document,
+            numbered_sentences,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
+        )
+        self.logger.info(
+            f"Saved {len(sentence_vector_records)} sentence(s) in one database "
+            "transaction."
+        )
+        return sentence_vector_records
 
-    def _index_sentences(self, rows: list[SentencesVector]) -> int:
-        """Index saved sentence rows in concurrent worker batches.
+    def _save_sentences_in_opensearch(
+        self,
+        sentence_vector_records: list[SentencesVector],
+    ) -> int:
+        """Save all document sentences to OpenSearch using concurrent batches.
 
-        Input: 65 rows and worker_batch_size=30
-        Output: 65 after three worker batches finish.
+        Input: 65 SentencesVector records and worker_batch_size=30
+        Output: 65 after all three worker batches save their catalog and
+        occurrence documents.
         """
 
-        worker_batches = list(batches(rows, constants.WORKER_BATCH_SIZE))
+        worker_batches = list(
+            batches(sentence_vector_records, constants.WORKER_BATCH_SIZE)
+        )
         self.logger.info(
-            f"Indexing {len(rows)} live sentence(s) in "
+            f"Indexing {len(sentence_vector_records)} sentence(s) in "
             f"{len(worker_batches)} worker batch(es)."
         )
         with ThreadPoolExecutor(
             max_workers=constants.THREAD_WORKER_COUNT,
-            thread_name_prefix="live-sentence",
+            thread_name_prefix="sentence",
         ) as executor:
-            return sum(executor.map(self._run_worker, worker_batches))
+            return sum(
+                executor.map(
+                    self._save_sentence_batch_in_opensearch,
+                    worker_batches,
+                )
+            )
 
-    def _run_worker(self, rows: list[SentencesVector]) -> int:
-        """Write one live batch without regenerating keys or reading DB vectors.
+    def _save_sentence_batch_in_opensearch(
+        self,
+        sentence_vector_records: list[SentencesVector],
+    ) -> int:
+        """Save one document sentence batch to both OpenSearch indexes.
 
-        Every row already contains its saved sentence key. Missing catalog
-        documents are sent through the Bedrock pipeline, and every row is then
-        written to the occurrence index.
+        Input: SentencesVector records for global IDs 1 through 30.
+        Output: 30 after missing catalog vectors and all occurrences are saved.
+
+        This path does not regenerate keys or read vectors from PostgreSQL.
+        Bedrock creates a vector only when a sentence key is missing in the
+        selected catalog.
         """
 
         label = (
-            f"Live worker batch for global IDs {rows[0].global_id} "
-            f"through {rows[-1].global_id}"
+            f"Sentence worker batch for global IDs "
+            f"{sentence_vector_records[0].global_id} through "
+            f"{sentence_vector_records[-1].global_id}"
         )
-        document = rows[0].tsp
-        catalog_alias = self.sentence_catalog_open_search_store.select_alias(
-            document.analysis_group
-        )
-        sentence_keys = [row.sentence_key for row in rows]
-        existing_keys = retry_operation(
-            f"Check existing catalog keys for {label}",
-            self.sentence_catalog_open_search_store.find_existing_sentence_keys,
-            catalog_alias,
-            sentence_keys,
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
-        )
-        catalog_documents = self._missing_catalog_documents(rows, existing_keys)
-        retry_operation(
-            f"Create Bedrock vectors in {catalog_alias} for {label}",
-            self.sentence_catalog_open_search_store.index_with_bedrock,
-            catalog_alias,
-            catalog_documents,
-            wait_seconds=constants.RETRY_SECONDS,
-            max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
-            custom_logger=self.logger,
+        return self.batch_processor.save_document_sentence_batch(
+            sentence_vector_records,
+            label,
         )
 
-        occurrence_documents = (
-            self.sentence_occurrence_open_search_store.build_documents(rows)
-        )
-        retry_operation(
-            f"Write occurrences for {label}",
-            self.sentence_occurrence_open_search_store.index_occurrences,
-            occurrence_documents,
-            wait_seconds=constants.RETRY_SECONDS,
-            max_attempts=constants.OPENSEARCH_BULK_RETRY_COUNT + 1,
-            custom_logger=self.logger,
-        )
-        self.logger.info(
-            f"{label} completed: {len(existing_keys)} existing catalog key(s), "
-            f"{len(catalog_documents)} Bedrock vector(s), and "
-            f"{len(occurrence_documents)} occurrence(s)."
-        )
-        return len(rows)
-
-    def _missing_catalog_documents(
+    def _send_sqs_message(
         self,
-        rows: list[SentencesVector],
-        existing_keys: set[str],
-    ) -> list[CatalogDocument]:
-        """Build one catalog document for each unique key not in OpenSearch."""
-
-        documents: list[CatalogDocument] = []
-        seen_keys: set[str] = set()
-        for row in rows:
-            sentence_key = row.sentence_key
-            if sentence_key in existing_keys or sentence_key in seen_keys:
-                continue
-            seen_keys.add(sentence_key)
-            documents.append(
-                {
-                    "_id": sentence_key,
-                    "sentenceKey": sentence_key,
-                    "sentenceContent": row.sentence_content,
-                    "wordCount": sentence_word_count(row.sentence_content),
-                    "createdAt": row.last_modified.isoformat(),
-                    "updatedAt": row.last_modified.isoformat(),
-                }
-            )
-        return documents
-
-    def _publish(self, tsp_id: TspId, success: bool, reason: str) -> None:
+        tsp_id: TspId,
+        success: bool,
+        reason: str,
+    ) -> None:
         """Send the existing Doc2Vec result contract to the state machine.
 
         Input: tsp_id=1040, success=True, reason=""

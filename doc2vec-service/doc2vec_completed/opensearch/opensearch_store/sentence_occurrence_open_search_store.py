@@ -30,28 +30,30 @@ class SentenceOccurrenceOpenSearchStore:
         )
 
     @staticmethod
-    def build_documents(rows: list[SentencesVector]) -> list[OccurrenceDocument]:
-        """Build one occurrence document for every saved sentence row.
+    def build_documents(
+        sentence_vector_records: list[SentencesVector],
+    ) -> list[OccurrenceDocument]:
+        """Build one occurrence document for every saved sentence record.
 
         Sentence text stays in the catalog. The occurrence keeps only the
         identity and location fields needed to find that catalog record.
         """
 
-        document = rows[0].tsp
+        document = sentence_vector_records[0].tsp
         return [
             {
-                "_id": row.global_id,
-                "globalId": row.global_id,
+                "_id": sentence_vector_record.global_id,
+                "globalId": sentence_vector_record.global_id,
                 "applicationId": document.application_id,
                 "tspId": document.tsp_id,
                 "sectionName": document.section_name,
-                "sentIdLocal": row.sent_id_local,
-                "sentenceKey": row.sentence_key,
-                "sourceType": row.source_type,
+                "sentIdLocal": sentence_vector_record.sent_id_local,
+                "sentenceKey": sentence_vector_record.sentence_key,
+                "sourceType": sentence_vector_record.source_type,
                 "analysisGroup": document.analysis_group,
                 "isCurrent": document.is_current,
-                "createdAt": row.last_modified.isoformat(),
-                "updatedAt": row.last_modified.isoformat(),
+                "createdAt": sentence_vector_record.last_modified.isoformat(),
+                "updatedAt": sentence_vector_record.last_modified.isoformat(),
             }
-            for row in rows
+            for sentence_vector_record in sentence_vector_records
         ]

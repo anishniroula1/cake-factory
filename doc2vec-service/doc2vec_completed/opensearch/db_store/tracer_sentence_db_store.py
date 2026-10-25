@@ -16,10 +16,10 @@ class TracerSentenceDBStore:
         self,
         tracer_sentence_ids: list[int],
     ) -> list[TracerSentence]:
-        """Load requested tracer rows in tracer ID order.
+        """Load requested TracerSentence records in tracer ID order.
 
         Input: tracer_sentence_ids=[10, 20]
-        Output: matching TracerSentence rows ordered as 10, then 20.
+        Output: matching TracerSentence records ordered as 10, then 20.
         """
 
         if not tracer_sentence_ids:

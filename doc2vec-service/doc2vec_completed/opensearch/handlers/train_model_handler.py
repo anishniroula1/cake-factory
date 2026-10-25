@@ -63,7 +63,7 @@ class TrainModelHandler:
         )
         if total == 0:
             self.logger.error(
-                "No sentences_vector rows are available for model training."
+                "No sentences_vector records are available for model training."
             )
             return None
 
@@ -80,7 +80,7 @@ class TrainModelHandler:
         ) as executor:
             while True:
                 page_number += 1
-                rows = retry_operation(
+                sentence_vector_records = retry_operation(
                     f"Load model-training page {page_number}",
                     self.sentence_vector_db_store.load_training_sentence_page,
                     tsp_id,
@@ -89,37 +89,48 @@ class TrainModelHandler:
                     wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
-                if not rows:
+                if not sentence_vector_records:
                     break
 
                 # Training must contain normal matching sentences only. Keep a
-                # second check here in case an unexpected row passes the query.
-                eligible_rows = [row for row in rows if self._is_training_eligible(row)]
+                # second check in case an unexpected record passes the query.
+                eligible_sentence_vector_records = [
+                    sentence_vector_record
+                    for sentence_vector_record in sentence_vector_records
+                    if self._is_training_eligible(sentence_vector_record)
+                ]
                 embeddings = retry_operation(
                     f"Load saved vectors for model-training page {page_number}",
                     self.embedding_db_store.load_titan_embeddings_by_global_ids,
-                    [row.global_id for row in eligible_rows],
+                    [
+                        sentence_vector_record.global_id
+                        for sentence_vector_record in eligible_sentence_vector_records
+                    ],
                     constants.TITAN_EMBEDDING_TYPE,
                     wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
-                documents = self._prepare_unique_documents(
-                    eligible_rows,
+                documents = self._build_unique_training_documents(
+                    eligible_sentence_vector_records,
                     embeddings,
                     seen_keys,
                 )
                 worker_batches = list(batches(documents, constants.WORKER_BATCH_SIZE))
                 self.logger.info(
                     f"Processing model-training page {page_number} with "
-                    f"{len(eligible_rows)} eligible sentence(s), "
-                    f"{len(rows) - len(eligible_rows)} excluded sentence(s), and "
+                    f"{len(eligible_sentence_vector_records)} eligible sentence(s), "
+                    f"{len(sentence_vector_records) - len(eligible_sentence_vector_records)} "
+                    "excluded sentence(s), and "
                     f"{len(documents)} new unique key(s)."
                 )
                 indexed_count += sum(
-                    executor.map(self._index_training_batch, worker_batches)
+                    executor.map(
+                        self._save_training_batch_in_opensearch,
+                        worker_batches,
+                    )
                 )
-                source_count += len(eligible_rows)
-                after_global_id = rows[-1].global_id
+                source_count += len(eligible_sentence_vector_records)
+                after_global_id = sentence_vector_records[-1].global_id
 
         if indexed_count:
             retry_operation(
@@ -144,7 +155,9 @@ class TrainModelHandler:
         }
 
     @staticmethod
-    def _is_training_eligible(row: SentencesVector) -> bool:
+    def _is_training_eligible(
+        sentence_vector_record: SentencesVector,
+    ) -> bool:
         """Return True only for a normal sentence that can train the IVF model.
 
         Input: a sentence with is_non_matcher=False, is_tracer=False, and
@@ -152,34 +165,41 @@ class TrainModelHandler:
         Output: True. Any one of those fields being True returns False.
         """
 
-        return not (row.is_non_matcher or row.is_tracer or row.is_form_language)
+        return not (
+            sentence_vector_record.is_non_matcher
+            or sentence_vector_record.is_tracer
+            or sentence_vector_record.is_form_language
+        )
 
-    def _prepare_unique_documents(
+    def _build_unique_training_documents(
         self,
-        rows: list[SentencesVector],
+        sentence_vector_records: list[SentencesVector],
         embeddings: dict[int, list[float]],
         seen_keys: set[str],
     ) -> list[TrainingDocument]:
-        """Create one document per new key and prefer a duplicate row's saved vector.
+        """Build one training document for each sentence key not already seen.
 
-        Input: sentence rows, vectors keyed by global_id, and keys seen on earlier pages.
-        Output: unique training documents that have not appeared in this message.
+        Input: two SentencesVector records share key A; one has a saved vector.
+        Output: one key-A document containing the saved vector.
+
+        Keys found on an earlier page are skipped. When duplicate records exist
+        on the current page, the record with a saved Titan vector is preferred.
         """
 
         documents_by_key: dict[str, TrainingDocument] = {}
-        for row in rows:
-            key = sentence_key(row.sentence_content)
+        for sentence_vector_record in sentence_vector_records:
+            key = sentence_key(sentence_vector_record.sentence_content)
             if key in seen_keys:
                 continue
-            timestamp = row.last_modified.isoformat()
+            timestamp = sentence_vector_record.last_modified.isoformat()
             document: TrainingDocument = {
                 "_id": key,
                 "sentenceKey": key,
-                "sentenceContent": row.sentence_content,
+                "sentenceContent": sentence_vector_record.sentence_content,
                 "createdAt": timestamp,
                 "updatedAt": timestamp,
             }
-            vector = embeddings.get(row.global_id)
+            vector = embeddings.get(sentence_vector_record.global_id)
             if vector is not None:
                 self.training_open_search_store.validate_vector(vector)
                 document["sentenceContentVector"] = vector
@@ -194,11 +214,17 @@ class TrainModelHandler:
         seen_keys.update(documents_by_key)
         return list(documents_by_key.values())
 
-    def _index_training_batch(self, documents: list[TrainingDocument]) -> int:
-        """Index new keys, reuse saved vectors, and generate only missing vectors.
+    def _save_training_batch_in_opensearch(
+        self,
+        documents: list[TrainingDocument],
+    ) -> int:
+        """Save one unique training-document batch in OpenSearch.
 
         Input: up to 30 unique training documents.
-        Output: the number of documents that did not already exist in OpenSearch.
+        Output: the number of keys newly saved after existing keys are removed.
+
+        Documents with vectors are written directly. Documents without vectors
+        use the Bedrock embedding pipeline.
         """
 
         if not documents:

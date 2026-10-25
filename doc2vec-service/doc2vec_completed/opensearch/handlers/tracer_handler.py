@@ -22,7 +22,7 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class TracerHandler:
-    """Load tracer reference rows and index them in the tracer catalog."""
+    """Load tracer reference records and save them in the tracer catalog."""
 
     def __init__(
         self,
@@ -55,15 +55,21 @@ class TracerHandler:
         indexed_count = 0
         loaded_ids: set[int] = set()
         for id_batch in batches(unique_ids, constants.OPENSEARCH_BATCH_SIZE):
-            rows = retry_operation(
+            tracer_sentence_records = retry_operation(
                 "Load tracer sentence batch",
                 self.tracer_sentence_db_store.load_tracer_sentences_by_ids,
                 id_batch,
                 wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
-            loaded_ids.update(row.tracer_sentence_id for row in rows)
-            documents = [self._tracer_document(row) for row in rows]
+            loaded_ids.update(
+                tracer_sentence_record.tracer_sentence_id
+                for tracer_sentence_record in tracer_sentence_records
+            )
+            documents = [
+                self._build_tracer_document(tracer_sentence_record)
+                for tracer_sentence_record in tracer_sentence_records
+            ]
             saved_vectors = [
                 document
                 for document in documents
@@ -94,7 +100,7 @@ class TracerHandler:
         missing_ids = sorted(set(unique_ids) - loaded_ids)
         if missing_ids:
             raise PermanentDataError(
-                f"tracer_sentence rows are missing for IDs {missing_ids}"
+                f"tracer_sentence records are missing for IDs {missing_ids}"
             )
 
         retry_operation(
@@ -116,35 +122,41 @@ class TracerHandler:
             "indexed_count": indexed_count,
         }
 
-    def _tracer_document(self, row: TracerSentence) -> TracerDocument:
+    def _build_tracer_document(
+        self,
+        tracer_sentence_record: TracerSentence,
+    ) -> TracerDocument:
         """Build a strict tracer document and omit its vector when one is not saved.
 
-        Input: one TracerSentence database row.
+        Input: one TracerSentence database record.
         Output: a tracer catalog document ready for direct or pipeline indexing.
         """
 
-        timestamp = getattr(row, "last_modified", None) or datetime.now(UTC)
+        timestamp = (
+            getattr(tracer_sentence_record, "last_modified", None)
+            or datetime.now(UTC)
+        )
         document: TracerDocument = {
-            "_id": row.tracer_sentence_id,
-            "tracerId": row.tracer_sentence_id,
-            "sentenceContent": row.sentence_content,
-            "analysisGroup": row.analysis_group,
-            "isNonMatcher": row.is_non_matcher,
-            "isFormLanguage": row.is_form_language,
+            "_id": tracer_sentence_record.tracer_sentence_id,
+            "tracerId": tracer_sentence_record.tracer_sentence_id,
+            "sentenceContent": tracer_sentence_record.sentence_content,
+            "analysisGroup": tracer_sentence_record.analysis_group,
+            "isNonMatcher": tracer_sentence_record.is_non_matcher,
+            "isFormLanguage": tracer_sentence_record.is_form_language,
             "createdAt": timestamp.isoformat(),
             "updatedAt": timestamp.isoformat(),
         }
-        vector = self._saved_vector(row.embedding)
+        vector = self._read_saved_vector(tracer_sentence_record.embedding)
         if vector is not None:
             document["sentenceContentVector"] = vector
         return document
 
-    def _saved_vector(self, value) -> list[float] | None:
+    def _read_saved_vector(self, value) -> list[float] | None:
         """Convert a saved tracer embedding into a normal float list.
 
         Input: a list, NumPy-like value, JSON bytes, or raw float bytes.
         Output: a list containing the configured 512 vector values, or None
-        when the tracer row has no saved embedding.
+        when the tracer record has no saved embedding.
         """
 
         if value is None:
@@ -157,7 +169,7 @@ class TracerHandler:
             try:
                 value = json.loads(value.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
-                value = self._raw_float_vector(value)
+                value = self._decode_raw_float_vector(value)
         try:
             vector = [float(item) for item in value]
         except (TypeError, ValueError) as error:
@@ -167,8 +179,12 @@ class TracerHandler:
         self.tracer_open_search_store.validate_vector(vector)
         return vector
 
-    def _raw_float_vector(self, value: bytes) -> list[float]:
-        """Decode raw 32-bit or 64-bit float bytes from the tracer table."""
+    def _decode_raw_float_vector(self, value: bytes) -> list[float]:
+        """Decode one raw 512-dimension tracer embedding.
+
+        Input: bytes containing 512 packed 32-bit or 64-bit float values.
+        Output: a normal Python list containing the same 512 float values.
+        """
 
         for type_code in ("f", "d"):
             item_size = array(type_code).itemsize

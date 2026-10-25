@@ -1,6 +1,9 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
+from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.db_store import SentenceVectorDBStore
 from doc2vec_completed.opensearch.handlers.live_handler import LiveHandler
 from doc2vec_completed.opensearch.sentence_splitter import split_document
@@ -9,7 +12,7 @@ from ta_db_connection.atables import SentencesVector, TextSimilarityInput
 from tests.opensearch.fakes import OpenSearchFake, SessionFake, SessionSequence, SqsFake
 
 
-class DocumentStoreFake:
+class TextSimilarityInputStoreFake:
     def __init__(self, document):
         self.document = document
         self.calls = []
@@ -25,10 +28,14 @@ class LiveSentenceStoreFake:
         self.next_global_id = 1
         self.existing_rows = existing_rows or []
 
-    def load_live_sentence_rows(self, tsp_id):
-        return self.existing_rows
+    def load_document_sentence_page(self, tsp_id, after_global_id, page_size):
+        return [
+            row
+            for row in self.existing_rows
+            if row.global_id > after_global_id
+        ][:page_size]
 
-    def save_live_sentence_batch(self, document, sentences):
+    def save_document_sentences(self, document, sentences):
         self.calls.append(sentences)
         rows = []
         for local_id, content in sentences:
@@ -89,12 +96,12 @@ def build_handler(service_config, custom_logger, document):
         sqs,
         custom_logger,
     )
-    handler.document_db_store = DocumentStoreFake(document)
+    handler.text_similarity_input_db_store = TextSimilarityInputStoreFake(document)
     handler.sentence_vector_db_store = LiveSentenceStoreFake()
     return handler, opensearch, sqs
 
 
-def test_live_handler_saves_indexes_refreshes_and_publishes(
+def test_live_handler_saves_indexes_refreshes_and_sends_sqs_message(
     service_config,
     custom_logger,
 ):
@@ -142,29 +149,37 @@ def test_live_handler_reports_no_content_without_indexing(
     assert sqs.sent[0]["message_body"]["success"] is False
 
 
-def test_live_handler_reuses_saved_keyed_rows(service_config, custom_logger):
+def test_live_handler_reuses_saved_keyed_rows(
+    service_config,
+    custom_logger,
+    monkeypatch,
+):
     document = live_document()
-    existing_row = SentencesVector(
-        global_id=20,
-        tsp_id=10,
-        sent_id_local=1,
-        sentence_content="Already saved sentence.",
-        source_type="affidavit",
-        sentence_key="a" * 64,
-        last_modified=datetime.now(UTC),
-        tsp=document,
-    )
+    existing_rows = [
+        SentencesVector(
+            global_id=global_id,
+            tsp_id=10,
+            sent_id_local=local_id,
+            sentence_content=f"Already saved sentence {local_id}.",
+            source_type="affidavit",
+            sentence_key=key_character * 64,
+            last_modified=datetime.now(UTC),
+            tsp=document,
+        )
+        for global_id, local_id, key_character in [(20, 1, "a"), (21, 2, "b")]
+    ]
     handler, opensearch, sqs = build_handler(
         service_config,
         custom_logger,
         document,
     )
-    handler.sentence_vector_db_store = LiveSentenceStoreFake([existing_row])
+    handler.sentence_vector_db_store = LiveSentenceStoreFake(existing_rows)
+    monkeypatch.setattr(constants, "DOCUMENT_SENTENCE_PAGE_SIZE", 1)
 
     result = handler.process(10)
 
-    assert result["indexed_count"] == 1
-    assert handler.document_db_store.calls == []
+    assert result["indexed_count"] == 2
+    assert handler.text_similarity_input_db_store.calls == []
     assert handler.sentence_vector_db_store.calls == []
     assert opensearch.refresh_alias_calls == [["catalog-asylee", "occurrence"]]
     assert sqs.sent[0]["message_body"]["success"] is True
@@ -189,34 +204,40 @@ def test_message_without_reason_uses_live_handler(custom_logger):
     assert source_queue.deleted == [message]
 
 
-def test_live_sentence_store_reuses_local_ids_and_builds_new_rows():
+def test_live_sentence_store_flushes_batches_and_commits_once(monkeypatch):
     document = live_document()
-    existing = SentencesVector(
-        global_id=20,
-        tsp_id=10,
-        a_number=1,
-        section_name="old",
-        sent_id_local=1,
-        sentence_content="Old text.",
-        word_count=2,
-        source_type="old",
-        analysis_group="old",
-        is_current=True,
-        sentence_key="a" * 64,
-    )
-    session = SessionFake(rows=[existing])
+    session = SessionFake()
     store = SentenceVectorDBStore(SessionSequence([session]))
+    monkeypatch.setattr(constants, "LIVE_DATABASE_BATCH_SIZE", 1)
 
-    rows = store.save_live_sentence_batch(
+    rows = store.save_document_sentences(
         document,
-        [(1, "Updated sentence."), (2, "New sentence.")],
+        [(1, "First sentence."), (2, "Second sentence.")],
     )
 
     assert [row.sent_id_local for row in rows] == [1, 2]
-    assert rows[0].global_id == 20
+    assert [row.global_id for row in rows] == [1, 2]
     assert rows[1].source_type == "affidavit"
     assert all(len(row.sentence_key) == 64 for row in rows)
+    assert session.flushes == 2
     assert session.commits == 1
+    assert session.rollbacks == 0
+
+
+def test_live_sentence_store_rolls_back_every_batch_when_one_flush_fails(monkeypatch):
+    session = SessionFake(fail_flush_number=2)
+    store = SentenceVectorDBStore(SessionSequence([session]))
+    monkeypatch.setattr(constants, "LIVE_DATABASE_BATCH_SIZE", 1)
+
+    with pytest.raises(RuntimeError, match="database flush failed"):
+        store.save_document_sentences(
+            live_document(),
+            [(1, "First sentence."), (2, "Second sentence.")],
+        )
+
+    assert session.flushes == 2
+    assert session.commits == 0
+    assert session.rollbacks == 1
 
 
 def test_syntok_splitter_returns_original_text_and_handles_empty_content():

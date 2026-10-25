@@ -16,7 +16,7 @@ class TextSimilarityInputDBStore:
         """Load only the document fields required by live processing.
 
         Input: tsp_id=1040
-        Output: the matching TextSimilarityInput row, or None when it is absent.
+        Output: the matching TextSimilarityInput record, or None when absent.
         """
 
         with self.session_factory() as session:

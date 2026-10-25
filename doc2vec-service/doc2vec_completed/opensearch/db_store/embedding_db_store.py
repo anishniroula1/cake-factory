@@ -33,7 +33,7 @@ class EmbeddingDBStore:
                 Embeddings.embedding_type == embedding_type,
             )
             return {
-                row.global_id: list(row.embeddings)
-                for row in session.scalars(statement)
-                if row.embeddings
+                embedding_record.global_id: list(embedding_record.embeddings)
+                for embedding_record in session.scalars(statement)
+                if embedding_record.embeddings
             }

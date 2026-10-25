@@ -10,7 +10,13 @@ class ScalarRows:
 
 
 class SessionFake:
-    def __init__(self, rows=None, scalar_value=0, document=None):
+    def __init__(
+        self,
+        rows=None,
+        scalar_value=0,
+        document=None,
+        fail_flush_number=None,
+    ):
         self.rows = rows or []
         self.scalar_value = scalar_value
         self.document = document
@@ -18,7 +24,11 @@ class SessionFake:
         self.scalar_statements = []
         self.scalars_statements = []
         self.commits = 0
+        self.flushes = 0
+        self.rollbacks = 0
         self.added = []
+        self.next_global_id = 1
+        self.fail_flush_number = fail_flush_number
 
     def __enter__(self):
         return self
@@ -41,18 +51,22 @@ class SessionFake:
         self.executed.append((statement, parameters))
 
     def add_all(self, rows):
-        next_id = 1
         for row in rows:
             if row.global_id is None:
-                row.global_id = next_id
-                next_id += 1
+                row.global_id = self.next_global_id
+                self.next_global_id += 1
         self.added.extend(rows)
 
     def flush(self):
-        pass
+        self.flushes += 1
+        if self.flushes == self.fail_flush_number:
+            raise RuntimeError("database flush failed")
 
     def commit(self):
         self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
 
 
 class SessionSequence:

@@ -46,8 +46,6 @@ class HistoricalHandler:
         self.embedding_db_store = EmbeddingDBStore(session_factory)
         self.batch_processor = SentenceBatchProcessor(
             config,
-            self.sentence_vector_db_store,
-            self.embedding_db_store,
             opensearch_helper,
             custom_logger,
         )
@@ -61,8 +59,8 @@ class HistoricalHandler:
         Output: {"reason": "HISTORICAL", "tsp_id": 1040,
         "source_count": 65, "indexed_count": 65}
 
-        The method returns None when the document has no sentence rows or its
-        rows disappear before they can be loaded.
+        The method returns None when the document has no sentence records or
+        those records disappear before they can be loaded.
         """
 
         started_at = perf_counter()
@@ -76,7 +74,7 @@ class HistoricalHandler:
         )
         if total == 0:
             self.logger.error(
-                "No sentences_vector rows are available for this document."
+                "No sentences_vector records are available for this document."
             )
             return None
 
@@ -92,35 +90,46 @@ class HistoricalHandler:
         ) as executor:
             while True:
                 page_number += 1
-                rows = retry_operation(
+                sentence_vector_records = retry_operation(
                     f"Load sentence page {page_number}",
-                    self.sentence_vector_db_store.load_historical_sentence_page,
+                    self.sentence_vector_db_store.load_document_sentence_page,
                     tsp_id,
                     after_global_id,
                     constants.WORKER_BATCH_SIZE * constants.THREAD_WORKER_COUNT,
                     wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                 )
-                if not rows:
+                if not sentence_vector_records:
                     break
 
                 if catalog_alias is None:
-                    catalog_alias = self.batch_processor.catalog_alias(
-                        rows[0].tsp.analysis_group
+                    catalog_alias = self.batch_processor.select_catalog_alias(
+                        sentence_vector_records[0].tsp.analysis_group
                     )
 
-                # Example: 3,000 rows become 100 jobs with 30 rows in each job.
+                # Example: 3,000 records become 100 jobs with 30 records each.
                 # The workers can run those small jobs at the same time.
-                worker_batches = list(batches(rows, constants.WORKER_BATCH_SIZE))
-                self.logger.info(
-                    f"Processing sentence page {page_number} with {len(rows)} "
-                    f"sentence(s) in {len(worker_batches)} worker batch(es); "
-                    f"starting_global_id={rows[0].global_id}, "
-                    f"ending_global_id={rows[-1].global_id}."
+                worker_batches = list(
+                    batches(
+                        sentence_vector_records,
+                        constants.WORKER_BATCH_SIZE,
+                    )
                 )
-                page_indexed = sum(executor.map(self._run_worker, worker_batches))
+                self.logger.info(
+                    f"Processing sentence page {page_number} with "
+                    f"{len(sentence_vector_records)} "
+                    f"sentence(s) in {len(worker_batches)} worker batch(es); "
+                    f"starting_global_id={sentence_vector_records[0].global_id}, "
+                    f"ending_global_id={sentence_vector_records[-1].global_id}."
+                )
+                page_indexed = sum(
+                    executor.map(
+                        self._save_historical_sentence_batch_in_opensearch,
+                        worker_batches,
+                    )
+                )
                 indexed += page_indexed
-                after_global_id = rows[-1].global_id
+                after_global_id = sentence_vector_records[-1].global_id
                 self.logger.info(
                     f"Sentence page {page_number} completed. Indexed "
                     f"{page_indexed} sentence(s) from this page and {indexed} "
@@ -145,8 +154,8 @@ class HistoricalHandler:
 
         # Tell Sentence Similarity only after every sentence is in OpenSearch.
         retry_operation(
-            "Send the completed document message",
-            self._publish,
+            "Send sentence processing result to next queue",
+            self._send_sqs_message,
             tsp_id,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
@@ -166,26 +175,39 @@ class HistoricalHandler:
             "indexed_count": indexed,
         }
 
-    def _run_worker(self, rows: list[SentencesVector]) -> int:
-        """Send one sentence batch to the shared batch processor.
+    def _save_historical_sentence_batch_in_opensearch(
+        self,
+        sentence_vector_records: list[SentencesVector],
+    ) -> int:
+        """Prepare and save one historical sentence batch in OpenSearch.
 
-        Input: rows containing global IDs 3001 through 3030
-        Output: 30 after every occurrence in the batch is indexed.
+        Input: SentencesVector records containing global IDs 3001 through 3030
+        Output: 30 after catalog and occurrence documents are saved.
+
+        The shared processor saves missing sentence keys and reuses database
+        embeddings before asking Bedrock to create any remaining vectors.
         """
 
         label = (
-            f"Worker batch for global IDs {rows[0].global_id} "
-            f"through {rows[-1].global_id}"
+            f"Worker batch for global IDs "
+            f"{sentence_vector_records[0].global_id} through "
+            f"{sentence_vector_records[-1].global_id}"
         )
-        return self.batch_processor.process(rows, label)
+        return self.batch_processor.save_historical_sentence_batch(
+            sentence_vector_records,
+            label,
+            self.sentence_vector_db_store,
+            self.embedding_db_store,
+        )
 
-    def _publish(self, tsp_id: TspId) -> None:
-        """Send the completed document to Sentence Similarity.
+    def _send_sqs_message(self, tsp_id: TspId) -> None:
+        """Send the completed historical document to Sentence Similarity.
 
         Input: tsp_id=1040
+        Output message: {"reason": "HISTORICAL", "tsp_id": 1040}
 
-        The queue receives {"reason": "HISTORICAL", "tsp_id": 1040}. When no
-        backfill queue is configured, the method returns without sending.
+        When no backfill queue is configured, the method returns without
+        sending a message.
 
         Raises:
             QueueSendError: If SQS does not accept the message.

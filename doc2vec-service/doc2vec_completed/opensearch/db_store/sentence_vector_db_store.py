@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from sqlalchemy import bindparam, func, select, update
 from sqlalchemy.orm import Session, joinedload, load_only
 
+from doc2vec_completed.opensearch import constants
+from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.contracts import TspId
 from doc2vec_completed.opensearch.text import sentence_key, sentence_word_count
 from ta_db_connection.atables import SentencesVector, TextSimilarityInput
@@ -16,10 +18,10 @@ class SentenceVectorDBStore:
         self.session_factory = session_factory
 
     def count_sentences_by_tsp_id(self, tsp_id: TspId) -> int:
-        """Count all sentence rows for one document.
+        """Count all SentencesVector records for one document.
 
         Input: tsp_id=1040
-        Output: 65 when the document contains 65 sentence rows.
+        Output: 65 when the document contains 65 sentence records.
         """
 
         with self.session_factory() as session:
@@ -30,60 +32,26 @@ class SentenceVectorDBStore:
             )
             return int(session.scalar(statement) or 0)
 
-    def load_live_sentence_rows(self, tsp_id: TspId) -> list[SentencesVector]:
-        """Load saved live sentences and the document fields needed by OpenSearch.
-
-        Input: tsp_id=1040
-        Output: the saved SentencesVector rows ordered by sent_id_local.
-
-        The live handler uses these rows to resume after PostgreSQL finished but
-        OpenSearch or the next SQS send failed. The legacy embedding_list column
-        is not loaded because it is not needed for this check or indexing.
-        """
-
-        with self.session_factory() as session:
-            statement = (
-                select(SentencesVector)
-                .options(
-                    load_only(
-                        SentencesVector.global_id,
-                        SentencesVector.tsp_id,
-                        SentencesVector.sent_id_local,
-                        SentencesVector.sentence_content,
-                        SentencesVector.sentence_key,
-                        SentencesVector.source_type,
-                        SentencesVector.last_modified,
-                    ),
-                    joinedload(SentencesVector.tsp).load_only(
-                        TextSimilarityInput.tsp_id,
-                        TextSimilarityInput.application_id,
-                        TextSimilarityInput.section_name,
-                        TextSimilarityInput.analysis_group,
-                        TextSimilarityInput.is_current,
-                    ),
-                )
-                .where(SentencesVector.tsp_id == tsp_id)
-                .order_by(SentencesVector.sent_id_local)
-            )
-            return list(session.scalars(statement))
-
-    def load_historical_sentence_page(
+    def load_document_sentence_page(
         self,
         tsp_id: TspId,
         after_global_id: int,
         page_size: int,
     ) -> list[SentencesVector]:
-        """Load an ordered historical sentence page with its document fields.
+        """Load one ordered sentence page with its parent document fields.
 
-        Input: tsp_id=1040, after_global_id=3000, page_size=3000
-        Output: up to 3000 rows whose global_id is greater than 3000.
+        Input: tsp_id=1040, after_global_id=500, page_size=500
+        Output: up to 500 records whose global_id is greater than 500.
+
+        Incoming and historical processing share this query. The legacy
+        embedding_list column is not loaded because neither path needs it.
         """
 
         with self.session_factory() as session:
             statement = (
                 select(SentencesVector)
                 .options(
-                    # Avoid embedding_list because some old rows contain NumPy
+                    # Avoid embedding_list because some old records contain NumPy
                     # values that SQLAlchemy cannot safely load here.
                     load_only(
                         SentencesVector.global_id,
@@ -113,30 +81,38 @@ class SentenceVectorDBStore:
 
     def save_missing_sentence_keys(
         self,
-        rows: list[SentencesVector],
+        sentence_vector_records: list[SentencesVector],
     ) -> tuple[int, int]:
-        """Reuse existing keys and save SHA-256 keys only for missing rows.
+        """Reuse existing keys and save SHA-256 keys for missing records.
 
-        Input: 30 rows where 10 already contain sentence_key.
+        Input: 30 SentencesVector records where 10 already contain sentence_key.
         Output: (20, 10), meaning 20 generated keys and 10 reused keys.
         """
 
         current_time = datetime.now(UTC)
         updates = []
-        prepared_rows = []
+        prepared_records = []
         reused_count = 0
-        for row in rows:
-            if row.sentence_key:
+        for sentence_vector_record in sentence_vector_records:
+            if sentence_vector_record.sentence_key:
                 reused_count += 1
                 continue
 
-            prepared_rows.append((row, row.sentence_key, row.last_modified))
-            row.sentence_key = sentence_key(row.sentence_content)
-            row.last_modified = current_time
+            prepared_records.append(
+                (
+                    sentence_vector_record,
+                    sentence_vector_record.sentence_key,
+                    sentence_vector_record.last_modified,
+                )
+            )
+            sentence_vector_record.sentence_key = sentence_key(
+                sentence_vector_record.sentence_content
+            )
+            sentence_vector_record.last_modified = current_time
             updates.append(
                 {
-                    "record_global_id": row.global_id,
-                    "record_sentence_key": row.sentence_key,
+                    "record_global_id": sentence_vector_record.global_id,
+                    "record_sentence_key": sentence_vector_record.sentence_key,
                     "record_last_modified": current_time,
                 }
             )
@@ -158,111 +134,84 @@ class SentenceVectorDBStore:
                 session.execute(statement, updates)
                 session.commit()
         except Exception:
-            # Put the in-memory rows back before retrying the whole database write.
-            for row, original_key, original_last_modified in prepared_rows:
-                row.sentence_key = original_key
-                row.last_modified = original_last_modified
+            # Restore in-memory records before retrying the database write.
+            for (
+                sentence_vector_record,
+                original_key,
+                original_last_modified,
+            ) in prepared_records:
+                sentence_vector_record.sentence_key = original_key
+                sentence_vector_record.last_modified = original_last_modified
             raise
         return len(updates), reused_count
 
-    def save_live_sentence_batch(
+    def save_document_sentences(
         self,
         document: TextSimilarityInput,
         sentences: list[tuple[int, str]],
     ) -> list[SentencesVector]:
-        """Insert or update one ordered batch of live document sentences.
+        """Insert all live sentences with one commit for the whole document.
 
         Input: document for tsp_id=1040 and sentences=[(1, "First sentence."),
         (2, "Second sentence.")]
-        Output: two SentencesVector rows with global IDs and sentence keys.
+        Output: two SentencesVector records with global IDs and sentence keys.
 
-        The local sentence number makes a retried message safe. A row already
-        stored for the same tsp_id and sent_id_local is updated, while a missing
-        row is inserted. Each returned row is ready for OpenSearch indexing.
+        Large documents are added and flushed in batches so generated global
+        IDs are available without holding every pending insert in memory. The
+        transaction commits only after every batch succeeds. Any error rolls
+        back all sentence records for the document.
         """
 
         if not sentences:
             return []
 
-        local_ids = [local_id for local_id, _ in sentences]
         current_time = datetime.now(UTC)
         with self.session_factory() as session:
-            statement = (
-                select(SentencesVector)
-                .options(
-                    # Do not load the legacy embedding_list column. Some old
-                    # rows contain NumPy values that MutableList cannot read.
-                    load_only(
-                        SentencesVector.global_id,
-                        SentencesVector.tsp_id,
-                        SentencesVector.sent_id_local,
-                        SentencesVector.sentence_content,
-                        SentencesVector.word_count,
-                        SentencesVector.source_type,
-                        SentencesVector.analysis_group,
-                        SentencesVector.is_current,
-                        SentencesVector.sentence_key,
-                        SentencesVector.last_modified,
-                    )
-                )
-                .where(
-                    SentencesVector.tsp_id == document.tsp_id,
-                    SentencesVector.sent_id_local.in_(local_ids),
-                )
-            )
-            existing_rows = {
-                row.sent_id_local: row for row in session.scalars(statement)
-            }
-            saved_rows: list[SentencesVector] = []
-            new_rows: list[SentencesVector] = []
+            saved_sentence_vector_records: list[SentencesVector] = []
+            try:
+                for sentence_batch in batches(
+                    sentences,
+                    constants.LIVE_DATABASE_BATCH_SIZE,
+                ):
+                    sentence_vector_records = [
+                        SentencesVector(
+                            tsp_id=document.tsp_id,
+                            a_number=document.a_number,
+                            section_name=document.section_name,
+                            sent_id_local=local_id,
+                            sentence_content=content,
+                            word_count=sentence_word_count(content),
+                            source_type=document.source_type.strip().lower(),
+                            analysis_group=document.analysis_group,
+                            is_current=document.is_current,
+                            last_modified=current_time,
+                            sentence_key=sentence_key(content),
+                        )
+                        for local_id, content in sentence_batch
+                    ]
+                    session.add_all(sentence_vector_records)
 
-            for local_id, content in sentences:
-                row = existing_rows.get(local_id)
-                if row is None:
-                    row = SentencesVector(
-                        tsp_id=document.tsp_id,
-                        a_number=document.a_number,
-                        section_name=document.section_name,
-                        sent_id_local=local_id,
-                        sentence_content=content,
-                        word_count=sentence_word_count(content),
-                        source_type=document.source_type.strip().lower(),
-                        analysis_group=document.analysis_group,
-                        is_current=document.is_current,
-                        last_modified=current_time,
-                        sentence_key=sentence_key(content),
-                    )
-                    new_rows.append(row)
-                else:
-                    # A retry may reach a batch already committed before a later
-                    # OpenSearch or SQS operation failed. Keep that row and make
-                    # its live document fields match the current source text.
-                    row.a_number = document.a_number
-                    row.section_name = document.section_name
-                    row.sentence_content = content
-                    row.word_count = sentence_word_count(content)
-                    row.source_type = document.source_type.strip().lower()
-                    row.analysis_group = document.analysis_group
-                    row.is_current = document.is_current
-                    row.sentence_key = sentence_key(content)
-                    row.last_modified = current_time
-                saved_rows.append(row)
+                    # Flush assigns global IDs, but these records are still not
+                    # permanent. A later failure can roll back every batch.
+                    session.flush()
+                    saved_sentence_vector_records.extend(sentence_vector_records)
 
-            session.add_all(new_rows)
-            session.flush()
-            session.commit()
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
 
-            # OpenSearch needs fields from the parent document. Assign the
-            # already-loaded row so worker threads do not make lazy DB queries.
-            for row in saved_rows:
-                row.tsp = document
-            return saved_rows
+            # OpenSearch needs the parent document fields. Assign the loaded
+            # record so worker threads do not make lazy database queries.
+            for sentence_vector_record in saved_sentence_vector_records:
+                sentence_vector_record.tsp = document
+            return saved_sentence_vector_records
 
     def count_training_sentences_by_tsp_id(self, tsp_id: TspId) -> int:
         """Count normal sentences that are eligible for IVF model training.
 
         Input: tsp_id=1040
-        Output: 950 when 950 rows are not tracer, form-language, or non-matcher.
+        Output: 950 when 950 records are eligible for model training.
         """
 
         with self.session_factory() as session:
@@ -287,7 +236,7 @@ class SentenceVectorDBStore:
         """Load the next ordered page of normal model-training sentences.
 
         Input: tsp_id=1040, after_global_id=0, page_size=1000
-        Output: up to 1000 eligible rows ordered by global_id.
+        Output: up to 1000 eligible records ordered by global_id.
         """
 
         with self.session_factory() as session:

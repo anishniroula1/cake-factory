@@ -18,7 +18,8 @@ OPENSEARCH_BULK_RETRY_COUNT = 15  # Retries after the first bulk request fails.
 VECTOR_DIMENSION = 512
 
 # Processing
-LIVE_DATABASE_BATCH_SIZE = 1000  # Sentence rows saved per live database commit.
+LIVE_DATABASE_BATCH_SIZE = 1000  # Sentence records flushed per database batch.
+DOCUMENT_SENTENCE_PAGE_SIZE = 500  # Saved sentence records loaded per query.
 WORKER_BATCH_SIZE = 30  # Sentences handled by one historical worker job.
 THREAD_WORKER_COUNT = 100  # Historical worker jobs allowed at the same time.
 TRAIN_MODEL_WORKER_COUNT = 16  # Training-index jobs allowed at the same time.
