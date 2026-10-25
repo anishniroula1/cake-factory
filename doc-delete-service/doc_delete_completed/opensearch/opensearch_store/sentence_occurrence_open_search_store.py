@@ -10,7 +10,7 @@ class SentenceOccurrenceOpenSearchStore:
     def __init__(self, client) -> None:
         self.client = client
 
-    def load_occurrences_by_tsp_id(self, tsp_id: TspId) -> list[OccurrenceRecord]:
+    def load_document_occurrences(self, tsp_id: TspId) -> list[OccurrenceRecord]:
         """Load every occurrence belonging to one document.
 
         Input: tsp_id=8205
@@ -21,10 +21,10 @@ class SentenceOccurrenceOpenSearchStore:
         sentences than one OpenSearch response page.
         """
 
-        records: list[OccurrenceRecord] = []
+        occurrence_records: list[OccurrenceRecord] = []
         search_after = None
         while True:
-            body = {
+            search_body = {
                 "size": constants.OPENSEARCH_PAGE_SIZE,
                 "track_total_hits": False,
                 "_source": ["globalId", "sentenceKey", "analysisGroup"],
@@ -32,28 +32,28 @@ class SentenceOccurrenceOpenSearchStore:
                 "sort": [{"globalId": {"order": "asc"}}],
             }
             if search_after is not None:
-                body["search_after"] = search_after
+                search_body["search_after"] = search_after
 
-            response = self.client.search(index=constants.SENTENCE_OCCURRENCE_ALIAS, body=body)
-            hits = response.get("hits", {}).get("hits", [])
-            if not hits:
-                return records
+            search_response = self.client.search(index=constants.SENTENCE_OCCURRENCE_ALIAS, body=search_body)
+            occurrence_hits = search_response.get("hits", {}).get("hits", [])
+            if not occurrence_hits:
+                return occurrence_records
 
-            for hit in hits:
-                source = hit["_source"]
-                records.append(
+            for occurrence_hit in occurrence_hits:
+                occurrence_source = occurrence_hit["_source"]
+                occurrence_records.append(
                     {
-                        "global_id": int(source["globalId"]),
-                        "sentence_key": str(source["sentenceKey"]),
-                        "analysis_group": str(source["analysisGroup"]),
+                        "global_id": int(occurrence_source["globalId"]),
+                        "sentence_key": str(occurrence_source["sentenceKey"]),
+                        "analysis_group": str(occurrence_source["analysisGroup"]),
                     }
                 )
 
-            if len(hits) < constants.OPENSEARCH_PAGE_SIZE:
-                return records
-            search_after = hits[-1]["sort"]
+            if len(occurrence_hits) < constants.OPENSEARCH_PAGE_SIZE:
+                return occurrence_records
+            search_after = occurrence_hits[-1]["sort"]
 
-    def delete_occurrences(self, global_ids: list[int]) -> int:
+    def delete_occurrences_by_global_id(self, global_ids: list[int]) -> int:
         """Delete occurrence documents and wait until searches see the deletion.
 
         Input: global_ids=[100, 101]
@@ -62,23 +62,20 @@ class SentenceOccurrenceOpenSearchStore:
         Waiting for refresh makes the completed delete visible immediately.
         """
 
-        deleted = 0
+        deleted_occurrence_count = 0
         for offset in range(0, len(global_ids), constants.OPENSEARCH_PAGE_SIZE):
-            batch = global_ids[offset : offset + constants.OPENSEARCH_PAGE_SIZE]
-            actions: list[BulkDeleteAction] = [
+            global_id_batch = global_ids[offset : offset + constants.OPENSEARCH_PAGE_SIZE]
+            delete_actions: list[BulkDeleteAction] = [
                 {"delete": {"_index": constants.SENTENCE_OCCURRENCE_ALIAS, "_id": str(global_id)}}
-                for global_id in batch
+                for global_id in global_id_batch
             ]
-            response = self.client.bulk(body=actions, refresh="wait_for")
-            self._raise_for_bulk_errors(response, "occurrence")
-            deleted += len(batch)
-        return deleted
+            bulk_response = self.client.bulk(body=delete_actions, refresh="wait_for")
+            self._raise_for_failed_bulk_deletes(bulk_response, "occurrence")
+            deleted_occurrence_count += len(global_id_batch)
+        return deleted_occurrence_count
 
-    def find_referenced_sentence_keys(
-        self,
-        sentence_keys: list[str],
-        analysis_group: str,
-        excluded_tsp_id: TspId,
+    def find_sentence_keys_used_by_other_documents(
+        self, sentence_keys: list[str], analysis_group: str, excluded_tsp_id: TspId
     ) -> set[str]:
         """Return keys used by another document in the same analysis group.
 
@@ -91,16 +88,16 @@ class SentenceOccurrenceOpenSearchStore:
         kept until catalog cleanup succeeds.
         """
 
-        referenced: set[str] = set()
-        unique_keys = list(dict.fromkeys(sentence_keys))
-        for offset in range(0, len(unique_keys), constants.OPENSEARCH_PAGE_SIZE):
-            key_batch = unique_keys[offset : offset + constants.OPENSEARCH_PAGE_SIZE]
-            if not key_batch:
+        shared_sentence_keys: set[str] = set()
+        unique_sentence_keys = list(dict.fromkeys(sentence_keys))
+        for offset in range(0, len(unique_sentence_keys), constants.OPENSEARCH_PAGE_SIZE):
+            sentence_key_batch = unique_sentence_keys[offset : offset + constants.OPENSEARCH_PAGE_SIZE]
+            if not sentence_key_batch:
                 continue
 
             # Exclude the document being deleted, then return only the unique
             # sentence keys that are still used by another occurrence.
-            response = self.client.search(
+            search_response = self.client.search(
                 index=constants.SENTENCE_OCCURRENCE_ALIAS,
                 body={
                     "size": 0,
@@ -108,7 +105,7 @@ class SentenceOccurrenceOpenSearchStore:
                     "query": {
                         "bool": {
                             "filter": [
-                                {"terms": {"sentenceKey": key_batch}},
+                                {"terms": {"sentenceKey": sentence_key_batch}},
                                 {"term": {"analysisGroup": analysis_group}},
                             ],
                             "must_not": [{"term": {"tspId": excluded_tsp_id}}],
@@ -119,30 +116,38 @@ class SentenceOccurrenceOpenSearchStore:
                             # The aggregation returns the keys without loading
                             # every matching occurrence document into Python.
                             "composite": {
-                                "size": len(key_batch),
+                                "size": len(sentence_key_batch),
                                 "sources": [{"sentenceKey": {"terms": {"field": "sentenceKey"}}}],
                             }
                         }
                     },
                 },
             )
-            buckets = response.get("aggregations", {}).get("remaining_keys", {}).get("buckets", [])
-            referenced.update(str(bucket["key"]["sentenceKey"]) for bucket in buckets)
-        return referenced
+            sentence_key_buckets = search_response.get("aggregations", {}).get("remaining_keys", {}).get("buckets", [])
+            shared_sentence_keys.update(
+                str(sentence_key_bucket["key"]["sentenceKey"]) for sentence_key_bucket in sentence_key_buckets
+            )
+        return shared_sentence_keys
 
     @staticmethod
-    def _raise_for_bulk_errors(response: dict, operation: str) -> None:
+    def _raise_for_failed_bulk_deletes(bulk_response: dict, operation: str) -> None:
         """Raise one useful error when a bulk request contains failed items."""
 
-        if not response.get("errors"):
+        if not bulk_response.get("errors"):
             return
-        failures = []
-        for item in response.get("items", []):
-            details = item.get("delete", {})
-            if details.get("error"):
-                failures.append(
-                    {"id": details.get("_id"), "status": details.get("status"), "error": details.get("error")}
+        failed_deletes = []
+        for bulk_item in bulk_response.get("items", []):
+            delete_details = bulk_item.get("delete", {})
+            if delete_details.get("error"):
+                failed_deletes.append(
+                    {
+                        "id": delete_details.get("_id"),
+                        "status": delete_details.get("status"),
+                        "error": delete_details.get("error"),
+                    }
                 )
-        if not failures:
+        if not failed_deletes:
             return
-        raise OpenSearchException(f"{operation} bulk deletion failed for {len(failures)} item(s): {failures[:10]}")
+        raise OpenSearchException(
+            f"{operation} bulk deletion failed for {len(failed_deletes)} item(s): {failed_deletes[:10]}"
+        )

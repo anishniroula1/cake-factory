@@ -14,9 +14,9 @@ class SqsProcessor:
 
         while True:
             for message in self.dependencies.aws_sqs.listen_sqs_message():
-                self._process_message(message)
+                self._process_document_delete_message(message)
 
-    def _process_message(self, message: SqsMessage) -> None:
+    def _process_document_delete_message(self, message: SqsMessage) -> None:
         """Delete one document and remove its source message only after success.
 
         Input: message={"tsp_id": 8205, "ReceiptHandle": "receipt-value"}
@@ -26,14 +26,14 @@ class SqsProcessor:
         """
 
         try:
-            tsp_id = self._read_tsp_id(message)
+            tsp_id = self._read_tsp_id_from_message(message)
             if tsp_id is None:
                 self.dependencies.logger.error("The SQS message is missing the required tsp_id.")
                 return
             self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}")
             self.dependencies.logger.info("Starting an SQS document-deletion message.")
-            result = self.dependencies.document_delete_handler.process(tsp_id)
-            if not result.get("next_message_sent"):
+            deletion_result = self.dependencies.document_delete_handler.process_document_deletion(tsp_id)
+            if not deletion_result.get("next_message_sent"):
                 self.dependencies.logger.error("Document deletion did not complete the message.")
                 return
         except (OperationFailedError, PermanentDataError, QueueSendError) as error:
@@ -48,9 +48,8 @@ class SqsProcessor:
         self.dependencies.logger.info("Document deletion completed and deleted the source SQS message.")
 
     @staticmethod
-    def _read_tsp_id(message: SqsMessage) -> TspId | None:
+    def _read_tsp_id_from_message(message: SqsMessage) -> TspId | None:
         """Return tsp_id without changing the integer or string supplied upstream."""
 
         tsp_id = message.get("tsp_id")
         return None if tsp_id is None or tsp_id == "" else tsp_id
-

@@ -12,7 +12,7 @@ class EmbeddingsDBStore:
     def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
-    def delete_embeddings(self, global_ids: list[int]) -> int:
+    def delete_sentence_embeddings(self, global_ids: list[int]) -> int:
         """Delete embeddings for the supplied sentence global IDs.
 
         Input: global_ids=[100, 101]

@@ -40,7 +40,7 @@ class TitanMatchesDBStore:
     def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
-    def delete_document_matches(self, tsp_id: TspId) -> TitanMatchDeletionResult:
+    def delete_bidirectional_document_matches(self, tsp_id: TspId) -> TitanMatchDeletionResult:
         """Delete source buckets and reverse references for one document.
 
         Input: tsp_id=8205
@@ -48,11 +48,11 @@ class TitanMatchesDBStore:
         """
 
         with self.session_factory() as session:
-            row = session.execute(DELETE_TITAN_MATCHES, {"tsp_id": tsp_id}).one()
+            deletion_counts_record = session.execute(DELETE_TITAN_MATCHES, {"tsp_id": tsp_id}).one()
             session.commit()
             return TitanMatchDeletionResult(
-                source_global_id_count=int(row.source_global_id_count),
-                deleted_match_bucket_count=int(row.deleted_match_bucket_count),
-                updated_reverse_bucket_count=int(row.updated_reverse_bucket_count),
-                deleted_empty_bucket_count=int(row.deleted_empty_bucket_count),
+                source_global_id_count=int(deletion_counts_record.source_global_id_count),
+                deleted_match_bucket_count=int(deletion_counts_record.deleted_match_bucket_count),
+                updated_reverse_bucket_count=int(deletion_counts_record.updated_reverse_bucket_count),
+                deleted_empty_bucket_count=int(deletion_counts_record.deleted_empty_bucket_count),
             )

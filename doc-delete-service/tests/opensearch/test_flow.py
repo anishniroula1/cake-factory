@@ -20,8 +20,8 @@ from tests.opensearch.fakes import (
 
 
 def build_handler(
-    occurrence_store=None,
-    catalog_store=None,
+    sentence_occurrence_open_search_store=None,
+    sentence_catalog_open_search_store=None,
     sentence_vector_db_store=None,
     embeddings_db_store=None,
     titan_matches_db_store=None,
@@ -30,8 +30,8 @@ def build_handler(
 ):
     logger = LoggerFake()
     return DocumentDeleteHandler(
-        occurrence_store or OccurrenceStoreFake(),
-        catalog_store or CatalogStoreFake(),
+        sentence_occurrence_open_search_store or OccurrenceStoreFake(),
+        sentence_catalog_open_search_store or CatalogStoreFake(),
         sentence_vector_db_store or SentenceVectorDBStoreFake(),
         embeddings_db_store or EmbeddingsDBStoreFake(),
         titan_matches_db_store or TitanMatchesDBStoreFake(),
@@ -44,28 +44,23 @@ def build_handler(
 
 def test_document_deletion_runs_the_complete_flow():
     events = []
-    records = [
+    occurrence_records = [
         {"global_id": 1, "sentence_key": "key-a", "analysis_group": "Asylee"},
         {"global_id": 2, "sentence_key": "key-b", "analysis_group": "Asylee"},
     ]
-    occurrence_store = OccurrenceStoreFake(records, referenced={"key-b"}, events=events)
+    occurrence_store = OccurrenceStoreFake(occurrence_records, shared_sentence_keys={"key-b"}, events=events)
     catalog_store = CatalogStoreFake(events=events)
     sentence_vector_db_store = SentenceVectorDBStoreFake()
     embeddings_db_store = EmbeddingsDBStoreFake()
     titan_matches_db_store = TitanMatchesDBStoreFake()
     aws_sqs = AwsSqsFake()
     handler = build_handler(
-        occurrence_store,
-        catalog_store,
-        sentence_vector_db_store,
-        embeddings_db_store,
-        titan_matches_db_store,
-        aws_sqs,
+        occurrence_store, catalog_store, sentence_vector_db_store, embeddings_db_store, titan_matches_db_store, aws_sqs
     )
 
-    result = handler.process(10)
+    deletion_result = handler.process_document_deletion(10)
 
-    assert result == {
+    assert deletion_result == {
         "tsp_id": 10,
         "occurrence_count": 2,
         "catalog_count": 1,
@@ -88,43 +83,43 @@ def test_missing_occurrences_do_not_drive_opensearch_cleanup_from_database():
     sentence_store = SentenceVectorDBStoreFake()
     handler = build_handler(OccurrenceStoreFake(), catalog_store, sentence_store)
 
-    result = handler.process("10")
+    deletion_result = handler.process_document_deletion("10")
 
-    assert result["occurrence_count"] == 0
+    assert deletion_result["occurrence_count"] == 0
     assert catalog_store.deleted == []
     assert sentence_store.deleted == ["10"]
 
 
 def test_occurrence_global_ids_are_used_when_sentence_vector_is_empty():
-    records = [{"global_id": 101, "sentence_key": "key-a", "analysis_group": "Asylee"}]
+    occurrence_records = [{"global_id": 101, "sentence_key": "key-a", "analysis_group": "Asylee"}]
     sentence_vector_store = SentenceVectorDBStoreFake()
     sentence_vector_store.context = DocumentDeletionContext(10, None, [], [])
     embeddings_store = EmbeddingsDBStoreFake()
 
     build_handler(
-        occurrence_store=OccurrenceStoreFake(records),
+        sentence_occurrence_open_search_store=OccurrenceStoreFake(occurrence_records),
         sentence_vector_db_store=sentence_vector_store,
         embeddings_db_store=embeddings_store,
-    ).process(10)
+    ).process_document_deletion(10)
 
     assert embeddings_store.deleted == [101]
 
 
 def test_database_deletion_toggle_keeps_postgresql_rows():
-    records = [{"global_id": 1, "sentence_key": "key-a", "analysis_group": "Asylee"}]
+    occurrence_records = [{"global_id": 1, "sentence_key": "key-a", "analysis_group": "Asylee"}]
     sentence_store = SentenceVectorDBStoreFake()
     embeddings_store = EmbeddingsDBStoreFake()
     titan_store = TitanMatchesDBStoreFake()
 
-    result = build_handler(
-        occurrence_store=OccurrenceStoreFake(records),
+    deletion_result = build_handler(
+        sentence_occurrence_open_search_store=OccurrenceStoreFake(occurrence_records),
         sentence_vector_db_store=sentence_store,
         embeddings_db_store=embeddings_store,
         titan_matches_db_store=titan_store,
         database_delete_enabled=False,
-    ).process(10)
+    ).process_document_deletion(10)
 
-    assert result["database_delete_enabled"] is False
+    assert deletion_result["database_delete_enabled"] is False
     assert (sentence_store.loaded, sentence_store.deleted, embeddings_store.deleted, titan_store.deleted) == (
         [],
         [],
@@ -135,7 +130,7 @@ def test_database_deletion_toggle_keeps_postgresql_rows():
 
 def test_handler_keeps_message_when_next_queue_send_fails():
     with pytest.raises(QueueSendError):
-        build_handler(aws_sqs=AwsSqsFake(send_result=False)).process(10)
+        build_handler(aws_sqs=AwsSqsFake(send_result=False)).process_document_deletion(10)
 
 
 def test_sqs_processor_deletes_only_successful_messages():
@@ -146,22 +141,21 @@ def test_sqs_processor_deletes_only_successful_messages():
     logger = LoggerFake()
     processor = SqsProcessor(DependenciesFake(aws_sqs, handler, logger))
 
-    processor._process_message(missing)
-    processor._process_message(good)
+    processor._process_document_delete_message(missing)
+    processor._process_document_delete_message(good)
 
     assert (handler.calls, aws_sqs.deleted, logger.generic_message) == ([10], [good], "tsp_id=10")
 
 
 @pytest.mark.parametrize(
-    "error",
-    [OperationFailedError("failed"), PermanentDataError("bad data"), QueueSendError("queue failed")],
+    "error", [OperationFailedError("failed"), PermanentDataError("bad data"), QueueSendError("queue failed")]
 )
 def test_sqs_processor_leaves_failed_message_for_sqs(error):
     message = {"tsp_id": 10, "ReceiptHandle": "failed-local"}
     aws_sqs = AwsSqsFake()
     processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(error), LoggerFake()))
 
-    processor._process_message(message)
+    processor._process_document_delete_message(message)
 
     assert aws_sqs.deleted == []
 

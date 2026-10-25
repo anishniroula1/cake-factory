@@ -13,7 +13,7 @@ class SentenceVectorDBStore:
     def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
-    def load_document_from_sentence_vector(self, tsp_id: TspId) -> DocumentDeletionContext:
+    def load_document_sentence_context(self, tsp_id: TspId) -> DocumentDeletionContext:
         """Load the sentence identifiers required by the deletion flow.
 
         Input: tsp_id=8205
@@ -21,23 +21,25 @@ class SentenceVectorDBStore:
         """
 
         with self.session_factory() as session:
-            rows = session.execute(
-                select(
-                    SentencesVector.global_id,
-                    SentencesVector.sentence_key,
-                    SentencesVector.analysis_group,
-                )
+            sentence_vector_records = session.execute(
+                select(SentencesVector.global_id, SentencesVector.sentence_key, SentencesVector.analysis_group)
                 .where(SentencesVector.tsp_id == tsp_id)
                 .order_by(SentencesVector.global_id)
             ).all()
             return DocumentDeletionContext(
                 tsp_id=tsp_id,
-                analysis_group=str(rows[0].analysis_group) if rows else None,
-                global_ids=[int(row.global_id) for row in rows],
-                sentence_keys=[str(row.sentence_key) for row in rows if row.sentence_key],
+                analysis_group=(str(sentence_vector_records[0].analysis_group) if sentence_vector_records else None),
+                global_ids=[
+                    int(sentence_vector_record.global_id) for sentence_vector_record in sentence_vector_records
+                ],
+                sentence_keys=[
+                    str(sentence_vector_record.sentence_key)
+                    for sentence_vector_record in sentence_vector_records
+                    if sentence_vector_record.sentence_key
+                ],
             )
 
-    def delete_document_sentences(self, tsp_id: TspId) -> int:
+    def delete_document_sentence_records(self, tsp_id: TspId) -> int:
         """Delete every sentences_vector row owned by one tsp_id."""
 
         with self.session_factory() as session:

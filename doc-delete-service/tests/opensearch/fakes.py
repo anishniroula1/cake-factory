@@ -20,25 +20,25 @@ class LoggerFake:
 
 
 class OccurrenceStoreFake:
-    def __init__(self, records=None, referenced=None, events=None) -> None:
-        self.records = records or []
-        self.referenced = set(referenced or [])
+    def __init__(self, occurrence_records=None, shared_sentence_keys=None, events=None) -> None:
+        self.occurrence_records = occurrence_records or []
+        self.shared_sentence_keys = set(shared_sentence_keys or [])
         self.events = events
         self.deleted: list[str] = []
         self.reference_calls: list[tuple[list[str], str, object]] = []
 
-    def load_occurrences_by_tsp_id(self, tsp_id):
-        return self.records
+    def load_document_occurrences(self, tsp_id):
+        return self.occurrence_records
 
-    def delete_occurrences(self, global_ids):
+    def delete_occurrences_by_global_id(self, global_ids):
         if self.events is not None:
             self.events.append("delete occurrences")
         self.deleted.extend(global_ids)
         return len(global_ids)
 
-    def find_referenced_sentence_keys(self, sentence_keys, analysis_group, excluded_tsp_id):
+    def find_sentence_keys_used_by_other_documents(self, sentence_keys, analysis_group, excluded_tsp_id):
         self.reference_calls.append((sentence_keys, analysis_group, excluded_tsp_id))
-        return self.referenced
+        return self.shared_sentence_keys
 
 
 class CatalogStoreFake:
@@ -46,7 +46,7 @@ class CatalogStoreFake:
         self.events = events
         self.deleted: list[tuple[str, list[str]]] = []
 
-    def delete_sentence_keys(self, analysis_group, sentence_keys):
+    def delete_catalog_documents_by_sentence_key(self, analysis_group, sentence_keys):
         if self.events is not None:
             self.events.append("delete catalog")
         self.deleted.append((analysis_group, sentence_keys))
@@ -59,11 +59,11 @@ class SentenceVectorDBStoreFake:
         self.loaded = []
         self.deleted = []
 
-    def load_document_from_sentence_vector(self, tsp_id):
+    def load_document_sentence_context(self, tsp_id):
         self.loaded.append(tsp_id)
         return self.context
 
-    def delete_document_sentences(self, tsp_id):
+    def delete_document_sentence_records(self, tsp_id):
         self.deleted.append(tsp_id)
         return 2
 
@@ -72,7 +72,7 @@ class EmbeddingsDBStoreFake:
     def __init__(self) -> None:
         self.deleted = []
 
-    def delete_embeddings(self, global_ids):
+    def delete_sentence_embeddings(self, global_ids):
         self.deleted.extend(global_ids)
         return len(global_ids)
 
@@ -81,7 +81,7 @@ class TitanMatchesDBStoreFake:
     def __init__(self) -> None:
         self.deleted = []
 
-    def delete_document_matches(self, tsp_id):
+    def delete_bidirectional_document_matches(self, tsp_id):
         self.deleted.append(tsp_id)
         return TitanMatchDeletionResult(2, 3, 4, 1)
 
@@ -111,7 +111,7 @@ class HandlerFake:
         self.failure = failure
         self.calls = []
 
-    def process(self, tsp_id):
+    def process_document_deletion(self, tsp_id):
         self.calls.append(tsp_id)
         if self.failure:
             raise self.failure
@@ -123,4 +123,3 @@ class DependenciesFake:
         self.aws_sqs = aws_sqs
         self.document_delete_handler = handler
         self.logger = logger
-

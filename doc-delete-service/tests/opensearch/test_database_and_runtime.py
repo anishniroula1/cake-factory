@@ -53,7 +53,7 @@ def test_database_store_loads_context_and_deletes_owned_rows():
                 SimpleNamespace(global_id=1, sentence_key="key-a", analysis_group="Asylee"),
                 SimpleNamespace(global_id=2, sentence_key=None, analysis_group="Asylee"),
             ]
-        ),
+        )
     )
     function_row = SimpleNamespace(
         source_global_id_count=2,
@@ -66,10 +66,10 @@ def test_database_store_loads_context_and_deletes_owned_rows():
     sentence_delete_session = session_with_results(SimpleNamespace(rowcount=2))
 
     sentence_store = SentenceVectorDBStore(lambda: context_session)
-    context = sentence_store.load_document_from_sentence_vector(10)
-    deleted_matches = TitanMatchesDBStore(lambda: match_session).delete_document_matches(10)
-    deleted_embeddings = EmbeddingsDBStore(lambda: embedding_session).delete_embeddings(context.global_ids)
-    deleted_sentences = SentenceVectorDBStore(lambda: sentence_delete_session).delete_document_sentences(10)
+    context = sentence_store.load_document_sentence_context(10)
+    deleted_matches = TitanMatchesDBStore(lambda: match_session).delete_bidirectional_document_matches(10)
+    deleted_embeddings = EmbeddingsDBStore(lambda: embedding_session).delete_sentence_embeddings(context.global_ids)
+    deleted_sentences = SentenceVectorDBStore(lambda: sentence_delete_session).delete_document_sentence_records(10)
 
     assert (context.global_ids, context.sentence_keys) == ([1, 2], ["key-a"])
     assert (deleted_matches.deleted_match_bucket_count, deleted_matches.updated_reverse_bucket_count) == (3, 4)
@@ -80,7 +80,7 @@ def test_database_store_loads_context_and_deletes_owned_rows():
 def test_database_store_returns_empty_context_when_document_has_no_sentences():
     store = SentenceVectorDBStore(lambda: session_with_results(result(all=[])))
 
-    context = store.load_document_from_sentence_vector(10)
+    context = store.load_document_sentence_context(10)
 
     assert (context.analysis_group, context.global_ids, context.sentence_keys) == (None, [], [])
 
@@ -88,7 +88,7 @@ def test_database_store_returns_empty_context_when_document_has_no_sentences():
 def test_embeddings_store_skips_database_when_there_are_no_global_ids():
     session_factory = Mock()
 
-    assert EmbeddingsDBStore(session_factory).delete_embeddings([]) == 0
+    assert EmbeddingsDBStore(session_factory).delete_sentence_embeddings([]) == 0
     session_factory.assert_not_called()
 
 

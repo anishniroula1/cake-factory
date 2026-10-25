@@ -31,8 +31,8 @@ class DocumentDeleteHandler:
 
     def __init__(
         self,
-        occurrence_store: SentenceOccurrenceOpenSearchStore,
-        catalog_store: SentenceCatalogOpenSearchStore,
+        sentence_occurrence_open_search_store: SentenceOccurrenceOpenSearchStore,
+        sentence_catalog_open_search_store: SentenceCatalogOpenSearchStore,
         sentence_vector_db_store: SentenceVectorDBStore,
         embeddings_db_store: EmbeddingsDBStore,
         titan_matches_db_store: TitanMatchesDBStore,
@@ -41,8 +41,8 @@ class DocumentDeleteHandler:
         custom_logger: CustomLogger,
         database_delete_enabled: bool,
     ) -> None:
-        self.occurrence_store = occurrence_store
-        self.catalog_store = catalog_store
+        self.sentence_occurrence_open_search_store = sentence_occurrence_open_search_store
+        self.sentence_catalog_open_search_store = sentence_catalog_open_search_store
         self.sentence_vector_db_store = sentence_vector_db_store
         self.embeddings_db_store = embeddings_db_store
         self.titan_matches_db_store = titan_matches_db_store
@@ -51,7 +51,7 @@ class DocumentDeleteHandler:
         self.logger = custom_logger
         self.database_delete_enabled = database_delete_enabled
 
-    def process(self, tsp_id: TspId) -> DeleteResult:
+    def process_document_deletion(self, tsp_id: TspId) -> DeleteResult:
         """Run OpenSearch deletion and run database deletion only when enabled.
 
         Input: tsp_id=8205
@@ -62,36 +62,38 @@ class DocumentDeleteHandler:
         """
 
         started_at = perf_counter()
-        opensearch_result = self._delete_opensearch_data(tsp_id)
-        database_result = DatabaseDeletionResult()
+        opensearch_deletion_result = self._delete_document_from_opensearch(tsp_id)
+        database_deletion_result = DatabaseDeletionResult()
         if self.database_delete_enabled:
-            database_result = self._delete_database_data(tsp_id, opensearch_result.global_ids)
+            database_deletion_result = self._delete_document_from_database(
+                tsp_id, opensearch_deletion_result.global_ids
+            )
         else:
             self.logger.info("Database deletion is disabled. PostgreSQL data was not changed.")
 
-        self._send_next_message(tsp_id)
+        self._send_deletion_result_to_next_queue(tsp_id)
         self.logger.info(
-            f"Document deletion removed {opensearch_result.occurrence_count} occurrence(s), "
-            f"{opensearch_result.catalog_count} orphaned catalog vector(s), "
-            f"{database_result.deleted_match_bucket_count} Titan match bucket(s), "
-            f"{database_result.deleted_embedding_count} embedding(s), and "
-            f"{database_result.deleted_sentence_count} sentence row(s)."
+            f"Document deletion removed {opensearch_deletion_result.occurrence_count} occurrence(s), "
+            f"{opensearch_deletion_result.catalog_count} orphaned catalog vector(s), "
+            f"{database_deletion_result.deleted_match_bucket_count} Titan match bucket(s), "
+            f"{database_deletion_result.deleted_embedding_count} embedding(s), and "
+            f"{database_deletion_result.deleted_sentence_count} sentence row(s)."
         )
         self.logger.info(f"Document deletion took {perf_counter() - started_at:.2f} seconds to complete.")
         return {
             "tsp_id": tsp_id,
-            "occurrence_count": opensearch_result.occurrence_count,
-            "catalog_count": opensearch_result.catalog_count,
-            "shared_catalog_count": opensearch_result.shared_catalog_count,
-            "deleted_match_bucket_count": database_result.deleted_match_bucket_count,
-            "updated_reverse_bucket_count": database_result.updated_reverse_bucket_count,
-            "deleted_embedding_count": database_result.deleted_embedding_count,
-            "deleted_sentence_count": database_result.deleted_sentence_count,
+            "occurrence_count": opensearch_deletion_result.occurrence_count,
+            "catalog_count": opensearch_deletion_result.catalog_count,
+            "shared_catalog_count": opensearch_deletion_result.shared_catalog_count,
+            "deleted_match_bucket_count": database_deletion_result.deleted_match_bucket_count,
+            "updated_reverse_bucket_count": database_deletion_result.updated_reverse_bucket_count,
+            "deleted_embedding_count": database_deletion_result.deleted_embedding_count,
+            "deleted_sentence_count": database_deletion_result.deleted_sentence_count,
             "database_delete_enabled": self.database_delete_enabled,
             "next_message_sent": True,
         }
 
-    def _delete_opensearch_data(self, tsp_id: TspId) -> OpenSearchDeletionResult:
+    def _delete_document_from_opensearch(self, tsp_id: TspId) -> OpenSearchDeletionResult:
         """Delete orphaned catalog vectors, then delete document occurrences.
 
         Input: tsp_id=8205
@@ -103,26 +105,28 @@ class DocumentDeleteHandler:
         retried using the original occurrence records.
         """
 
-        occurrences = retry_operation(
+        occurrence_records = retry_operation(
             "Load sentence occurrences",
-            self.occurrence_store.load_occurrences_by_tsp_id,
+            self.sentence_occurrence_open_search_store.load_document_occurrences,
             tsp_id,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
         )
-        analysis_group = occurrences[0]["analysis_group"] if occurrences else None
+        analysis_group = occurrence_records[0]["analysis_group"] if occurrence_records else None
 
         # dict.fromkeys removes duplicates while keeping the original order.
         # A repeated sentence key must be checked and deleted only once.
-        global_ids = list(dict.fromkeys(record["global_id"] for record in occurrences))
-        sentence_keys = list(dict.fromkeys(record["sentence_key"] for record in occurrences))
-        referenced_keys: set[str] = set()
+        global_ids = list(dict.fromkeys(occurrence_record["global_id"] for occurrence_record in occurrence_records))
+        sentence_keys = list(
+            dict.fromkeys(occurrence_record["sentence_key"] for occurrence_record in occurrence_records)
+        )
+        shared_sentence_keys: set[str] = set()
         deleted_catalog_count = 0
         if analysis_group and sentence_keys:
-            referenced_keys = retry_operation(
+            shared_sentence_keys = retry_operation(
                 "Check remaining sentence-key references",
-                self.occurrence_store.find_referenced_sentence_keys,
+                self.sentence_occurrence_open_search_store.find_sentence_keys_used_by_other_documents,
                 sentence_keys,
                 analysis_group,
                 tsp_id,
@@ -132,13 +136,15 @@ class DocumentDeleteHandler:
             )
             # Example: if key-a is used only by this document but another
             # document uses key-b, delete key-a and keep key-b.
-            orphaned_keys = [sentence_key for sentence_key in sentence_keys if sentence_key not in referenced_keys]
-            if orphaned_keys:
+            orphaned_sentence_keys = [
+                sentence_key for sentence_key in sentence_keys if sentence_key not in shared_sentence_keys
+            ]
+            if orphaned_sentence_keys:
                 deleted_catalog_count = retry_operation(
                     "Delete unreferenced catalog vectors",
-                    self.catalog_store.delete_sentence_keys,
+                    self.sentence_catalog_open_search_store.delete_catalog_documents_by_sentence_key,
                     analysis_group,
-                    orphaned_keys,
+                    orphaned_sentence_keys,
                     wait_seconds=constants.RETRY_SECONDS,
                     custom_logger=self.logger,
                     max_attempts=constants.MAX_ATTEMPTS,
@@ -149,7 +155,7 @@ class DocumentDeleteHandler:
         if global_ids:
             retry_operation(
                 "Delete sentence occurrences",
-                self.occurrence_store.delete_occurrences,
+                self.sentence_occurrence_open_search_store.delete_occurrences_by_global_id,
                 global_ids,
                 wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
@@ -159,11 +165,11 @@ class DocumentDeleteHandler:
         return OpenSearchDeletionResult(
             occurrence_count=len(global_ids),
             catalog_count=deleted_catalog_count,
-            shared_catalog_count=len(referenced_keys),
+            shared_catalog_count=len(shared_sentence_keys),
             global_ids=global_ids,
         )
 
-    def _delete_database_data(self, tsp_id: TspId, global_ids: list[int]) -> DatabaseDeletionResult:
+    def _delete_document_from_database(self, tsp_id: TspId, opensearch_global_ids: list[int]) -> DatabaseDeletionResult:
         """Delete Titan matches, embeddings, and sentence rows when the toggle is enabled.
 
         Input: tsp_id=8205, global_ids=[100, 101]
@@ -174,9 +180,9 @@ class DocumentDeleteHandler:
         owned by other documents.
         """
 
-        context = retry_operation(
+        sentence_vector_context = retry_operation(
             "Load document sentences",
-            self.sentence_vector_db_store.load_document_from_sentence_vector,
+            self.sentence_vector_db_store.load_document_sentence_context,
             tsp_id,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
@@ -185,10 +191,10 @@ class DocumentDeleteHandler:
         # Use IDs found in either system. For example, if sentences_vector was
         # already cleaned but OpenSearch still returned ID 100, its embedding
         # can still be deleted.
-        embedding_global_ids = list(dict.fromkeys(context.global_ids + global_ids))
-        titan_match_result = retry_operation(
+        embedding_global_ids = list(dict.fromkeys(sentence_vector_context.global_ids + opensearch_global_ids))
+        titan_match_deletion_result = retry_operation(
             "Delete Titan matches",
-            self.titan_matches_db_store.delete_document_matches,
+            self.titan_matches_db_store.delete_bidirectional_document_matches,
             tsp_id,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
@@ -196,7 +202,7 @@ class DocumentDeleteHandler:
         )
         deleted_embedding_count = retry_operation(
             "Delete sentence embeddings",
-            self.embeddings_db_store.delete_embeddings,
+            self.embeddings_db_store.delete_sentence_embeddings,
             embedding_global_ids,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
@@ -204,28 +210,27 @@ class DocumentDeleteHandler:
         )
         deleted_sentence_count = retry_operation(
             "Delete sentence vector rows",
-            self.sentence_vector_db_store.delete_document_sentences,
+            self.sentence_vector_db_store.delete_document_sentence_records,
             tsp_id,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
         )
         return DatabaseDeletionResult(
-            deleted_match_bucket_count=titan_match_result.deleted_match_bucket_count,
-            updated_reverse_bucket_count=titan_match_result.updated_reverse_bucket_count,
+            deleted_match_bucket_count=titan_match_deletion_result.deleted_match_bucket_count,
+            updated_reverse_bucket_count=titan_match_deletion_result.updated_reverse_bucket_count,
             deleted_embedding_count=deleted_embedding_count,
             deleted_sentence_count=deleted_sentence_count,
         )
 
-    def _send_next_message(self, tsp_id: TspId) -> None:
+    def _send_deletion_result_to_next_queue(self, tsp_id: TspId) -> None:
         """Send the tsp_id after deletion so Case Similarity can refresh the application."""
 
-        sent = self.aws_sqs.send_sqs_message(
+        message_sent = self.aws_sqs.send_sqs_message(
             send_queue_url=self.sent_sqs_endpoint,
             message_body={"source": "P2", "tsp_id": str(tsp_id), "sent_by": "doc-delete"},
             wait_time=constants.RETRY_SECONDS,
             retries=constants.MAX_ATTEMPTS - 1,
         )
-        if not sent:
+        if not message_sent:
             raise QueueSendError("failed to send the document to the next SQS queue")
-

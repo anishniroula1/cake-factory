@@ -47,14 +47,14 @@ class Dependencies:
             logger=self.logger,
             visibility_timeout=constants.SQS_VISIBILITY_SECONDS,
         )
-        occurrence_store = SentenceOccurrenceOpenSearchStore(self.opensearch_client)
-        catalog_store = SentenceCatalogOpenSearchStore(self.opensearch_client)
+        sentence_occurrence_open_search_store = SentenceOccurrenceOpenSearchStore(self.opensearch_client)
+        sentence_catalog_open_search_store = SentenceCatalogOpenSearchStore(self.opensearch_client)
         sentence_vector_db_store = SentenceVectorDBStore(self.session_factory)
         embeddings_db_store = EmbeddingsDBStore(self.session_factory)
         titan_matches_db_store = TitanMatchesDBStore(self.session_factory)
         self.document_delete_handler = DocumentDeleteHandler(
-            occurrence_store,
-            catalog_store,
+            sentence_occurrence_open_search_store,
+            sentence_catalog_open_search_store,
             sentence_vector_db_store,
             embeddings_db_store,
             titan_matches_db_store,
@@ -77,10 +77,7 @@ class Dependencies:
         credential_arguments = (
             {"use_dynamic_credentials": False}
             if self.config.environment == "local"
-            else {
-                "use_dynamic_credentials": True,
-                "dynamic_credentials_file": self.config.dynamic_credential_file,
-            }
+            else {"use_dynamic_credentials": True, "dynamic_credentials_file": self.config.dynamic_credential_file}
         )
         return DatabaseConnection(
             pg_db_user=self.config.pg_db_user,
@@ -93,4 +90,3 @@ class Dependencies:
             application_name="doc_delete",
             **credential_arguments,
         )
-
