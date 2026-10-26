@@ -53,10 +53,7 @@ class Dependencies:
         credential_arguments = (
             {"use_dynamic_credentials": False}
             if self.config.environment == "local"
-            else {
-                "use_dynamic_credentials": True,
-                "dynamic_credentials_file": self.config.dynamic_credential_file,
-            }
+            else {"use_dynamic_credentials": True, "dynamic_credentials_file": self.config.dynamic_credential_file}
         )
         return DatabaseConnection(
             pg_db_user=self.config.pg_db_user,

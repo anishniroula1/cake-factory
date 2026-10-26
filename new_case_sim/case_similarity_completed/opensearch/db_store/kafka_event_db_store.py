@@ -194,7 +194,7 @@ class KafkaEventDBStore:
     def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
-    def load_tah_event_selection(self, application_ids: list[int], kafka_environment: str) -> KafkaEventSelection:
+    def load_tah_event_candidates(self, application_ids: list[int], kafka_environment: str) -> KafkaEventSelection:
         """Return publishable TAH events and reasons for skipped applications.
 
         Input: application_ids=[100, 200], kafka_environment="prod"
@@ -212,44 +212,50 @@ class KafkaEventDBStore:
         # [100, 100, 200] becomes [100, 200].
         unique_application_ids = sorted(set(application_ids))
         with self.session_factory() as session:
-            rows = list(
+            tah_candidate_records = list(
                 session.execute(
                     LOAD_TAH_EVENT_SELECTION,
                     {"application_ids": unique_application_ids, "kafka_environment": kafka_environment},
                 ).mappings()
             )
 
-        events = []
+        publishable_events = []
         skipped_events = []
-        for row in rows:
-            decision = str(row["decision"])
+        for tah_candidate_record in tah_candidate_records:
+            decision = str(tah_candidate_record["decision"])
             if decision in {"PUBLISH_NEW_VALUE", "PUBLISH_CHANGED_VALUE"}:
-                events.append(
+                publishable_events.append(
                     KafkaEvent(
-                        receipt_number=str(row["receipt_number"]),
-                        application_id=int(row["application_id"]),
-                        a_number=int(row["a_number"]),
-                        analysis_group=str(row["analysis_group"]),
-                        is_tah=bool(row["is_tah"]),
+                        receipt_number=str(tah_candidate_record["receipt_number"]),
+                        application_id=int(tah_candidate_record["application_id"]),
+                        a_number=int(tah_candidate_record["a_number"]),
+                        analysis_group=str(tah_candidate_record["analysis_group"]),
+                        is_tah=bool(tah_candidate_record["is_tah"]),
                     )
                 )
                 continue
 
             skipped_events.append(
                 SkippedKafkaEvent(
-                    application_id=int(row["application_id"]),
-                    receipt_number=str(row["receipt_number"]) if row["receipt_number"] is not None else None,
+                    application_id=int(tah_candidate_record["application_id"]),
+                    receipt_number=(
+                        str(tah_candidate_record["receipt_number"])
+                        if tah_candidate_record["receipt_number"] is not None
+                        else None
+                    ),
                     reason=decision,
-                    current_is_tah=bool(row["is_tah"]),
+                    current_is_tah=bool(tah_candidate_record["is_tah"]),
                     published_is_tah=(
-                        bool(row["published_is_tah"]) if row["published_is_tah"] is not None else None
+                        bool(tah_candidate_record["published_is_tah"])
+                        if tah_candidate_record["published_is_tah"] is not None
+                        else None
                     ),
                 )
             )
 
-        return KafkaEventSelection(events=events, skipped_events=skipped_events)
+        return KafkaEventSelection(events=publishable_events, skipped_events=skipped_events)
 
-    def save_kafka_delivery(self, event: KafkaEvent, delivery: KafkaDelivery, kafka_environment: str) -> None:
+    def save_confirmed_kafka_delivery(self, event: KafkaEvent, delivery: KafkaDelivery, kafka_environment: str) -> None:
         """Save one Kafka-confirmed TAH value and its broker delivery location.
 
         Input: event.receipt_number="A123456789", delivery.partition=2,

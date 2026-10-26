@@ -2,11 +2,11 @@ from similarity_completed.opensearch.constants import CLASSIFICATION_FIELDS
 from similarity_completed.opensearch.contracts import Classification
 
 
-def saved_classification(source: dict) -> Classification | None:
+def saved_classification(catalog_source: dict) -> Classification | None:
     """Extract a complete classification from a catalog document. All three
     flags must exist before the classification can be reused.
 
-    Input: source={"isNonMatcher": True, "isTracer": False,
+    Input: catalog_source={"isNonMatcher": True, "isTracer": False,
     "isFormLanguage": False}
     Output: {"is_non_matcher": True, "is_tracer": False,
     "is_form_language": False}
@@ -15,10 +15,10 @@ def saved_classification(source: dict) -> Classification | None:
     """
 
     # All three fields must exist before this catalog decision can be reused.
-    if not all(field in source for field in CLASSIFICATION_FIELDS):
+    if not all(field in catalog_source for field in CLASSIFICATION_FIELDS):
         return None
     return {
-        "is_non_matcher": bool(source["isNonMatcher"]),
-        "is_tracer": bool(source["isTracer"]),
-        "is_form_language": bool(source["isFormLanguage"]),
+        "is_non_matcher": bool(catalog_source["isNonMatcher"]),
+        "is_tracer": bool(catalog_source["isTracer"]),
+        "is_form_language": bool(catalog_source["isFormLanguage"]),
     }

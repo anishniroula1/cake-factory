@@ -50,35 +50,35 @@ class KafkaProcessor:
 
         # PostgreSQL returns both the events to publish and an explanation for
         # every application that cannot or does not need to publish an event.
-        selection = retry_operation(
+        tah_event_candidates = retry_operation(
             "Load TAH Kafka event selection",
-            self.kafka_event_db_store.load_tah_event_selection,
+            self.kafka_event_db_store.load_tah_event_candidates,
             application_ids,
             self.config.kafka_environment,
             wait_seconds=constants.RETRY_SECONDS,
             max_attempts=constants.MAX_ATTEMPTS,
             custom_logger=self.logger,
         )
-        self._log_skipped_events(selection.skipped_events)
+        self._log_skipped_kafka_events(tah_event_candidates.skipped_events)
 
         # Publish and confirm one event at a time. A temporary failure retries only
         # the event that failed instead of reloading all application summaries.
-        for event in selection.events:
+        for tah_event in tah_event_candidates.events:
             retry_operation(
-                f"Publish TAH event for application_id={event.application_id}",
-                self._publish_event,
-                event,
+                f"Publish TAH event for application_id={tah_event.application_id}",
+                self._publish_tah_event,
+                tah_event,
                 wait_seconds=constants.RETRY_SECONDS,
                 max_attempts=constants.MAX_ATTEMPTS,
                 custom_logger=self.logger,
             )
-        if selection.events:
-            self.logger.info(f"Published {len(selection.events)} new or changed TAH event(s) to Kafka.")
+        if tah_event_candidates.events:
+            self.logger.info(f"Published {len(tah_event_candidates.events)} new or changed TAH event(s) to Kafka.")
         else:
             self.logger.info("No TAH Kafka event was published. The selection reason is logged above.")
-        return len(selection.events)
+        return len(tah_event_candidates.events)
 
-    def _log_skipped_events(self, skipped_events: list[SkippedKafkaEvent]) -> None:
+    def _log_skipped_kafka_events(self, skipped_events: list[SkippedKafkaEvent]) -> None:
         """Log grouped reasons explaining why Kafka candidates were skipped.
 
         Input: two unchanged applications and one application missing a GDR
@@ -96,11 +96,7 @@ class KafkaProcessor:
             "RECEIPT_HAS_MULTIPLE_APPLICATIONS": "the receipt number belongs to multiple affected applications",
             "UNCHANGED_TAH_VALUE": "the current TAH value already matches the last Kafka-confirmed value",
         }
-        warning_reasons = {
-            "MISSING_TEXT_SIMILARITY_INPUT",
-            "MISSING_GDR_RECEIPT",
-            "RECEIPT_HAS_MULTIPLE_APPLICATIONS",
-        }
+        warning_reasons = {"MISSING_TEXT_SIMILARITY_INPUT", "MISSING_GDR_RECEIPT", "RECEIPT_HAS_MULTIPLE_APPLICATIONS"}
 
         for reason in sorted(event_count_by_reason):
             message = (
@@ -112,7 +108,7 @@ class KafkaProcessor:
             else:
                 self.logger.info(message)
 
-    def _publish_event(self, event: KafkaEvent) -> None:
+    def _publish_tah_event(self, tah_event: KafkaEvent) -> None:
         """Publish one TAH event and save its confirmed broker location.
 
         Input: KafkaEvent(receipt_number="A123456789", application_id=100,
@@ -125,15 +121,15 @@ class KafkaProcessor:
 
         # The receipt number is used as the Kafka key below. The payload contains
         # the values read by the Global consumer.
-        payload = {
-            "is_tah": event.is_tah,
+        tah_event_payload = {
+            "is_tah": tah_event.is_tah,
             "application_url": f"{self.config.application_url or constants.DEFAULT_APPLICATION_URL}"
-            f"{event.application_id}",
-            "primary_a_number": str(event.a_number),
-            "analysis_group": event.analysis_group,
+            f"{tah_event.application_id}",
+            "primary_a_number": str(tah_event.a_number),
+            "analysis_group": tah_event.analysis_group,
         }
-        delivery: KafkaDelivery | None = None
-        delivery_error: str | None = None
+        kafka_delivery: KafkaDelivery | None = None
+        kafka_delivery_error: str | None = None
 
         def delivery_callback(error: KafkaError | None, message: Message) -> None:
             """Capture Kafka's delivery result for the event being published.
@@ -142,14 +138,16 @@ class KafkaProcessor:
             a KafkaError when delivery fails.
             """
 
-            # Update the values created by _publish_event() so the code after
+            # Update the values created by _publish_tah_event() so the code after
             # flush() can read Kafka's confirmed delivery or failure.
-            nonlocal delivery, delivery_error
+            nonlocal kafka_delivery, kafka_delivery_error
             if error is not None:
-                delivery_error = str(error)
+                kafka_delivery_error = str(error)
                 return
-            delivery = KafkaDelivery(
-                timestamp=self._delivery_timestamp(message), partition=message.partition(), offset=message.offset()
+            kafka_delivery = KafkaDelivery(
+                timestamp=self._get_kafka_delivery_timestamp(message),
+                partition=message.partition(),
+                offset=message.offset(),
             )
 
         try:
@@ -157,8 +155,8 @@ class KafkaProcessor:
             # waits for Kafka to confirm whether the queued message was delivered.
             self.kafka_producer.produce(
                 topic=constants.TAH_TOPIC,
-                key=event.receipt_number,
-                value=json.dumps(payload),
+                key=tah_event.receipt_number,
+                value=json.dumps(tah_event_payload),
                 on_delivery=delivery_callback,
             )
             self.kafka_producer.poll(0)
@@ -166,18 +164,20 @@ class KafkaProcessor:
         except (BufferError, KafkaException) as error:
             raise KafkaPublishError(str(error)) from error
 
-        if delivery_error:
-            raise KafkaPublishError(delivery_error)
+        if kafka_delivery_error:
+            raise KafkaPublishError(kafka_delivery_error)
         if pending_message_count:
             raise KafkaPublishError(f"Kafka did not deliver {pending_message_count} queued message(s)")
-        if delivery is None:
+        if kafka_delivery is None:
             raise KafkaPublishError("Kafka did not return a delivery acknowledgement")
 
         # Save the lookup row only after Kafka confirms the message.
-        self.kafka_event_db_store.save_kafka_delivery(event, delivery, self.config.kafka_environment)
+        self.kafka_event_db_store.save_confirmed_kafka_delivery(
+            tah_event, kafka_delivery, self.config.kafka_environment
+        )
 
     @staticmethod
-    def _delivery_timestamp(message: Message) -> str:
+    def _get_kafka_delivery_timestamp(message: Message) -> str:
         """Return Kafka's timestamp as UTC text.
 
         Input: message timestamp=1760123456000 milliseconds

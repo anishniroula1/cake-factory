@@ -14,9 +14,9 @@ class SqsProcessor:
 
         while True:
             for message in self.dependencies.aws_sqs.listen_sqs_message():
-                self._process_message(message)
+                self._process_case_similarity_message(message)
 
-    def _process_message(self, message: SqsMessage) -> None:
+    def _process_case_similarity_message(self, message: SqsMessage) -> None:
         """Process one document and delete its message only after completion.
         Failures remain available for the configured SQS retry and DLQ policy.
 
@@ -24,15 +24,15 @@ class SqsProcessor:
         """
 
         try:
-            tsp_id = self._read_tsp_id(message)
+            tsp_id = self._read_tsp_id_from_message(message)
             if tsp_id is None:
-                self._leave_message_for_sqs("The SQS message is missing the required tsp_id.")
+                self._leave_case_similarity_message_for_sqs("The SQS message is missing the required tsp_id.")
                 return
             self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}")
             self.dependencies.logger.info("Starting a Case Similarity document message.")
-            result = self.dependencies.case_similarity_handler.process(tsp_id)
-            if result is None:
-                self._leave_message_for_sqs("Case Similarity did not complete the message.")
+            case_similarity_result = self.dependencies.case_similarity_handler.process_case_similarity(tsp_id)
+            if case_similarity_result is None:
+                self._leave_case_similarity_message_for_sqs("Case Similarity did not complete the message.")
                 return
         except (OperationFailedError, PermanentDataError, QueueSendError) as error:
             self.dependencies.logger.error(
@@ -45,7 +45,7 @@ class SqsProcessor:
             return
         self.dependencies.logger.info("Case Similarity completed and deleted the source SQS message.")
 
-    def _leave_message_for_sqs(self, reason: str) -> None:
+    def _leave_case_similarity_message_for_sqs(self, reason: str) -> None:
         """Log why a source message remains available for SQS redelivery.
 
         Input: reason="The document context is unavailable."
@@ -55,7 +55,7 @@ class SqsProcessor:
             f"{reason} The source message was not deleted; SQS will use its configured retry and DLQ flow."
         )
 
-    def _read_tsp_id(self, message: SqsMessage) -> TspId | None:
+    def _read_tsp_id_from_message(self, message: SqsMessage) -> TspId | None:
         """Return tsp_id without changing the type supplied by upstream.
 
         Input: message={"tsp_id": 100}

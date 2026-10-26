@@ -63,8 +63,8 @@ def test_database_store_loads_document_and_refreshes_case_summaries(service_conf
     )
     store = CaseSimilarityDBStore(SessionFactoryFake([document_session, summary_session]), LoggerFake())
 
-    context = store.load_document_context(10)
-    summaries = store.refresh_case_summaries(100, "Asylee")
+    context = store.load_case_similarity_document_context(10)
+    summaries = store.refresh_bidirectional_case_summaries(100, "Asylee")
 
     assert {
         "context": (context.tsp_id, context.application_id, context.a_number, context.analysis_group),
@@ -100,16 +100,16 @@ def test_kafka_database_store_reads_and_saves_delivery():
                     "is_tah": False,
                     "published_is_tah": None,
                     "decision": "MISSING_GDR_RECEIPT",
-                }
+                },
             ]
         )
     )
     save_session = SessionFake()
     store = KafkaEventDBStore(SessionFactoryFake([load_session, save_session]))
 
-    selection = store.load_tah_event_selection([100, 200], "local")
+    selection = store.load_tah_event_candidates([100, 200], "local")
     event = selection.events[0]
-    store.save_kafka_delivery(event, KafkaDelivery("2026-10-10T12:00:00+00:00", 1, 20), "local")
+    store.save_confirmed_kafka_delivery(event, KafkaDelivery("2026-10-10T12:00:00+00:00", 1, 20), "local")
 
     assert (
         event.receipt_number,
@@ -117,13 +117,7 @@ def test_kafka_database_store_reads_and_saves_delivery():
         selection.skipped_events[0].reason,
         len(save_session.executions),
         save_session.commits,
-    ) == (
-        "ABC123",
-        100,
-        "MISSING_GDR_RECEIPT",
-        1,
-        1,
-    )
+    ) == ("ABC123", 100, "MISSING_GDR_RECEIPT", 1, 1)
 
 
 def test_database_stores_return_empty_results_and_report_missing_documents(service_config):
@@ -132,9 +126,9 @@ def test_database_stores_return_empty_results_and_report_missing_documents(servi
     kafka_store = KafkaEventDBStore(SessionFactoryFake([]))
 
     with pytest.raises(PermanentDataError, match="tsp_id=999"):
-        case_store.load_document_context(999)
+        case_store.load_case_similarity_document_context(999)
 
-    selection = kafka_store.load_tah_event_selection([], "local")
+    selection = kafka_store.load_tah_event_candidates([], "local")
     assert (selection.events, selection.skipped_events) == ([], [])
 
 
@@ -161,7 +155,7 @@ def test_config_validation_and_kafka_values(service_config):
     dependencies = object.__new__(Dependencies)
     dependencies.config = service_config
 
-    assert dependencies._kafka_config()["security.protocol"] == "PLAINTEXT"
+    assert dependencies._build_kafka_producer_config()["security.protocol"] == "PLAINTEXT"
     with pytest.raises(ValueError, match="KAFKA_ENV"):
         replace(service_config, kafka_environment="").validate()
 
@@ -252,7 +246,7 @@ def test_dependencies_use_local_or_dynamic_database_credentials(monkeypatch, ser
         ssl_key_file="client-key.pem",
     )
     dynamic_database = dependencies._create_database_connection()
-    kafka_config = dependencies._kafka_config()
+    kafka_config = dependencies._build_kafka_producer_config()
 
     assert {
         "local_credentials": local_database.arguments["use_dynamic_credentials"],

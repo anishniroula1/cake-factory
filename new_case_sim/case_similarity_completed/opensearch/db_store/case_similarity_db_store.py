@@ -83,7 +83,7 @@ class CaseSimilarityDBStore:
         self.session_factory = session_factory
         self.logger = custom_logger
 
-    def load_document_context(self, tsp_id: TspId) -> DocumentContext:
+    def load_case_similarity_document_context(self, tsp_id: TspId) -> DocumentContext:
         """Load the application, receipt number, and analysis group for one document.
 
         Input: tsp_id=100
@@ -97,19 +97,21 @@ class CaseSimilarityDBStore:
         with self.session_factory() as session:
             # one_or_none() makes an unexpected duplicate fail instead of silently
             # selecting the wrong application.
-            row = session.execute(LOAD_DOCUMENT, {"tsp_id": tsp_id}).mappings().one_or_none()
-        if row is None:
+            document_record = session.execute(LOAD_DOCUMENT, {"tsp_id": tsp_id}).mappings().one_or_none()
+        if document_record is None:
             raise PermanentDataError(f"No text_similarity_input row exists for tsp_id={tsp_id}")
 
         # Convert database values into the small object used by the handler.
         return DocumentContext(
-            tsp_id=row["tsp_id"],
-            application_id=int(row["application_id"]),
-            a_number=int(row["a_number"]),
-            analysis_group=str(row["analysis_group"]),
+            tsp_id=document_record["tsp_id"],
+            application_id=int(document_record["application_id"]),
+            a_number=int(document_record["a_number"]),
+            analysis_group=str(document_record["analysis_group"]),
         )
 
-    def refresh_case_summaries(self, source_application_id: int, analysis_group: str) -> list[CaseSummary]:
+    def refresh_bidirectional_case_summaries(
+        self, source_application_id: int, analysis_group: str
+    ) -> list[CaseSummary]:
         """Rebuild the source summary and mirror its relationships on connected
         applications without rebuilding their unrelated matches.
 
@@ -127,7 +129,7 @@ class CaseSimilarityDBStore:
             # PostgreSQL counts the source relationships, locks rows in order,
             # and updates both directions. It returns the final rows after the
             # generated columns calculate their counts and TAH values.
-            rows = (
+            refreshed_summary_records = (
                 session.execute(
                     REFRESH_CASE_SUMMARIES,
                     {
@@ -146,11 +148,11 @@ class CaseSimilarityDBStore:
         # so callers always receive the same type.
         return [
             CaseSummary(
-                application_id=int(row["application_id"]),
+                application_id=int(summary_record["application_id"]),
                 analysis_group=analysis_group,
-                similar_application_ids=[int(value) for value in row["similar_application_ids"]],
-                similar_case_ids=[int(value) for value in row["similar_case_ids"]],
-                tah_case_ids=[int(value) for value in row["tah_case_ids"]],
+                similar_application_ids=[int(value) for value in summary_record["similar_application_ids"]],
+                similar_case_ids=[int(value) for value in summary_record["similar_case_ids"]],
+                tah_case_ids=[int(value) for value in summary_record["tah_case_ids"]],
             )
-            for row in rows
+            for summary_record in refreshed_summary_records
         ]

@@ -10,7 +10,7 @@ class TracerOpenSearchStore:
     def __init__(self, client) -> None:
         self.client = client
 
-    def classify_sentence_by_vector(self, vector: list[float], analysis_group: str) -> Classification:
+    def search_tracer_classification_by_vector(self, vector: list[float], analysis_group: str) -> Classification:
         """Derive classification flags from qualifying tracer-catalog hits. The
         100 closest references are checked, and every qualifying type contributes
         to the result.
@@ -24,7 +24,7 @@ class TracerOpenSearchStore:
         """
 
         validate_vector(vector, constants.VECTOR_DIMENSION)
-        response = self.client.search(
+        search_response = self.client.search(
             index=constants.TRACER_ALIAS,
             body={
                 "size": constants.TRACER_TOP_K,
@@ -33,31 +33,28 @@ class TracerOpenSearchStore:
                 "query": {
                     "bool": {
                         "filter": [{"term": {"analysisGroup": analysis_group}}],
-                        "must": [
-                            {
-                                "knn": {
-                                    constants.VECTOR_FIELD: {"vector": vector, "k": constants.TRACER_TOP_K}
-                                }
-                            }
-                        ],
+                        "must": [{"knn": {constants.VECTOR_FIELD: {"vector": vector, "k": constants.TRACER_TOP_K}}}],
                     }
                 },
             },
         )
         minimum_similarity = constants.TRACER_THRESHOLD / 100.0
-        qualifying_hits = [
-            hit for hit in response["hits"]["hits"] if cosine_similarity(float(hit["_score"])) >= minimum_similarity
+        qualifying_tracer_hits = [
+            tracer_hit
+            for tracer_hit in search_response["hits"]["hits"]
+            if cosine_similarity(float(tracer_hit["_score"])) >= minimum_similarity
         ]
-        if not qualifying_hits:
+        if not qualifying_tracer_hits:
             return {"is_non_matcher": False, "is_tracer": False, "is_form_language": False}
 
         # Each qualifying result contributes its own type. For example, one
         # hit can be a tracer, a second can be a non-matcher, and a third can
         # be form language. In that case all three returned flags are true.
-        sources = [hit.get("_source", {}) for hit in qualifying_hits]
-        is_non_matcher = any(bool(source.get("isNonMatcher")) for source in sources)
-        is_form_language = any(bool(source.get("isFormLanguage")) for source in sources)
+        tracer_sources = [tracer_hit.get("_source", {}) for tracer_hit in qualifying_tracer_hits]
+        is_non_matcher = any(bool(tracer_source.get("isNonMatcher")) for tracer_source in tracer_sources)
+        is_form_language = any(bool(tracer_source.get("isFormLanguage")) for tracer_source in tracer_sources)
         is_tracer = any(
-            not bool(source.get("isNonMatcher")) and not bool(source.get("isFormLanguage")) for source in sources
+            not bool(tracer_source.get("isNonMatcher")) and not bool(tracer_source.get("isFormLanguage"))
+            for tracer_source in tracer_sources
         )
         return {"is_non_matcher": is_non_matcher, "is_tracer": is_tracer, "is_form_language": is_form_language}

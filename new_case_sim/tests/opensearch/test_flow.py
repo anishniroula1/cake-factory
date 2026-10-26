@@ -31,7 +31,7 @@ def test_one_live_message_runs_the_complete_case_similarity_flow(service_config)
     handler = CaseSimilarityHandler(service_config, database_store, kafka_processor, aws_sqs, LoggerFake())
     processor = SqsProcessor(DependenciesFake(aws_sqs, handler, LoggerFake()))
 
-    processor._process_message(message)
+    processor._process_case_similarity_message(message)
     kafka_payload = json.loads(kafka_producer.published[0][2])
 
     assert {
@@ -61,7 +61,7 @@ def test_failed_message_is_not_deleted():
     aws_sqs = AwsSqsFake([message])
     processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(failure=True), LoggerFake()))
 
-    processor._process_message(message)
+    processor._process_case_similarity_message(message)
 
     assert aws_sqs.deleted == []
 
@@ -114,13 +114,13 @@ def test_kafka_delivery_failure_does_not_save_a_lookup_row(service_config, produ
     processor = KafkaProcessor(service_config, KafkaProducerFake(**producer_values), event_store, LoggerFake())
 
     with pytest.raises(KafkaPublishError):
-        processor._publish_event(event_store.events[0])
+        processor._publish_tah_event(event_store.events[0])
 
     assert event_store.deliveries == []
 
 
 def test_kafka_uses_current_time_when_broker_timestamp_is_missing():
-    timestamp = KafkaProcessor._delivery_timestamp(KafkaMessageFake(0))
+    timestamp = KafkaProcessor._get_kafka_delivery_timestamp(KafkaMessageFake(0))
 
     assert timestamp.endswith("+00:00")
 
@@ -135,7 +135,7 @@ def test_handler_reports_when_next_queue_send_fails(service_config):
     )
 
     with pytest.raises(QueueSendError):
-        handler._send_next_message(10)
+        handler._send_case_similarity_result_to_next_queue(10)
 
 
 def test_sqs_processor_reports_missing_id_and_delete_failure():
@@ -146,8 +146,8 @@ def test_sqs_processor_reports_missing_id_and_delete_failure():
     logger = LoggerFake()
     processor = SqsProcessor(DependenciesFake(aws_sqs, handler, logger))
 
-    processor._process_message(missing_id_message)
-    processor._process_message(valid_message)
+    processor._process_case_similarity_message(missing_id_message)
+    processor._process_case_similarity_message(valid_message)
     errors = [message for level, message in logger.messages if level == "error"]
 
     assert {

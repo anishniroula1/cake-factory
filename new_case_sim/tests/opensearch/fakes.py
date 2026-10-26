@@ -65,10 +65,10 @@ class CaseSimilarityDBStoreFake:
         ]
         self.refreshed = []
 
-    def load_document_context(self, tsp_id):
+    def load_case_similarity_document_context(self, tsp_id):
         return self.context
 
-    def refresh_case_summaries(self, source_application_id, analysis_group):
+    def refresh_bidirectional_case_summaries(self, source_application_id, analysis_group):
         self.refreshed.append((source_application_id, analysis_group))
         return self.summaries
 
@@ -79,7 +79,7 @@ class HandlerFake:
         self.failure = failure
         self.completed = completed
 
-    def process(self, tsp_id):
+    def process_case_similarity(self, tsp_id):
         self.calls.append(tsp_id)
         if self.failure:
             raise OperationFailedError("temporary database failure")
@@ -97,18 +97,16 @@ class DependenciesFake:
 
 class KafkaEventDBStoreFake:
     def __init__(
-        self,
-        events: list[KafkaEvent] | None = None,
-        skipped_events: list[SkippedKafkaEvent] | None = None,
+        self, events: list[KafkaEvent] | None = None, skipped_events: list[SkippedKafkaEvent] | None = None
     ) -> None:
         self.events = events if events is not None else [KafkaEvent("ABC123", 100, 900001, "Asylee", True)]
         self.skipped_events = skipped_events or []
         self.deliveries = []
 
-    def load_tah_event_selection(self, application_ids, kafka_environment):
+    def load_tah_event_candidates(self, application_ids, kafka_environment):
         return KafkaEventSelection(events=self.events, skipped_events=self.skipped_events)
 
-    def save_kafka_delivery(self, event, delivery, kafka_environment):
+    def save_confirmed_kafka_delivery(self, event, delivery, kafka_environment):
         self.deliveries.append((event, delivery, kafka_environment))
 
 

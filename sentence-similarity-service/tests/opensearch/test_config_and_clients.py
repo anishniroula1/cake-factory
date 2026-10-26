@@ -34,12 +34,12 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
 
     config = Config.from_environment()
 
-    assert (
-        config.environment,
-        config.opensearch_host,
-        config.receive_sqs_endpoint,
-        config.sent_sqs_endpoint,
-    ) == ("local", "search.example.com", "source.fifo", "next.fifo")
+    assert (config.environment, config.opensearch_host, config.receive_sqs_endpoint, config.sent_sqs_endpoint) == (
+        "local",
+        "search.example.com",
+        "source.fifo",
+        "next.fifo",
+    )
 
     invalid_values = [
         replace(config, pg_db_user=""),

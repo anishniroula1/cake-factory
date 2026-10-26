@@ -8,7 +8,7 @@ class Handler:
         self.fails = fails
         self.processed = []
 
-    def process(self, tsp_id):
+    def process_document_sentences(self, tsp_id):
         if self.fails:
             raise OperationFailedError("temporary failure")
         self.processed.append(tsp_id)
@@ -26,8 +26,10 @@ def test_invalid_or_failed_messages_are_not_deleted():
     invalid = Dependencies(Handler())
     failed = Dependencies(Handler(fails=True))
 
-    SqsProcessor(invalid)._process_message({"MessageId": "missing"})
-    SqsProcessor(failed)._process_message({"tsp_id": 10, "MessageId": "failed", "ReceiptHandle": "receipt"})
+    SqsProcessor(invalid)._process_sentence_similarity_message({"MessageId": "missing"})
+    SqsProcessor(failed)._process_sentence_similarity_message(
+        {"tsp_id": 10, "MessageId": "failed", "ReceiptHandle": "receipt"}
+    )
 
     assert invalid.aws_sqs.deleted == failed.aws_sqs.deleted == []
 
@@ -37,7 +39,7 @@ def test_delete_failure_is_logged_after_success():
     dependencies.aws_sqs.delete_messages = lambda message: False
     processor = SqsProcessor(dependencies)
 
-    processor._process_message({"tsp_id": 10, "MessageId": "message", "ReceiptHandle": "receipt"})
+    processor._process_sentence_similarity_message({"tsp_id": 10, "MessageId": "message", "ReceiptHandle": "receipt"})
 
     assert dependencies.logger.generic_messages == ["tsp_id=10"]
     assert any(level == "error" for level, message in dependencies.logger.messages)

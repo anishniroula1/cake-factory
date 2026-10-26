@@ -38,7 +38,9 @@ class Dependencies:
         self.kafka_event_db_store = KafkaEventDBStore(self.session_factory)
         # Historical deployments keep Kafka disabled, so they do not create a
         # broker connection or require Kafka credentials.
-        self.kafka_producer = Producer(self._kafka_config()) if self.config.send_tah_kafka_events else None
+        self.kafka_producer = (
+            Producer(self._build_kafka_producer_config()) if self.config.send_tah_kafka_events else None
+        )
         self.kafka_processor = KafkaProcessor(self.config, self.kafka_producer, self.kafka_event_db_store, self.logger)
         self.case_similarity_handler = CaseSimilarityHandler(
             self.config, self.case_similarity_db_store, self.kafka_processor, self.aws_sqs, self.logger
@@ -55,10 +57,7 @@ class Dependencies:
         credential_arguments = (
             {"use_dynamic_credentials": False}
             if self.config.environment == "local"
-            else {
-                "use_dynamic_credentials": True,
-                "dynamic_credentials_file": self.config.dynamic_credential_file,
-            }
+            else {"use_dynamic_credentials": True, "dynamic_credentials_file": self.config.dynamic_credential_file}
         )
         return DatabaseConnection(
             pg_db_user=self.config.pg_db_user,
@@ -72,7 +71,7 @@ class Dependencies:
             **credential_arguments,
         )
 
-    def _kafka_config(self) -> dict:
+    def _build_kafka_producer_config(self) -> dict:
         """Build the settings used by the Confluent Kafka producer.
 
         Input: kafka_security_protocol="SSL"
@@ -80,16 +79,16 @@ class Dependencies:
         confluent_kafka.Producer.
         """
 
-        values = {
+        kafka_producer_config = {
             "bootstrap.servers": self.config.kafka_bootstrap_servers,
             "security.protocol": self.config.kafka_security_protocol,
         }
         if self.config.kafka_security_protocol == "SSL":
-            values.update(
+            kafka_producer_config.update(
                 {
                     "ssl.certificate.location": self.config.ssl_cert_file,
                     "ssl.key.location": self.config.ssl_key_file,
                     "ssl.ca.location": self.config.kafka_server_ca_cert,
                 }
             )
-        return values
+        return kafka_producer_config

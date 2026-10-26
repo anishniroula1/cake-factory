@@ -44,10 +44,7 @@ def test_score_conversion_and_catalog_selection(service_config):
     assert (minimum_opensearch_score(90), cosine_distance(0.95), cosine_similarity(0.95)) == pytest.approx(
         (0.95, 0.1, 0.9)
     )
-    assert [select_catalog_alias(group) for group in ("Asylee", "refugee")] == [
-        "catalog-asylee",
-        "catalog-refugee",
-    ]
+    assert [select_catalog_alias(group) for group in ("Asylee", "refugee")] == ["catalog-asylee", "catalog-refugee"]
     with pytest.raises(PermanentDataError):
         select_catalog_alias("unknown")
 
@@ -77,10 +74,10 @@ def test_catalog_records_load_vectors_and_optional_classification(service_config
         ]
     )
     store = SentenceCatalogOpenSearchStore(client)
-    records = store.load_records_by_sentence_keys("catalog-asylee", [sentence_key, sentence_key])
+    records = store.load_catalog_records_by_sentence_keys("catalog-asylee", [sentence_key, sentence_key])
 
     assert records[sentence_key]["vector"] == pytest.approx([0.25, 0.75])
-    assert store.load_records_by_sentence_keys("catalog-asylee", []) == {}
+    assert store.load_catalog_records_by_sentence_keys("catalog-asylee", []) == {}
 
 
 def test_tracer_classification_and_catalog_update(service_config):
@@ -98,22 +95,20 @@ def test_tracer_classification_and_catalog_update(service_config):
             }
         ]
     )
-    classification = TracerOpenSearchStore(client).classify_sentence_by_vector([0.1, 0.2], "Asylee")
-    SentenceCatalogOpenSearchStore(client).update_classification_by_sentence_key(
+    classification = TracerOpenSearchStore(client).search_tracer_classification_by_vector([0.1, 0.2], "Asylee")
+    SentenceCatalogOpenSearchStore(client).update_catalog_classification_by_sentence_key(
         "catalog-asylee", "a" * 64, classification
     )
 
     assert classification == {"is_non_matcher": True, "is_tracer": True, "is_form_language": True}
     knn = client.searches[0]["body"]["query"]["bool"]["must"][0]["knn"]["sentenceContentVector"]
     assert knn == {"vector": [0.1, 0.2], "k": 100}
-    assert client.bulks[0]["body"][0] == {
-        "update": {"_index": "catalog-asylee", "_id": "a" * 64}
-    }
+    assert client.bulks[0]["body"][0] == {"update": {"_index": "catalog-asylee", "_id": "a" * 64}}
 
 
 def test_empty_tracer_result_allows_matching(service_config):
     client = Client([{"hits": {"hits": []}}])
-    assert TracerOpenSearchStore(client).classify_sentence_by_vector([0.1, 0.2], "Asylee") == {
+    assert TracerOpenSearchStore(client).search_tracer_classification_by_vector([0.1, 0.2], "Asylee") == {
         "is_non_matcher": False,
         "is_tracer": False,
         "is_form_language": False,
@@ -126,10 +121,8 @@ def test_catalog_classification_bulk_failure_is_reported(service_config):
     store = SentenceCatalogOpenSearchStore(client)
 
     with pytest.raises(OpenSearchException):
-        store.update_classification_by_sentence_key(
-            "catalog-asylee",
-            "a" * 64,
-            {"is_non_matcher": False, "is_tracer": True, "is_form_language": False},
+        store.update_catalog_classification_by_sentence_key(
+            "catalog-asylee", "a" * 64, {"is_non_matcher": False, "is_tracer": True, "is_form_language": False}
         )
 
 
@@ -137,7 +130,7 @@ def test_unflagged_tracer_reference_is_derived_as_tracer(service_config):
     client = Client(
         [{"hits": {"hits": [{"_score": 0.97, "_source": {"isNonMatcher": False, "isFormLanguage": False}}]}}]
     )
-    assert TracerOpenSearchStore(client).classify_sentence_by_vector([0.1, 0.2], "Refugee") == {
+    assert TracerOpenSearchStore(client).search_tracer_classification_by_vector([0.1, 0.2], "Refugee") == {
         "is_non_matcher": False,
         "is_tracer": True,
         "is_form_language": False,
@@ -157,7 +150,7 @@ def test_catalog_matches_reads_all_pages_and_keeps_exact_key(service_config):
             {"aggregations": {"matches": {"buckets": []}}},
         ]
     )
-    matches = SentenceCatalogOpenSearchStore(client).search_semantic_matches_by_vector(
+    matches = SentenceCatalogOpenSearchStore(client).search_matching_sentence_keys_by_vector(
         "catalog-asylee", source_key, [0.1, 0.2]
     )
 
@@ -196,7 +189,7 @@ def test_target_occurrences_searches_every_page_and_excludes_source_application(
         ]
     )
 
-    occurrences = OccurrenceOpenSearchStore(client).search_matching_occurrences_outside_application(
+    occurrences = OccurrenceOpenSearchStore(client).search_target_occurrences_outside_source_application(
         {sentence_key: 0.08}, "Asylee", 1
     )
 
@@ -210,4 +203,4 @@ def test_invalid_vector_data_is_rejected(service_config):
     with pytest.raises(PermanentDataError):
         decode_vector(encoded_vector([0.1]), constants.VECTOR_DIMENSION)
     with pytest.raises(PermanentDataError):
-        TracerOpenSearchStore(Client()).classify_sentence_by_vector([0.1], "Asylee")
+        TracerOpenSearchStore(Client()).search_tracer_classification_by_vector([0.1], "Asylee")

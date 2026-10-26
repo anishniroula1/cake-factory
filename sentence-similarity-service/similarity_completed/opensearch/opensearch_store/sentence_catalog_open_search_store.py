@@ -15,7 +15,9 @@ class SentenceCatalogOpenSearchStore:
     def __init__(self, client) -> None:
         self.client = client
 
-    def load_records_by_sentence_keys(self, catalog_alias: str, sentence_keys: list[str]) -> dict[str, CatalogRecord]:
+    def load_catalog_records_by_sentence_keys(
+        self, catalog_alias: str, sentence_keys: list[str]
+    ) -> dict[str, CatalogRecord]:
         """Load vectors and classifications for unique sentence keys. Binary doc
         values avoid loading vectors from _source, and duplicate keys are read once.
 
@@ -28,49 +30,49 @@ class SentenceCatalogOpenSearchStore:
         omitted from the returned mapping.
         """
 
-        unique_keys = list(dict.fromkeys(sentence_keys))
-        records: dict[str, CatalogRecord] = {}
+        unique_sentence_keys = list(dict.fromkeys(sentence_keys))
+        catalog_records: dict[str, CatalogRecord] = {}
 
         batch_size = constants.OPENSEARCH_TERMS_BATCH_SIZE
-        for offset in range(0, len(unique_keys), batch_size):
-            key_batch = unique_keys[offset : offset + batch_size]
-            if not key_batch:
+        for offset in range(0, len(unique_sentence_keys), batch_size):
+            sentence_key_batch = unique_sentence_keys[offset : offset + batch_size]
+            if not sentence_key_batch:
                 continue
 
             # A search can return the vector through binary doc values. _mget
             # would instead load the larger JSON vector from _source.
-            response = self.client.search(
+            search_response = self.client.search(
                 index=catalog_alias,
                 body={
-                    "size": len(key_batch),
+                    "size": len(sentence_key_batch),
                     "track_total_hits": False,
                     "_source": ["sentenceKey", "wordCount", "isNonMatcher", "isTracer", "isFormLanguage"],
                     "docvalue_fields": [{"field": constants.VECTOR_FIELD, "format": "binary"}],
-                    "query": {"ids": {"values": key_batch}},
+                    "query": {"ids": {"values": sentence_key_batch}},
                 },
             )
-            for hit in response["hits"]["hits"]:
-                source = hit.get("_source", {})
-                vector_values = hit.get("fields", {}).get(constants.VECTOR_FIELD)
-                if not vector_values:
+            for catalog_hit in search_response["hits"]["hits"]:
+                catalog_source = catalog_hit.get("_source", {})
+                encoded_vector_values = catalog_hit.get("fields", {}).get(constants.VECTOR_FIELD)
+                if not encoded_vector_values:
                     continue
-                sentence_key = source["sentenceKey"]
-                records[sentence_key] = {
+                sentence_key = catalog_source["sentenceKey"]
+                catalog_records[sentence_key] = {
                     "sentence_key": sentence_key,
-                    "word_count": int(source["wordCount"]),
-                    "vector": decode_vector(vector_values[0], constants.VECTOR_DIMENSION),
-                    "classification": saved_classification(source),
+                    "word_count": int(catalog_source["wordCount"]),
+                    "vector": decode_vector(encoded_vector_values[0], constants.VECTOR_DIMENSION),
+                    "classification": saved_classification(catalog_source),
                 }
-        return records
+        return catalog_records
 
-    def search_semantic_matches_by_vector(
-        self, catalog_alias: str, source_key: str, vector: list[float]
+    def search_matching_sentence_keys_by_vector(
+        self, catalog_alias: str, source_sentence_key: str, vector: list[float]
     ) -> dict[str, float]:
         """Find sentence keys whose vectors satisfy the similarity threshold.
         Radial search and composite aggregation return every qualifying key.
 
         Input: catalog_alias="sentence_semantic_catalog_refugee",
-        source_key="abc123", vector=[512 Titan float values]
+        source_sentence_key="abc123", vector=[512 Titan float values]
         Output: {"abc123": 0.0, "def456": 0.08}
 
         The source key is always included with distance 0.0. Other keys are
@@ -79,15 +81,15 @@ class SentenceCatalogOpenSearchStore:
         """
 
         validate_vector(vector, constants.VECTOR_DIMENSION)
-        matches = {source_key: 0.0}
+        sentence_key_distances = {source_sentence_key: 0.0}
         after_key = None
         while True:
-            match_batch, after_key = self._search_semantic_match_batch(catalog_alias, vector, after_key)
-            matches.update(match_batch)
+            sentence_key_page, after_key = self._search_matching_sentence_key_page(catalog_alias, vector, after_key)
+            sentence_key_distances.update(sentence_key_page)
             if after_key is None:
-                return matches
+                return sentence_key_distances
 
-    def update_classification_by_sentence_key(
+    def update_catalog_classification_by_sentence_key(
         self, catalog_alias: str, sentence_key: str, classification: Classification
     ) -> None:
         """Persist reusable classification flags with a one-item bulk update.
@@ -98,7 +100,7 @@ class SentenceCatalogOpenSearchStore:
         "is_tracer": False, "is_form_language": False}
         """
 
-        document = {
+        classification_document = {
             "isNonMatcher": classification["is_non_matcher"],
             "isTracer": classification["is_tracer"],
             "isFormLanguage": classification["is_form_language"],
@@ -113,18 +115,13 @@ class SentenceCatalogOpenSearchStore:
         #     body={"doc": document},
         # )
 
-        response = self.client.bulk(
-            body=[
-                {"update": {"_index": catalog_alias, "_id": sentence_key}},
-                {"doc": document},
-            ]
+        bulk_response = self.client.bulk(
+            body=[{"update": {"_index": catalog_alias, "_id": sentence_key}}, {"doc": classification_document}]
         )
-        if response.get("errors"):
-            raise OpenSearchException(
-                f"catalog classification bulk update failed: {response.get('items', [])}"
-            )
+        if bulk_response.get("errors"):
+            raise OpenSearchException(f"catalog classification bulk update failed: {bulk_response.get('items', [])}")
 
-    def _search_semantic_match_batch(
+    def _search_matching_sentence_key_page(
         self, catalog_alias: str, vector: list[float], after_key: dict | None
     ) -> tuple[dict[str, float], dict | None]:
         """Retrieve one composite-aggregation page of semantic matches. The
@@ -145,7 +142,7 @@ class SentenceCatalogOpenSearchStore:
         if after_key:
             composite["after"] = after_key
 
-        response = self.client.search(
+        search_response = self.client.search(
             index=catalog_alias,
             body={
                 "size": 0,
@@ -156,11 +153,7 @@ class SentenceCatalogOpenSearchStore:
                             "vector": vector,
                             "min_score": minimum_opensearch_score(constants.MATCH_THRESHOLD),
                             "method_parameters": {"nprobes": constants.IVF_NPROBES},
-                            "filter": {
-                                "range": {
-                                    "wordCount": {"gte": constants.MINIMUM_MATCH_WORD_COUNT}
-                                }
-                            },
+                            "filter": {"range": {"wordCount": {"gte": constants.MINIMUM_MATCH_WORD_COUNT}}},
                         }
                     }
                 },
@@ -172,10 +165,10 @@ class SentenceCatalogOpenSearchStore:
                 },
             },
         )
-        aggregation = response["aggregations"]["matches"]
-        matches = {}
-        for bucket in aggregation["buckets"]:
-            hit = bucket["sample"]["hits"]["hits"][0]
-            sentence_key = hit["_source"]["sentenceKey"]
-            matches[sentence_key] = cosine_distance(float(hit["_score"]))
-        return matches, aggregation.get("after_key")
+        matching_key_aggregation = search_response["aggregations"]["matches"]
+        sentence_key_distances = {}
+        for sentence_key_bucket in matching_key_aggregation["buckets"]:
+            catalog_hit = sentence_key_bucket["sample"]["hits"]["hits"][0]
+            sentence_key = catalog_hit["_source"]["sentenceKey"]
+            sentence_key_distances[sentence_key] = cosine_distance(float(catalog_hit["_score"]))
+        return sentence_key_distances, matching_key_aggregation.get("after_key")

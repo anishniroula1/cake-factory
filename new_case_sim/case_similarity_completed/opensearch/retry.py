@@ -23,7 +23,7 @@ def retry_operation[Result](
     """Retry one operation without repeating earlier completed work. Supported
     transient failures retry until the operation succeeds or reaches the limit.
 
-    Input: label="Refresh Titan case summaries", operation=refresh_case_summaries,
+    Input: label="Refresh Titan case summaries", operation=refresh_bidirectional_case_summaries,
     wait_seconds=5, max_attempts=3
     Output: the operation result without modification.
 

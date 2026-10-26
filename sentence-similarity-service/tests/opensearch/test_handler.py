@@ -25,7 +25,7 @@ def test_non_matcher_skips_catalog_search_without_creating_match_row(service_con
     handler = SentenceSimilarityHandler(service_config, sessions, opensearch, SqsFake(), LoggerFake())
     record = source_record(sentence_row.sentence_key, classification)
 
-    result = handler._process_sentence(sentence_row, "catalog-asylee", record)
+    result = handler._process_source_sentence(sentence_row, "catalog-asylee", record)
 
     assert result == {**classification, "saved_relationships": 0}
     lock_statement = str(classification_update.scalars.call_args.args[0].compile(dialect=postgresql.dialect()))
@@ -45,7 +45,7 @@ def test_tracer_and_form_language_skip_catalog_search(service_config, sentence_r
     opensearch, router = opensearch_mock(sentence_row.sentence_key, tracer_result=classification)
     handler = SentenceSimilarityHandler(service_config, sessions, opensearch, SqsFake(), LoggerFake())
 
-    result = handler._process_sentence(sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key))
+    result = handler._process_source_sentence(sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key))
 
     assert result == {**classification, "saved_relationships": 0}
     assert router.semantic_search_count == 0
@@ -56,10 +56,8 @@ def test_short_sentence_is_classified_but_skips_catalog_matching(service_config,
     sessions = SessionSequence([session_mock(rows=[sentence_row.global_id])])
     handler = SentenceSimilarityHandler(service_config, sessions, opensearch, SqsFake(), LoggerFake())
 
-    result = handler._process_sentence(
-        sentence_row,
-        "catalog-asylee",
-        source_record(sentence_row.sentence_key, word_count=4),
+    result = handler._process_source_sentence(
+        sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key, word_count=4)
     )
 
     assert result["saved_relationships"] == 0
@@ -71,7 +69,7 @@ def test_missing_classification_is_calculated_and_saved(service_config, sentence
     handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), LoggerFake())
     record = source_record(sentence_row.sentence_key)
 
-    classification = handler.tracer_filtering_service.get_sentence_classification(
+    classification = handler.tracer_filtering_service.resolve_sentence_classification(
         "catalog-asylee", record, "Asylee", sentence_row.global_id
     )
 
@@ -84,7 +82,7 @@ def test_saved_non_matcher_is_rechecked(service_config, sentence_row):
     handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), LoggerFake())
     record = source_record(sentence_row.sentence_key, non_matcher)
 
-    classification = handler.tracer_filtering_service.get_sentence_classification(
+    classification = handler.tracer_filtering_service.resolve_sentence_classification(
         "catalog-asylee", record, "Asylee", sentence_row.global_id
     )
 
@@ -95,10 +93,10 @@ def test_all_missing_catalog_keys_stop_the_current_message(service_config, sente
     opensearch, _ = opensearch_mock(sentence_row.sentence_key, missing_catalog_keys={"KEY-B", "KEY-C"})
     logger = LoggerFake()
     handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), logger)
-    source = source_record(sentence_row.sentence_key)
+    source_catalog_record = source_record(sentence_row.sentence_key)
 
-    result = handler.tracer_filtering_service.find_eligible_match_targets(
-        sentence_row, "catalog-asylee", {"KEY-B": 0.1, "KEY-C": 0.2}, source
+    result = handler.tracer_filtering_service.find_eligible_target_occurrences(
+        sentence_row, "catalog-asylee", {"KEY-B": 0.1, "KEY-C": 0.2}, source_catalog_record
     )
 
     assert result is None
@@ -111,7 +109,7 @@ def test_empty_document_stops_without_forwarding(service_config):
         service_config, SessionSequence([session_mock(scalar_value=0)]), opensearch, sqs, LoggerFake()
     )
 
-    assert handler.process(10) is None
+    assert handler.process_document_sentences(10) is None
 
 
 def test_occurrence_readiness_waits_once_and_then_continues(monkeypatch, service_config):
@@ -120,7 +118,7 @@ def test_occurrence_readiness_waits_once_and_then_continues(monkeypatch, service
     handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), LoggerFake())
     monkeypatch.setattr(handler_module.time, "sleep", waits.append)
 
-    assert handler._wait_for_searchable_occurrences(10) is True
+    assert handler._wait_for_document_occurrences(10) is True
     assert waits == [30]
 
 
@@ -131,7 +129,7 @@ def test_sentence_count_uses_only_sentences_vector_tsp_id(service_config):
         service_config, SessionSequence([count_session]), opensearch, SqsFake(), LoggerFake()
     )
 
-    count = handler.sentence_vector_db_store.count_sentences_by_tsp_id(10)
+    count = handler.sentence_vector_db_store.count_document_sentences(10)
     sql = str(count_session.scalar.call_args.args[0])
 
     assert count == 25 and "JOIN" not in sql.upper()

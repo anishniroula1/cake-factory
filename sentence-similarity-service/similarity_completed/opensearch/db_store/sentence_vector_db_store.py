@@ -14,7 +14,7 @@ class SentenceVectorDBStore:
     def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
-    def count_sentences_by_tsp_id(self, tsp_id: TspId) -> int:
+    def count_document_sentences(self, tsp_id: TspId) -> int:
         """Count all sentence rows that belong to one document.
 
         Input: tsp_id=8205
@@ -25,7 +25,7 @@ class SentenceVectorDBStore:
             statement = select(func.count()).select_from(SentencesVector).where(SentencesVector.tsp_id == tsp_id)
             return int(session.scalar(statement) or 0)
 
-    def load_sentence_batch_by_tsp_id(self, tsp_id: TspId, after_global_id: int) -> list[SentencesVector]:
+    def load_document_sentence_batch(self, tsp_id: TspId, after_global_id: int) -> list[SentencesVector]:
         """Load the next ordered page of sentences for a document. The global_id
         cursor limits memory use and keeps every page in deterministic order.
 
@@ -54,7 +54,9 @@ class SentenceVectorDBStore:
             )
             return list(session.scalars(statement))
 
-    def update_classification_by_global_ids(self, global_ids: list[int], classification: Classification) -> None:
+    def update_sentence_classification_by_global_ids(
+        self, global_ids: list[int], classification: Classification
+    ) -> None:
         """Persist one classification on the specified sentence rows. Rows are
         locked in global_id order and updated in batches to reduce deadlock risk.
 
@@ -74,12 +76,12 @@ class SentenceVectorDBStore:
         ordered_global_ids = sorted(set(global_ids))
         batch_size = constants.DATABASE_CLASSIFICATION_BATCH_SIZE
         for offset in range(0, len(ordered_global_ids), batch_size):
-            id_batch = ordered_global_ids[offset : offset + batch_size]
+            global_id_batch = ordered_global_ids[offset : offset + batch_size]
             with self.session_factory() as session, session.begin():
                 locked_global_ids = list(
                     session.scalars(
                         select(SentencesVector.global_id)
-                        .where(SentencesVector.global_id.in_(id_batch))
+                        .where(SentencesVector.global_id.in_(global_id_batch))
                         .order_by(SentencesVector.global_id)
                         .with_for_update(key_share=True)
                     )
