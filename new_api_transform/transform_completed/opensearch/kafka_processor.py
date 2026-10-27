@@ -42,12 +42,7 @@ class KafkaProcessor:
 
         deliveries: list[KafkaDelivery] = []
         delivery_errors: list[str] = []
-        application_id = int(application_events[0]["after"]["application_id"])
-        analysis_group = str(application_events[0]["after"]["analysis_group"])
-        log_context = f"application_id={application_id}, analysis_group={analysis_group}"
-        self.logger.info(
-            f"Sending {len(application_events)} API event(s) to Kafka. topic={constants.KAFKA_TOPIC}, {log_context}."
-        )
+        self.logger.info(f"Sending {len(application_events)} API event(s) to Kafka. topic={constants.KAFKA_TOPIC}.")
         try:
             for application_event in application_events:
                 kafka_event = self._serialize_payload_for_kafka(application_event)
@@ -74,12 +69,12 @@ class KafkaProcessor:
 
         self.logger.info(
             f"Kafka confirmed {len(deliveries)} API event(s). Saving delivery audits to api.kafka_events and "
-            f"api.transform_status. {log_context}."
+            "api.transform_status."
         )
         self.transmission_db_store.save_confirmed_kafka_deliveries(deliveries, constants.KAFKA_AUDIT_RETENTION_DAYS)
         self.logger.info(
             f"Saved {len(deliveries)} Kafka delivery audit record(s) to api.kafka_events and "
-            f"api.transform_status. {log_context}."
+            "api.transform_status."
         )
         return len(deliveries)
 
@@ -139,8 +134,7 @@ class KafkaProcessor:
                 )
             )
             self.logger.info(
-                f"Kafka delivery confirmed. topic={constants.KAFKA_TOPIC}, partition={partition}, offset={offset}, "
-                f"application_id={application_id}, analysis_group={analysis_group}."
+                f"Kafka delivery confirmed. topic={constants.KAFKA_TOPIC}, partition={partition}, offset={offset}."
             )
 
         return record_delivery_result

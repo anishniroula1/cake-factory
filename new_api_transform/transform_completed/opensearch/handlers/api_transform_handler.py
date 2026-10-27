@@ -67,13 +67,9 @@ class ApiTransformHandler:
 
             published_event_count = self._build_and_publish_application_events(application_reference)
             self.logger.info(
-                f"API Transform completed one document, one application, and {published_event_count} Kafka event(s). "
-                f"application_id={application_id}, analysis_group={analysis_group}."
+                f"API Transform completed one document, one application, and {published_event_count} Kafka event(s)."
             )
-            self.logger.info(
-                f"API Transform took {perf_counter() - started_at:.2f} seconds to complete. "
-                f"application_id={application_id}, analysis_group={analysis_group}."
-            )
+            self.logger.info(f"API Transform took {perf_counter() - started_at:.2f} seconds to complete.")
             return {"source_message_count": 1, "application_count": 1, "kafka_event_count": published_event_count}
         except ApiTransformError as error:
             self.transmission_db_store.save_transform_error("API Transform failed", error)
@@ -90,8 +86,7 @@ class ApiTransformHandler:
         analysis_group = application_reference.analysis_group
         application_ids = [application_id]
         is_asylee = analysis_group == "Asylee"
-        log_context = f"application_id={application_id}, analysis_group={analysis_group}"
-        self.logger.info(f"Loading the application record from landing.application_id_lookup. {log_context}.")
+        self.logger.info("Loading the application record from landing.application_id_lookup.")
         application_payload_records = retry_operation(
             "Load application records",
             self.application_db_store.load_application_payload_records,
@@ -100,11 +95,10 @@ class ApiTransformHandler:
             custom_logger=self.logger,
         )
         self.logger.info(
-            f"Loaded {len(application_payload_records)} application record(s) from "
-            f"landing.application_id_lookup. {log_context}."
+            f"Loaded {len(application_payload_records)} application record(s) from landing.application_id_lookup."
         )
 
-        self.logger.info(f"Loading applicant details from biodata.applicant and biodata.address. {log_context}.")
+        self.logger.info("Loading applicant details from biodata.applicant and biodata.address.")
         applicant_payloads = retry_operation(
             "Load applicant details",
             self.applicant_db_store.load_applicant_details,
@@ -115,12 +109,10 @@ class ApiTransformHandler:
         )
         self.logger.info(
             f"biodata.applicant and biodata.address query completed. Record found: "
-            f"{application_id in applicant_payloads}. {log_context}."
+            f"{application_id in applicant_payloads}."
         )
 
-        self.logger.info(
-            f"Loading application documents from tsp.text_similarity_input and tsp.titan_matches. {log_context}."
-        )
+        self.logger.info("Loading application documents from tsp.text_similarity_input and tsp.titan_matches.")
         document_payload_records = retry_operation(
             "Load application documents",
             self.content_db_store.load_document_payload_records,
@@ -131,12 +123,10 @@ class ApiTransformHandler:
         application_documents = document_payload_records.get(application_id, [])
         self.logger.info(
             f"Loaded {len(application_documents)} application document(s) from "
-            f"tsp.text_similarity_input and tsp.titan_matches. {log_context}."
+            "tsp.text_similarity_input and tsp.titan_matches."
         )
 
-        self.logger.info(
-            f"Loading Titan sentence matches from tsp.sentences_vector and tsp.titan_matches. {log_context}."
-        )
+        self.logger.info("Loading Titan sentence matches from tsp.sentences_vector and tsp.titan_matches.")
         sentence_payload_records = retry_operation(
             "Load Titan sentence matches",
             self.content_db_store.load_sentence_payload_records,
@@ -148,13 +138,12 @@ class ApiTransformHandler:
         application_sentences = sentence_payload_records.get(application_id, [])
         self.logger.info(
             f"Loaded {len(application_sentences)} Titan sentence record(s) from "
-            f"tsp.sentences_vector and tsp.titan_matches. {log_context}."
+            "tsp.sentences_vector and tsp.titan_matches."
         )
 
         if is_asylee:
             self.logger.info(
-                f"Loading the public template from tsp.text_similarity_input and landing.template_registry. "
-                f"{log_context}."
+                "Loading the public template from tsp.text_similarity_input and landing.template_registry."
             )
         public_template_payloads = (
             retry_operation(
@@ -170,7 +159,7 @@ class ApiTransformHandler:
         if is_asylee:
             self.logger.info(
                 f"tsp.text_similarity_input and landing.template_registry query completed. Record found: "
-                f"{application_id in public_template_payloads}. {log_context}."
+                f"{application_id in public_template_payloads}."
             )
 
         application_payload_record = application_payload_records.get(application_id)
@@ -183,7 +172,7 @@ class ApiTransformHandler:
             sentence_payload_records.get(application_id, []),
             public_template_payloads.get(application_id),
         )
-        self.logger.info(f"Built {len(application_events)} Kafka event(s). {log_context}.")
+        self.logger.info(f"Built {len(application_events)} Kafka event(s).")
         return self._publish_events_in_size_limited_batches(application_events)
 
     def _publish_events_in_size_limited_batches(self, application_events: list[dict]) -> int:
