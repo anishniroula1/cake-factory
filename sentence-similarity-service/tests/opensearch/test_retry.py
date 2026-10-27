@@ -20,6 +20,7 @@ def test_retry_returns_after_temporary_failure(monkeypatch):
 
     assert result == "done"
     assert any(level == "info" and "succeeded on attempt 2" in message for level, message in logger.messages)
+    assert "temporary" not in str(logger.messages)
 
 
 def test_retry_stops_at_limit_and_rejects_bad_limit(monkeypatch):

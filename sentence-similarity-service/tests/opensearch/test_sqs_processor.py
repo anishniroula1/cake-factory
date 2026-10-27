@@ -32,6 +32,8 @@ def test_invalid_or_failed_messages_are_not_deleted():
     )
 
     assert invalid.aws_sqs.deleted == failed.aws_sqs.deleted == []
+    assert invalid.logger.generic_messages == [None]
+    assert failed.logger.generic_messages == ["tsp_id=10", None]
 
 
 def test_delete_failure_is_logged_after_success():
@@ -41,5 +43,5 @@ def test_delete_failure_is_logged_after_success():
 
     processor._process_sentence_similarity_message({"tsp_id": 10, "MessageId": "message", "ReceiptHandle": "receipt"})
 
-    assert dependencies.logger.generic_messages == ["tsp_id=10"]
+    assert dependencies.logger.generic_messages == ["tsp_id=10", None]
     assert any(level == "error" for level, message in dependencies.logger.messages)

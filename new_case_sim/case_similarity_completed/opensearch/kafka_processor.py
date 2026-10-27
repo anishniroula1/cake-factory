@@ -9,7 +9,7 @@ from case_similarity_completed.opensearch.config import Config
 from case_similarity_completed.opensearch.contracts import KafkaDelivery, KafkaEvent, SkippedKafkaEvent
 from case_similarity_completed.opensearch.db_store.kafka_event_db_store import KafkaEventDBStore
 from case_similarity_completed.opensearch.errors import KafkaPublishError
-from case_similarity_completed.opensearch.retry import retry_operation
+from case_similarity_completed.opensearch.retry import retry_operation, safe_error_summary
 from ta_utils.logger.CustomLogger import CustomLogger
 
 
@@ -144,7 +144,7 @@ class KafkaProcessor:
             # flush() can read Kafka's confirmed delivery or failure.
             nonlocal kafka_delivery, kafka_delivery_error
             if error is not None:
-                kafka_delivery_error = str(error)
+                kafka_delivery_error = safe_error_summary(error)
                 return
             partition = message.partition()
             offset = message.offset()
@@ -170,7 +170,7 @@ class KafkaProcessor:
             self.kafka_producer.poll(0)
             pending_message_count = self.kafka_producer.flush()
         except (BufferError, KafkaException) as error:
-            raise KafkaPublishError(str(error)) from error
+            raise KafkaPublishError(safe_error_summary(error)) from error
 
         if kafka_delivery_error:
             raise KafkaPublishError(kafka_delivery_error)

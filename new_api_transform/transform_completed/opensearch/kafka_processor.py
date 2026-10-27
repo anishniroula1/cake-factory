@@ -9,6 +9,7 @@ from transform_completed.opensearch.config import Config
 from transform_completed.opensearch.contracts import KafkaDelivery
 from transform_completed.opensearch.db_store.transmission_db_store import TransmissionDBStore
 from transform_completed.opensearch.errors import KafkaPublishError
+from transform_completed.opensearch.retry import safe_error_summary
 
 
 class KafkaProcessor:
@@ -58,7 +59,7 @@ class KafkaProcessor:
                 self.producer.poll(0)
             pending = self.producer.flush()
         except (BufferError, KafkaException) as error:
-            raise KafkaPublishError(str(error)) from error
+            raise KafkaPublishError(safe_error_summary(error)) from error
 
         if delivery_errors:
             raise KafkaPublishError("; ".join(delivery_errors[:5]))
@@ -107,7 +108,7 @@ class KafkaProcessor:
             # Kafka calls this function later. nonlocal lists let the outer
             # publish method inspect every success and failure after flush().
             if error is not None:
-                delivery_errors.append(str(error))
+                delivery_errors.append(safe_error_summary(error))
                 return
             timestamp_milliseconds = message.timestamp()[1]
             timestamp = (

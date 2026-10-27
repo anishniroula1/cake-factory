@@ -122,8 +122,7 @@ class SentenceSimilarityHandler:
                 ]
                 if missing_catalog_records:
                     missing_details = ", ".join(
-                        f"global_id={sentence_vector_record.global_id}, "
-                        f"sentence_key={sentence_vector_record.sentence_key}"
+                        f"global_id={sentence_vector_record.global_id}"
                         for sentence_vector_record in missing_catalog_records
                     )
                     self.logger.error(f"Source catalog vectors are missing for these sentences: {missing_details}.")

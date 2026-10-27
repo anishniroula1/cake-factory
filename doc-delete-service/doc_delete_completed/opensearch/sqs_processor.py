@@ -1,6 +1,7 @@
 from doc_delete_completed.opensearch.contracts import SqsMessage, TspId
 from doc_delete_completed.opensearch.dependencies import Dependencies
 from doc_delete_completed.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
+from doc_delete_completed.opensearch.retry import safe_error_summary
 
 
 class SqsProcessor:
@@ -36,16 +37,18 @@ class SqsProcessor:
             if not deletion_result.get("next_message_sent"):
                 self.dependencies.logger.error("Document deletion did not complete the message.")
                 return
+
+            if not self.dependencies.aws_sqs.delete_messages(message):
+                self.dependencies.logger.error("Processing completed, but source message deletion failed.")
+                return
+            self.dependencies.logger.info("Document deletion completed and deleted the source SQS message.")
         except (OperationFailedError, PermanentDataError, QueueSendError) as error:
             self.dependencies.logger.error(
-                f"Document deletion stopped because of {type(error).__name__}: {str(error)[:500]}"
+                f"Document deletion stopped because of {safe_error_summary(error)}"
             )
             return
-
-        if not self.dependencies.aws_sqs.delete_messages(message):
-            self.dependencies.logger.error("Processing completed, but source message deletion failed.")
-            return
-        self.dependencies.logger.info("Document deletion completed and deleted the source SQS message.")
+        finally:
+            self.dependencies.logger.set_generic_message(None)
 
     @staticmethod
     def _read_tsp_id_from_message(message: SqsMessage) -> TspId | None:

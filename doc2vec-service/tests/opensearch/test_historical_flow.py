@@ -221,6 +221,7 @@ def test_temporary_worker_failure_retries_without_losing_the_message(
 
     assert opensearch.read_attempts == 2
     assert sqs.deleted == [message]
+    assert "temporary OpenSearch failure" not in str(custom_logger.warning_messages)
 
 
 def test_refugee_document_uses_only_the_refugee_catalog(

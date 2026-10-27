@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from transform_completed.opensearch.contracts import KafkaDelivery
+from transform_completed.opensearch.retry import safe_error_summary
 
 # Record when one application's API event was last confirmed by Kafka.
 #
@@ -136,7 +137,10 @@ class TransmissionDBStore:
         """
 
         with self.session_factory() as session:
-            session.execute(SAVE_ETL_ERROR, {"message": message, "exception": str(error)[:4000]})
+            session.execute(
+                SAVE_ETL_ERROR,
+                {"message": message, "exception": safe_error_summary(error)},
+            )
             session.commit()
 
     @staticmethod

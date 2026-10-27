@@ -134,10 +134,12 @@ def test_database_stores_return_empty_results_and_report_missing_documents(servi
 
 def test_retry_repeats_only_the_failed_operation():
     action = RetryAction()
+    logger = LoggerFake()
 
-    result = retry_operation("database write", action.run, wait_seconds=0, custom_logger=LoggerFake())
+    result = retry_operation("database write", action.run, wait_seconds=0, custom_logger=logger)
 
     assert (result, action.calls) == ("finished", 2)
+    assert "statement" not in str(logger.messages)
 
 
 def test_runtime_starts_processor_and_closes_dependencies(monkeypatch):

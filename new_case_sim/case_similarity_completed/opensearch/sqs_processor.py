@@ -1,6 +1,7 @@
 from case_similarity_completed.opensearch.contracts import SqsMessage, TspId
 from case_similarity_completed.opensearch.dependencies import Dependencies
 from case_similarity_completed.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
+from case_similarity_completed.opensearch.retry import safe_error_summary
 
 
 class SqsProcessor:
@@ -34,16 +35,18 @@ class SqsProcessor:
             if case_similarity_result is None:
                 self._leave_case_similarity_message_for_sqs("Case Similarity did not complete the message.")
                 return
+
+            if not self.dependencies.aws_sqs.delete_messages(message):
+                self.dependencies.logger.error("Processing completed, but source message deletion failed.")
+                return
+            self.dependencies.logger.info("Case Similarity completed and deleted the source SQS message.")
         except (OperationFailedError, PermanentDataError, QueueSendError) as error:
             self.dependencies.logger.error(
-                f"Case Similarity stopped because of {type(error).__name__}: {str(error)[:500]}"
+                f"Case Similarity stopped because of {safe_error_summary(error)}"
             )
             return
-
-        if not self.dependencies.aws_sqs.delete_messages(message):
-            self.dependencies.logger.error("Processing completed, but source message deletion failed.")
-            return
-        self.dependencies.logger.info("Case Similarity completed and deleted the source SQS message.")
+        finally:
+            self.dependencies.logger.set_generic_message(None)
 
     def _leave_case_similarity_message_for_sqs(self, reason: str) -> None:
         """Log why a source message remains available for SQS redelivery.

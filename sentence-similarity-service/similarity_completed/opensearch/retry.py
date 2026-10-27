@@ -12,6 +12,18 @@ from ta_utils.logger.CustomLogger import CustomLogger
 RETRYABLE_ERRORS = (BotoCoreError, OpenSearchException, SQLAlchemyError, TimeoutError, ConnectionError, QueueSendError)
 
 
+def safe_error_summary(error: object) -> str:
+    """Return useful error details without SQL, parameters, or response bodies."""
+
+    error_name = type(error).__name__
+    if getattr(error, "safe_for_logging", False):
+        return f"{error_name}: {str(error)[:500]}"
+    original_error = getattr(error, "orig", None)
+    if original_error is not None:
+        return f"{error_name} (database_error={type(original_error).__name__})"
+    return error_name
+
+
 def retry_operation[Result](
     label: str,
     operation: Callable[..., Result],
@@ -50,12 +62,13 @@ def retry_operation[Result](
         except PermanentDataError:
             raise
         except RETRYABLE_ERRORS as error:
+            error_summary = safe_error_summary(error)
             if attempt == max_attempts:
                 raise OperationFailedError(
-                    f"{label} failed after {max_attempts} attempts: {str(error)[:500]}"
+                    f"{label} failed after {max_attempts} attempts: {error_summary}"
                 ) from error
             custom_logger.warning(
-                f"{label} attempt {attempt} failed: {str(error)[:500]}; retrying in {wait_seconds} seconds"
+                f"{label} attempt {attempt} failed: {error_summary}; retrying in {wait_seconds} seconds"
             )
             time.sleep(wait_seconds)
 

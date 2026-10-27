@@ -144,7 +144,7 @@ def test_sqs_processor_deletes_only_successful_messages():
     processor._process_document_delete_message(missing)
     processor._process_document_delete_message(good)
 
-    assert (handler.calls, aws_sqs.deleted, logger.generic_message) == ([10], [good], "tsp_id=10")
+    assert (handler.calls, aws_sqs.deleted, logger.generic_message) == ([10], [good], None)
 
 
 @pytest.mark.parametrize(
@@ -153,11 +153,13 @@ def test_sqs_processor_deletes_only_successful_messages():
 def test_sqs_processor_leaves_failed_message_for_sqs(error):
     message = {"tsp_id": 10, "ReceiptHandle": "failed-local"}
     aws_sqs = AwsSqsFake()
-    processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(error), LoggerFake()))
+    logger = LoggerFake()
+    processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(error), logger))
 
     processor._process_document_delete_message(message)
 
     assert aws_sqs.deleted == []
+    assert logger.generic_message is None
 
 
 def test_sqs_processor_run_keeps_listening():

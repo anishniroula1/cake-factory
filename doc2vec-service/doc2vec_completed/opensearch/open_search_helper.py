@@ -7,6 +7,7 @@ from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import OpenSearchDocument
 from doc2vec_completed.opensearch.errors import PermanentDataError
+from doc2vec_completed.opensearch.retry import safe_error_summary
 from ta_utils.logger.CustomLogger import CustomLogger
 
 RETRYABLE_STATUS_CODES = {408, 424, 425, 429, 500, 502, 503, 504}
@@ -57,7 +58,7 @@ class OpenSearchHelper:
                     raise
                 raise PermanentDataError(
                     f"OpenSearch lookup in alias {alias} was rejected: "
-                    f"{str(error)[:500]}"
+                    f"{safe_error_summary(error)}"
                 ) from error
 
             for document in response["docs"]:
@@ -111,7 +112,8 @@ class OpenSearchHelper:
         except TransportError as error:
             if not self._is_retryable(error):
                 raise PermanentDataError(
-                    f"OpenSearch bulk write to {alias} was rejected: {str(error)[:500]}"
+                    f"OpenSearch bulk write to {alias} was rejected: "
+                    f"{safe_error_summary(error)}"
                 ) from error
             if needs_embedding:
                 self._start_embedding_cooldown()
@@ -176,9 +178,15 @@ class OpenSearchHelper:
             status = int(operation.get("status", 0))
             document_id = operation.get("_id")
             if status not in RETRYABLE_STATUS_CODES or document_id is None:
-                reason = operation.get("error", operation)
+                error_details = operation.get("error")
+                error_type = (
+                    error_details.get("type", "unknown")
+                    if isinstance(error_details, dict)
+                    else type(error_details).__name__
+                )
                 raise PermanentDataError(
-                    f"OpenSearch rejected document {document_id}: {str(reason)[:500]}"
+                    "OpenSearch permanently rejected a document. "
+                    f"status_code={status}, error_type={error_type}."
                 )
             failed_ids.add(str(document_id))
         return [

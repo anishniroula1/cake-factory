@@ -13,7 +13,7 @@ from transform_completed.opensearch.db_store import (
 from transform_completed.opensearch.errors import ApiTransformError, PermanentDataError
 from transform_completed.opensearch.kafka_processor import KafkaProcessor
 from transform_completed.opensearch.payload_builder import PayloadBuilder
-from transform_completed.opensearch.retry import retry_operation
+from transform_completed.opensearch.retry import retry_operation, safe_error_summary
 
 
 class ApiTransformHandler:
@@ -72,7 +72,20 @@ class ApiTransformHandler:
             self.logger.info(f"API Transform took {perf_counter() - started_at:.2f} seconds to complete.")
             return {"source_message_count": 1, "application_count": 1, "kafka_event_count": published_event_count}
         except ApiTransformError as error:
-            self.transmission_db_store.save_transform_error("API Transform failed", error)
+            try:
+                retry_operation(
+                    "Save the API Transform failure record",
+                    self.transmission_db_store.save_transform_error,
+                    "API Transform failed",
+                    error,
+                    wait_seconds=constants.RETRY_SECONDS,
+                    custom_logger=self.logger,
+                )
+            except ApiTransformError as audit_error:
+                self.logger.error(
+                    "The API Transform failure record could not be saved: "
+                    f"{safe_error_summary(audit_error)}"
+                )
             raise
 
     def _build_and_publish_application_events(self, application_reference: ApplicationReference) -> int:

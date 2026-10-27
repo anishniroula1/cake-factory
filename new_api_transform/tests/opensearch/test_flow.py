@@ -19,10 +19,11 @@ from tests.opensearch.fakes import (
     TransmissionStoreFake,
 )
 from transform_completed.opensearch import config as config_module
+from transform_completed.opensearch import constants
 from transform_completed.opensearch import dependencies as dependencies_module
 from transform_completed.opensearch.config import Config, read_boolean, read_integer
 from transform_completed.opensearch.dependencies import Dependencies
-from transform_completed.opensearch.errors import OperationFailedError
+from transform_completed.opensearch.errors import OperationFailedError, PermanentDataError
 from transform_completed.opensearch.handlers.api_transform_handler import ApiTransformHandler
 from transform_completed.opensearch.main import run_opensearch_flow
 from transform_completed.opensearch.payload_builder import PayloadBuilder
@@ -187,6 +188,7 @@ def test_retry_succeeds_then_reports_final_failure():
     assert retry_operation(
         "temporary operation", temporary_failure, wait_seconds=0, max_attempts=2, custom_logger=logger
     ) == "done"
+    assert "statement" not in str(logger.messages)
     with pytest.raises(OperationFailedError):
         retry_operation(
             "failed operation",
@@ -195,6 +197,33 @@ def test_retry_succeeds_then_reports_final_failure():
             max_attempts=2,
             custom_logger=logger,
         )
+
+
+def test_failure_record_retries_without_hiding_the_transform_error(monkeypatch, service_config):
+    application_store = ApplicationStoreFake()
+    application_store.load_application_reference = Mock(return_value=None)
+    transmission_store = TransmissionStoreFake()
+    transmission_store.save_transform_error = Mock(
+        side_effect=OperationalError("sensitive statement", {}, RuntimeError("database unavailable"))
+    )
+    logger = LoggerFake()
+    handler = ApiTransformHandler(
+        service_config,
+        application_store,
+        ApplicantStoreFake(),
+        ContentStoreFake(),
+        transmission_store,
+        PayloadBuilder(service_config),
+        KafkaProcessorFake(),
+        logger,
+    )
+    monkeypatch.setattr("transform_completed.opensearch.retry.time.sleep", lambda _seconds: None)
+
+    with pytest.raises(PermanentDataError, match="No current application"):
+        handler.process_document(10)
+
+    assert transmission_store.save_transform_error.call_count == constants.MAX_ATTEMPTS
+    assert "sensitive statement" not in str(logger.messages)
 
 
 def test_runtime_builds_and_closes_dependencies(monkeypatch, service_config):

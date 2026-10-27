@@ -1,6 +1,7 @@
 from doc2vec_completed.opensearch.contracts import SqsMessage, TspId
 from doc2vec_completed.opensearch.dependencies import Dependencies
 from doc2vec_completed.opensearch.errors import CriticalProcessingError
+from doc2vec_completed.opensearch.retry import safe_error_summary
 
 
 class SqsProcessor:
@@ -77,8 +78,7 @@ class SqsProcessor:
             )
         except CriticalProcessingError as error:
             self.dependencies.logger.error(
-                f"Sentence processing stopped because of "
-                f"{type(error).__name__}: {str(error)[:500]}"
+                f"Sentence processing stopped because of {safe_error_summary(error)}"
             )
             return
         finally:

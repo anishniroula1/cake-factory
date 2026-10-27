@@ -4,6 +4,7 @@ from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from transform_completed.opensearch.contracts import SqsMessage, TspId
 from transform_completed.opensearch.dependencies import Dependencies
 from transform_completed.opensearch.errors import ApiTransformError
+from transform_completed.opensearch.retry import safe_error_summary
 
 
 class SqsProcessor:
@@ -66,7 +67,7 @@ class SqsProcessor:
             return True
         except ApiTransformError as error:
             self.dependencies.logger.error(
-                f"API Transform stopped because of {type(error).__name__}: {str(error)[:500]}"
+                f"API Transform stopped because of {safe_error_summary(error)}"
             )
             return False
         finally:

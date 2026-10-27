@@ -1,6 +1,8 @@
 class CriticalProcessingError(RuntimeError):
     """Stop the current message when processing cannot safely continue."""
 
+    safe_for_logging = True
+
 
 class PermanentDataError(CriticalProcessingError):
     """Report data that retrying cannot repair."""

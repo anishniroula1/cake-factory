@@ -59,11 +59,13 @@ def test_one_live_message_runs_the_complete_case_similarity_flow(service_config)
 def test_failed_message_is_not_deleted():
     message = {"tsp_id": 10, "ReceiptHandle": "receipt-local"}
     aws_sqs = AwsSqsFake([message])
-    processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(failure=True), LoggerFake()))
+    logger = LoggerFake()
+    processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(failure=True), logger))
 
     processor._process_case_similarity_message(message)
 
     assert aws_sqs.deleted == []
+    assert logger.generic_message is None
 
 
 def test_kafka_processor_skips_historical_flow(service_config):
@@ -159,7 +161,7 @@ def test_sqs_processor_reports_missing_id_and_delete_failure():
         "processed_tsp_ids": ["10"],
         "delete_attempts": [valid_message],
         "error_count": 2,
-        "generic_message": "tsp_id=10",
+            "generic_message": None,
     }
 
 

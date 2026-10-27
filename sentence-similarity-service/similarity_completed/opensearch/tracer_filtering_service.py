@@ -91,7 +91,7 @@ class TracerFilteringService:
 
         sentence_key = catalog_record["sentence_key"]
         sentence_classification = retry_operation(
-            f"Search tracer catalog for source global_id={source_global_id}, sentence key {sentence_key}",
+            f"Search tracer catalog for source global_id={source_global_id}",
             self.tracer_open_search_store.search_tracer_classification_by_vector,
             catalog_record["vector"],
             analysis_group,
@@ -99,7 +99,7 @@ class TracerFilteringService:
             custom_logger=self.logger,
         )
         retry_operation(
-            f"Save catalog classification for source global_id={source_global_id}, sentence key {sentence_key}",
+            f"Save catalog classification for source global_id={source_global_id}",
             self.sentence_catalog_open_search_store.update_catalog_classification_by_sentence_key,
             catalog_alias,
             sentence_key,
@@ -161,7 +161,7 @@ class TracerFilteringService:
         if missing_keys:
             self.logger.error(
                 f"Target catalog vectors are missing while processing source global_id={source_sentence.global_id}; "
-                f"sentence keys: {', '.join(missing_keys)}."
+                f"missing catalog key count: {len(missing_keys)}."
             )
             return None
 
@@ -174,7 +174,7 @@ class TracerFilteringService:
             )
             retry_operation(
                 f"Update {len(target_global_ids)} target classification(s) for source "
-                f"global_id={source_sentence.global_id}, sentence key {sentence_key}",
+                f"global_id={source_sentence.global_id}",
                 self.sentence_vector_db_store.update_sentence_classification_by_global_ids,
                 target_global_ids,
                 target_classification,

@@ -1,6 +1,8 @@
 class CriticalProcessingError(RuntimeError):
     """Stop the current SQS message because its work cannot finish safely."""
 
+    safe_for_logging = True
+
 
 class PermanentDataError(CriticalProcessingError):
     """Report bad data or a bad request that waiting will not fix."""

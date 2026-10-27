@@ -1,6 +1,8 @@
 class CaseSimilarityError(Exception):
     """Base error for the new Case Similarity flow."""
 
+    safe_for_logging = True
+
 
 class PermanentDataError(CaseSimilarityError):
     """The message is valid JSON but required database data is missing."""
