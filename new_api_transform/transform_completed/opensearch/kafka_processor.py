@@ -45,7 +45,9 @@ class KafkaProcessor:
         application_id = int(application_events[0]["after"]["application_id"])
         analysis_group = str(application_events[0]["after"]["analysis_group"])
         log_context = f"application_id={application_id}, analysis_group={analysis_group}"
-        self.logger.info(f"Sending {len(application_events)} API event(s) to Kafka. {log_context}.")
+        self.logger.info(
+            f"Sending {len(application_events)} API event(s) to Kafka. topic={constants.KAFKA_TOPIC}, {log_context}."
+        )
         try:
             for application_event in application_events:
                 kafka_event = self._serialize_payload_for_kafka(application_event)
@@ -121,16 +123,24 @@ class KafkaProcessor:
             audit_value = self.transmission_db_store.build_kafka_audit_value(
                 json.loads(kafka_value), self.config.verbose_kafka_logging
             )
+            application_id = int(application_event["after"]["application_id"])
+            analysis_group = str(application_event["after"]["analysis_group"])
+            partition = message.partition()
+            offset = message.offset()
             confirmed_deliveries.append(
                 KafkaDelivery(
-                    application_id=int(application_event["after"]["application_id"]),
+                    application_id=application_id,
                     a_number=int(application_event["after"]["a_number"]),
-                    analysis_group=str(application_event["after"]["analysis_group"]),
+                    analysis_group=analysis_group,
                     kafka_value=audit_value,
                     timestamp=timestamp,
-                    partition=message.partition(),
-                    offset=message.offset(),
+                    partition=partition,
+                    offset=offset,
                 )
+            )
+            self.logger.info(
+                f"Kafka delivery confirmed. topic={constants.KAFKA_TOPIC}, partition={partition}, offset={offset}, "
+                f"application_id={application_id}, analysis_group={analysis_group}."
             )
 
         return record_delivery_result
