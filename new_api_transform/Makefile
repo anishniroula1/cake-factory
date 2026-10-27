@@ -17,7 +17,7 @@ local: setup kafka
 
 kafka:
 	$(KAFKA_COMPOSE) up -d --wait kafka
-	$(KAFKA_COMPOSE) exec -T kafka /opt/kafka/bin/kafka-topics.sh \
+	$(KAFKA_COMPOSE) exec -T kafka kafka-topics \
 		--bootstrap-server localhost:9092 \
 		--create \
 		--if-not-exists \

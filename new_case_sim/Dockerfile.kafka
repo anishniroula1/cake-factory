@@ -1,3 +1,0 @@
-# This image runs one local Kafka broker in KRaft mode. KRaft keeps the local
-# setup small because Kafka does not need a separate ZooKeeper container.
-FROM apache/kafka:3.9.1

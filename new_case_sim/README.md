@@ -214,7 +214,7 @@ credential configuration.
 Running the Python process locally is faster than rebuilding a container after
 every code change.
 
-Start the worker and local Kafka broker:
+Start the worker, local Kafka broker, and ZooKeeper:
 
 ```bash
 make local
@@ -223,7 +223,7 @@ make local
 The command creates the `rfs.ata.text_analytics.hit` Kafka topic when it does
 not already exist.
 
-Kafka can also be managed separately:
+Kafka and ZooKeeper can also be started separately:
 
 ```bash
 make kafka

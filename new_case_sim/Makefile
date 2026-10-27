@@ -3,6 +3,7 @@ SHELL := /bin/sh
 .PHONY: setup test local kafka kafka-stop kafka-logs
 
 KAFKA_TOPIC := rfs.ata.text_analytics.hit
+KAFKA_COMPOSE := docker compose -f docker-compose.yml
 
 setup:
 	uv sync --extra dev
@@ -15,8 +16,8 @@ local: setup kafka
 	uv run python -m case_similarity_completed.opensearch.main
 
 kafka:
-	docker compose up -d --wait kafka
-	docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh \
+	$(KAFKA_COMPOSE) up -d --wait kafka
+	$(KAFKA_COMPOSE) exec -T kafka kafka-topics \
 		--bootstrap-server localhost:9092 \
 		--create \
 		--if-not-exists \
@@ -25,7 +26,7 @@ kafka:
 		--replication-factor 1
 
 kafka-stop:
-	docker compose stop kafka
+	$(KAFKA_COMPOSE) stop kafka zookeeper
 
 kafka-logs:
-	docker compose logs -f kafka
+	$(KAFKA_COMPOSE) logs -f kafka zookeeper
