@@ -65,7 +65,7 @@ class KafkaProcessor:
         # the event that failed instead of reloading all application summaries.
         for tah_event in tah_event_candidates.events:
             retry_operation(
-                f"Publish TAH event for application_id={tah_event.application_id}",
+                "Publish one TAH event to Kafka",
                 self._publish_tah_event,
                 tah_event,
                 wait_seconds=constants.RETRY_SECONDS,
@@ -131,6 +131,8 @@ class KafkaProcessor:
         kafka_delivery: KafkaDelivery | None = None
         kafka_delivery_error: str | None = None
 
+        self.logger.info(f"Sending one TAH event to Kafka. topic={constants.TAH_TOPIC}.")
+
         def delivery_callback(error: KafkaError | None, message: Message) -> None:
             """Capture Kafka's delivery result for the event being published.
 
@@ -144,10 +146,16 @@ class KafkaProcessor:
             if error is not None:
                 kafka_delivery_error = str(error)
                 return
+            partition = message.partition()
+            offset = message.offset()
             kafka_delivery = KafkaDelivery(
                 timestamp=self._get_kafka_delivery_timestamp(message),
-                partition=message.partition(),
-                offset=message.offset(),
+                partition=partition,
+                offset=offset,
+            )
+            self.logger.info(
+                f"Kafka delivery confirmed. topic={constants.TAH_TOPIC}, "
+                f"partition={partition}, offset={offset}."
             )
 
         try:

@@ -53,13 +53,19 @@ class CaseSimilarityHandler:
             max_attempts=constants.MAX_ATTEMPTS,
             custom_logger=self.logger,
         )
+        application_id = document_context.application_id
+        analysis_group = document_context.analysis_group
+        self.logger.info(
+            "Loaded the document context from text_similarity_input. "
+            f"application_id={application_id}, analysis_group={analysis_group}."
+        )
 
         # Rebuild the source lists and mirror this one relationship on targets.
         refreshed_case_summaries = retry_operation(
             "Refresh Titan case summaries",
             self.case_similarity_db_store.refresh_bidirectional_case_summaries,
-            document_context.application_id,
-            document_context.analysis_group,
+            application_id,
+            analysis_group,
             wait_seconds=constants.RETRY_SECONDS,
             max_attempts=constants.MAX_ATTEMPTS,
             custom_logger=self.logger,
@@ -75,7 +81,7 @@ class CaseSimilarityHandler:
         source_case_summary = next(
             case_summary
             for case_summary in refreshed_case_summaries
-            if case_summary.application_id == document_context.application_id
+            if case_summary.application_id == application_id
         )
         kafka_event_count = self.kafka_processor.publish_changed_tah_events(affected_application_ids)
         self._send_case_similarity_result_to_next_queue(tsp_id)
@@ -89,7 +95,7 @@ class CaseSimilarityHandler:
         self.logger.info(f"Case Similarity took {perf_counter() - started_at:.2f} seconds to complete.")
         return {
             "tsp_id": tsp_id,
-            "source_application_id": document_context.application_id,
+            "source_application_id": application_id,
             "rebuilt_application_count": len(refreshed_case_summaries),
             "similar_case_count": source_case_summary.similar_case_count,
             "tah_case_count": source_case_summary.tah_case_count,
