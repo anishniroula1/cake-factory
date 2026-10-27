@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
 COPY transform_completed ./transform_completed
 COPY ta_db_connection ./ta_db_connection
 COPY ta_utils ./ta_utils

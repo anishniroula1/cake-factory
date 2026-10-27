@@ -73,15 +73,23 @@ class SqsProcessor:
             self.dependencies.logger.set_generic_message(None)
 
     def _send_document_to_next_queue(self, tsp_id: TspId) -> bool:
-        """Send the completed document to the next service.
+        """Send the completed document unless it came from a backfill queue.
 
         Input: tsp_id=10
-        Output: True when SQS accepts the message; otherwise False.
+        Output: True when SQS accepts the message or the receiving queue URL
+        contains backfill; otherwise False.
         """
+
+        if "backfill" in self.dependencies.config.receive_sqs_endpoint.lower():
+            self.dependencies.logger.info(
+                "The next SQS event was skipped because this document came from a backfill queue."
+            )
+            return True
 
         next_message_body = {"source": "P2", "tsp_id": str(tsp_id), "sent_by": "api-transform"}
         return self.dependencies.sent_sqs.send_sqs_message(
-            send_queue_url=self.dependencies.config.sent_sqs_endpoint, message_body=json.dumps(next_message_body)
+            send_queue_url=self.dependencies.config.sent_sqs_endpoint,
+            message_body=json.dumps(next_message_body),
         )
 
     def _log_undelivered_message(self, reason: str) -> None:

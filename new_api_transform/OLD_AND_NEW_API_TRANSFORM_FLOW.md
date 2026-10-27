@@ -2,8 +2,9 @@
 
 This document explains what the current `api-transform` service does and how
 `new_api_transform` keeps the same API event contract while reading the Titan
-matching tables. The existing `README.md` explains how to configure and run the
-new worker; this document focuses on data flow and database usage.
+matching tables. The existing `transform_completed/opensearch/README.md`
+explains how to configure and run the new worker; this document focuses on data
+flow and database usage.
 
 ## Purpose of API Transform
 

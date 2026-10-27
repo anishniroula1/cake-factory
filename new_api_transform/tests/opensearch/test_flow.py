@@ -43,6 +43,18 @@ def test_one_sqs_message_runs_complete_api_transform_flow(service_config):
     assert json.loads(sent.sent[0][1]) == {"source": "P2", "tsp_id": "10", "sent_by": "api-transform"}
 
 
+def test_backfill_queue_skips_next_event_and_deletes_source_message(service_config):
+    message = {"tsp_id": 10, "MessageId": "backfill-local", "ReceiptHandle": "receipt-backfill-local"}
+    source = SqsFake([[message]])
+    sent = SqsFake()
+    config = replace(service_config, receive_sqs_endpoint="http://localhost/api-transform-backfill.fifo")
+    processor = SqsProcessor(DependenciesFake(config, source, sent, HandlerFake(), LoggerFake()))
+
+    completed = processor._process_document_message(message)
+
+    assert (completed, len(source.deleted), len(sent.sent)) == (True, 1, 0)
+
+
 def test_handler_builds_titan_payload_without_ner(service_config):
     kafka = KafkaProcessorFake()
     handler = ApiTransformHandler(
