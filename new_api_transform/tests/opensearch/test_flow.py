@@ -20,7 +20,7 @@ from transform_completed.opensearch.sqs_processor import SqsProcessor
 
 
 def test_one_sqs_message_runs_complete_api_transform_flow(service_config):
-    message = {"tsp_id": 10, "reason": "Historical", "MessageId": "one-local", "ReceiptHandle": "receipt-one-local"}
+    message = {"tsp_id": 10, "MessageId": "one-local", "ReceiptHandle": "receipt-one-local"}
     source = SqsFake([[message]])
     sent = SqsFake()
     handler = HandlerFake()
@@ -28,17 +28,11 @@ def test_one_sqs_message_runs_complete_api_transform_flow(service_config):
 
     completed = processor._process_document_message(message)
 
-    assert (completed, handler.calls, handler.historical_values, len(source.deleted), len(sent.sent)) == (
-        True,
-        [10],
-        [True],
-        1,
-        1,
-    )
+    assert (completed, handler.calls, len(source.deleted), len(sent.sent)) == (True, [10], 1, 1)
     assert json.loads(sent.sent[0][1]) == {"source": "P2", "tsp_id": "10", "sent_by": "api-transform"}
 
 
-def test_historical_reason_is_added_to_kafka_event(service_config):
+def test_titan_embedding_model_is_added_to_kafka_event(service_config):
     kafka = KafkaProcessorFake()
     handler = ApiTransformHandler(
         service_config,
@@ -51,9 +45,9 @@ def test_historical_reason_is_added_to_kafka_event(service_config):
         LoggerFake(),
     )
 
-    handler.process_document(10, historical=True)
+    handler.process_document(10)
 
-    assert kafka.events[0]["after"]["historical"] is True
+    assert kafka.events[0]["after"]["embedding_model"] == "TITAN"
 
 
 def test_run_keeps_reading_one_message_at_a_time(service_config):

@@ -135,19 +135,17 @@ flow.
 Controls one complete document flow:
 
 1. Read `tsp_id` and set the logger context.
-2. Detect whether the message reason is `HISTORICAL`.
-3. Call `ApiTransformHandler.process()`.
-4. Send the completed `tsp_id` to the next queue.
-5. Delete the message from the queue that supplied it.
+2. Call `ApiTransformHandler.process()`.
+3. Send the completed `tsp_id` to the next queue.
+4. Delete the message from the queue that supplied it.
 
 If processing fails, the message is not deleted.
 
 #### Details
 
-The method also recognizes `reason=HISTORICAL`, sets the logger context for the
-current document, and clears that context when processing ends. It returns
-success only after transformation, the next SQS send, and source-message
-deletion all finish.
+The method sets the logger context for the current document and clears that
+context when processing ends. It returns success only after transformation,
+the next SQS send, and source-message deletion all finish.
 
 ### `_send_next_message()`
 
@@ -204,9 +202,8 @@ the successful reads before it.
 
 #### Details
 
-The loaded sections are passed to the payload builder with the historical
-flag. The resulting event list is then passed to the size-limited Kafka
-publishing method.
+The loaded sections are passed to the payload builder. The resulting event list
+is then passed to the size-limited Kafka publishing method.
 
 ### `_publish_with_buffer_limit()`
 
@@ -432,7 +429,8 @@ splits events that exceed the configured message-size limit.
 ### `build_application_events()`
 
 Combines `a_records`, documents, applicant details, sentences, and the optional
-public template into the Kafka contract. It also adds the `historical` flag.
+public template into the Kafka contract. It also adds
+`embedding_model="TITAN"`.
 
 The new flow does not add NER data.
 

@@ -20,7 +20,6 @@ class PayloadBuilder:
         documents: list[dict],
         sentences: list[dict],
         public_template: dict | None,
-        historical: bool = False,
     ) -> list[dict]:
         """Build one full event or sentence chunks when the payload is large.
 
@@ -37,7 +36,7 @@ class PayloadBuilder:
             "a_number": a_number,
             "application_id": application_id,
             "analysis_group": analysis_group,
-            "historical": historical,
+            "embedding_model": constants.EMBEDDING_MODEL,
             "payload": {
                 "a_records": self._prepare_application_payload_fields(application_record),
                 "documents": documents,

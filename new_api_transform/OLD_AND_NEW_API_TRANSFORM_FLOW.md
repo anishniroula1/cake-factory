@@ -279,8 +279,8 @@ at a time:
 6. Map Titan `similar_case_ids` from application IDs to A-numbers through
    `landing.application_id_lookup`, because the existing API field still expects
    A-numbers.
-7. Build the existing Kafka payload without NER. Set `historical=true` when the
-   source SQS message has `reason=HISTORICAL`; otherwise set it to false.
+7. Build the existing Kafka payload without NER and add
+   `embedding_model="TITAN"` to identify the vector source.
 8. Split only the sentence list when one application payload is too large.
 9. Publish to Kafka and require an acknowledgement for every event.
 10. In one database transaction, save confirmed audits, update transform status,
@@ -326,7 +326,7 @@ The new flow does not read `tsp.matches`, `tsp.sentence_matches`,
 | Case summary | Reads `micro_service_similar_cases`. | Reads `titan_similar_cases`. |
 | Similar-case storage | Similar-case IDs are A-numbers. | Stored IDs are application IDs and are mapped to A-numbers for the existing API field. |
 | NER | Reads and sends NER. | Does not include NER in this flow. |
-| Historical marker | Not added to the event. | Adds `historical=true` for `reason=HISTORICAL`. |
+| Embedding model | Not added to the event. | Adds `embedding_model="TITAN"` to every event. |
 | Service pause call | Calls the DS-TSP service-status API. | Does not make the service-status API call. |
 | Embedding routing | Filters messages with embedding-type toggles. | Dedicated Titan flow; no old embedding filter is needed. |
 | Kafka confirmation | Flushes and stores successful callback results. | Requires every event to receive a successful callback before completing. |
@@ -337,6 +337,6 @@ The new flow does not read `tsp.matches`, `tsp.sentence_matches`,
 The new service changes where similarity data comes from, not what the API
 consumer receives. Existing document, applicant, sentence, payload-splitting,
 Kafka audit, transform-status, and downstream SQS behaviors are preserved. The
-intentional differences are one-document processing, Titan tables, the
-historical marker, stronger per-message delivery confirmation, and removal of
-NER from this flow.
+intentional differences are one-document processing, Titan tables, the Titan
+embedding-model marker, stronger per-message delivery confirmation, and
+removal of NER from this flow.

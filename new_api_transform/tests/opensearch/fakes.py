@@ -48,12 +48,10 @@ class SqsFake:
 class HandlerFake:
     def __init__(self, fail=False) -> None:
         self.calls = []
-        self.historical_values = []
         self.fail = fail
 
-    def process_document(self, tsp_id, historical=False):
+    def process_document(self, tsp_id):
         self.calls.append(tsp_id)
-        self.historical_values.append(historical)
         if self.fail:
             raise OperationFailedError("database unavailable")
         return {"source_message_count": 1, "application_count": 1, "kafka_event_count": 1}

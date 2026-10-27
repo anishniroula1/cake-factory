@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 
 from tests.opensearch.fakes import DependenciesFake, HandlerFake, LoggerFake, SqsFake
+from transform_completed.opensearch import config as config_module
 from transform_completed.opensearch import constants
 from transform_completed.opensearch import dependencies as dependencies_module
 from transform_completed.opensearch.config import Config, read_boolean, read_integer
@@ -17,13 +18,19 @@ from transform_completed.opensearch.retry import retry_operation
 from transform_completed.opensearch.sqs_processor import SqsProcessor
 
 
-def test_config_reads_environment(monkeypatch):
+def test_config_reads_vault_and_environment(monkeypatch):
+    vault_values = {
+        "pgUser": "vault-user",
+        "pgPassword": "vault-password",
+        "pgHost": "vault-database",
+        "pgDatabase": "vault-name",
+        "pgPort": "5432",
+    }
+    vault_secrets = Mock()
+    vault_secrets.get.side_effect = lambda name, default=None: vault_values.get(name, default)
+    monkeypatch.setattr(config_module, "VaultSecrets", Mock(return_value=vault_secrets))
+
     values = {
-        "PG_DB_USER": "postgres",
-        "PG_DB_PASSWORD": "postgres",
-        "PG_DB_HOST": "localhost",
-        "PG_DB_DATABASE": "postgres",
-        "PG_DB_PORT": "5432",
         "AWS_RECEIVE_SQS_QUEUE_ENDPOINT": "http://localhost/asylee-transform.fifo",
         "AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT": "http://localhost/next.fifo",
         "KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
@@ -35,7 +42,8 @@ def test_config_reads_environment(monkeypatch):
 
     config = Config.from_environment()
 
-    assert (config.pg_db_port, config.sentence_match_limit) == (5432, 3000)
+    assert (config.pg_db_user, config.pg_db_host, config.pg_db_port) == ("vault-user", "vault-database", 5432)
+    assert config.sentence_match_limit == 3000
     assert constants.KAFKA_TOPIC == "rfs.ata.data_migration.api.events"
 
 

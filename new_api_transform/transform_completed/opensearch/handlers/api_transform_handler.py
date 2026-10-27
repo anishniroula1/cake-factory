@@ -39,10 +39,10 @@ class ApiTransformHandler:
         self.kafka_processor = kafka_processor
         self.logger = custom_logger
 
-    def process_document(self, tsp_id: TspId, historical: bool = False) -> TransformResult:
+    def process_document(self, tsp_id: TspId) -> TransformResult:
         """Rebuild and publish the application affected by one document.
 
-        Input: tsp_id=10 and historical=True for a historical SQS message.
+        Input: tsp_id=10
         Output: counts for that source message, its application, and Kafka events.
         """
 
@@ -58,7 +58,7 @@ class ApiTransformHandler:
             if application_reference is None:
                 raise PermanentDataError(f"No current application was found for tsp_id={tsp_id}")
 
-            published_event_count = self._build_and_publish_application_events(application_reference, historical)
+            published_event_count = self._build_and_publish_application_events(application_reference)
             self.logger.info(
                 f"API Transform completed one document, one application, and {published_event_count} Kafka event(s)."
             )
@@ -68,12 +68,10 @@ class ApiTransformHandler:
             self.transmission_db_store.save_transform_error("API Transform failed", error)
             raise
 
-    def _build_and_publish_application_events(
-        self, application_reference: ApplicationReference, historical: bool
-    ) -> int:
+    def _build_and_publish_application_events(self, application_reference: ApplicationReference) -> int:
         """Load all API sections, build events, and publish one affected application.
 
-        Input: a reference with application_id=100 and historical=True.
+        Input: a reference with application_id=100.
         Output: the number of application events confirmed by Kafka.
         """
 
@@ -130,7 +128,6 @@ class ApiTransformHandler:
             document_payload_records.get(application_id, []),
             sentence_payload_records.get(application_id, []),
             public_template_payloads.get(application_id),
-            historical,
         )
         return self._publish_events_in_size_limited_batches(application_events)
 
