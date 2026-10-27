@@ -87,10 +87,14 @@ class SqsProcessor:
             return True
 
         next_message_body = {"source": "P2", "tsp_id": str(tsp_id), "sent_by": "api-transform"}
-        return self.dependencies.sent_sqs.send_sqs_message(
+        self.dependencies.logger.info("Sending the API Transform completion event to the next SQS queue.")
+        message_sent = self.dependencies.sent_sqs.send_sqs_message(
             send_queue_url=self.dependencies.config.sent_sqs_endpoint,
             message_body=json.dumps(next_message_body),
         )
+        if message_sent:
+            self.dependencies.logger.info("The next SQS queue accepted the API Transform completion event.")
+        return message_sent
 
     def _log_undelivered_message(self, reason: str) -> None:
         """Log why the current source message cannot be deleted."""

@@ -36,8 +36,16 @@ class KafkaProcessor:
         Raises: KafkaPublishError when Kafka rejects an event or does not confirm every delivery.
         """
 
+        if not application_events:
+            self.logger.info("No API events were available to send to Kafka.")
+            return 0
+
         deliveries: list[KafkaDelivery] = []
         delivery_errors: list[str] = []
+        application_id = int(application_events[0]["after"]["application_id"])
+        analysis_group = str(application_events[0]["after"]["analysis_group"])
+        log_context = f"application_id={application_id}, analysis_group={analysis_group}"
+        self.logger.info(f"Sending {len(application_events)} API event(s) to Kafka. {log_context}.")
         try:
             for application_event in application_events:
                 kafka_event = self._serialize_payload_for_kafka(application_event)
@@ -62,8 +70,15 @@ class KafkaProcessor:
         if len(deliveries) != len(application_events):
             raise KafkaPublishError(f"Kafka confirmed {len(deliveries)} of {len(application_events)} event(s)")
 
+        self.logger.info(
+            f"Kafka confirmed {len(deliveries)} API event(s). Saving delivery audits to api.kafka_events and "
+            f"api.transform_status. {log_context}."
+        )
         self.transmission_db_store.save_confirmed_kafka_deliveries(deliveries, constants.KAFKA_AUDIT_RETENTION_DAYS)
-        self.logger.info(f"Published and confirmed {len(deliveries)} API event(s) to Kafka.")
+        self.logger.info(
+            f"Saved {len(deliveries)} Kafka delivery audit record(s) to api.kafka_events and "
+            f"api.transform_status. {log_context}."
+        )
         return len(deliveries)
 
     @staticmethod

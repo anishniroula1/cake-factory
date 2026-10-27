@@ -48,6 +48,7 @@ class ApiTransformHandler:
 
         started_at = perf_counter()
         try:
+            self.logger.info("Loading the application reference from tsp.text_similarity_input.")
             application_reference: ApplicationReference | None = retry_operation(
                 "Load the application for API Transform",
                 self.application_db_store.load_application_reference,
@@ -57,12 +58,22 @@ class ApiTransformHandler:
             )
             if application_reference is None:
                 raise PermanentDataError(f"No current application was found for tsp_id={tsp_id}")
+            application_id = application_reference.application_id
+            analysis_group = application_reference.analysis_group
+            self.logger.info(
+                "Loaded the application reference from tsp.text_similarity_input. "
+                f"application_id={application_id}, analysis_group={analysis_group}."
+            )
 
             published_event_count = self._build_and_publish_application_events(application_reference)
             self.logger.info(
-                f"API Transform completed one document, one application, and {published_event_count} Kafka event(s)."
+                f"API Transform completed one document, one application, and {published_event_count} Kafka event(s). "
+                f"application_id={application_id}, analysis_group={analysis_group}."
             )
-            self.logger.info(f"API Transform took {perf_counter() - started_at:.2f} seconds to complete.")
+            self.logger.info(
+                f"API Transform took {perf_counter() - started_at:.2f} seconds to complete. "
+                f"application_id={application_id}, analysis_group={analysis_group}."
+            )
             return {"source_message_count": 1, "application_count": 1, "kafka_event_count": published_event_count}
         except ApiTransformError as error:
             self.transmission_db_store.save_transform_error("API Transform failed", error)
@@ -75,7 +86,12 @@ class ApiTransformHandler:
         Output: the number of application events confirmed by Kafka.
         """
 
-        application_ids = [application_reference.application_id]
+        application_id = application_reference.application_id
+        analysis_group = application_reference.analysis_group
+        application_ids = [application_id]
+        is_asylee = analysis_group == "Asylee"
+        log_context = f"application_id={application_id}, analysis_group={analysis_group}"
+        self.logger.info(f"Loading the application record from landing.application_id_lookup. {log_context}.")
         application_payload_records = retry_operation(
             "Load application records",
             self.application_db_store.load_application_payload_records,
@@ -83,6 +99,12 @@ class ApiTransformHandler:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
+        self.logger.info(
+            f"Loaded {len(application_payload_records)} application record(s) from "
+            f"landing.application_id_lookup. {log_context}."
+        )
+
+        self.logger.info(f"Loading applicant details from biodata.applicant and biodata.address. {log_context}.")
         applicant_payloads = retry_operation(
             "Load applicant details",
             self.applicant_db_store.load_applicant_details,
@@ -91,12 +113,29 @@ class ApiTransformHandler:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
+        self.logger.info(
+            f"biodata.applicant and biodata.address query completed. Record found: "
+            f"{application_id in applicant_payloads}. {log_context}."
+        )
+
+        self.logger.info(
+            f"Loading application documents from tsp.text_similarity_input and tsp.titan_matches. {log_context}."
+        )
         document_payload_records = retry_operation(
             "Load application documents",
             self.content_db_store.load_document_payload_records,
             application_ids,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
+        )
+        application_documents = document_payload_records.get(application_id, [])
+        self.logger.info(
+            f"Loaded {len(application_documents)} application document(s) from "
+            f"tsp.text_similarity_input and tsp.titan_matches. {log_context}."
+        )
+
+        self.logger.info(
+            f"Loading Titan sentence matches from tsp.sentences_vector and tsp.titan_matches. {log_context}."
         )
         sentence_payload_records = retry_operation(
             "Load Titan sentence matches",
@@ -106,6 +145,17 @@ class ApiTransformHandler:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
+        application_sentences = sentence_payload_records.get(application_id, [])
+        self.logger.info(
+            f"Loaded {len(application_sentences)} Titan sentence record(s) from "
+            f"tsp.sentences_vector and tsp.titan_matches. {log_context}."
+        )
+
+        if is_asylee:
+            self.logger.info(
+                f"Loading the public template from tsp.text_similarity_input and landing.template_registry. "
+                f"{log_context}."
+            )
         public_template_payloads = (
             retry_operation(
                 "Load public templates",
@@ -114,11 +164,15 @@ class ApiTransformHandler:
                 wait_seconds=constants.RETRY_SECONDS,
                 custom_logger=self.logger,
             )
-            if application_reference.analysis_group == "Asylee"
+            if is_asylee
             else {}
         )
+        if is_asylee:
+            self.logger.info(
+                f"tsp.text_similarity_input and landing.template_registry query completed. Record found: "
+                f"{application_id in public_template_payloads}. {log_context}."
+            )
 
-        application_id = application_reference.application_id
         application_payload_record = application_payload_records.get(application_id)
         if application_payload_record is None:
             raise PermanentDataError(f"Application record is missing for application_id={application_id}")
@@ -129,6 +183,7 @@ class ApiTransformHandler:
             sentence_payload_records.get(application_id, []),
             public_template_payloads.get(application_id),
         )
+        self.logger.info(f"Built {len(application_events)} Kafka event(s). {log_context}.")
         return self._publish_events_in_size_limited_batches(application_events)
 
     def _publish_events_in_size_limited_batches(self, application_events: list[dict]) -> int:
