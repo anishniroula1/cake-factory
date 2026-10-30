@@ -12,9 +12,10 @@ ASYLEE_CATALOG_ALIAS = "sentence_semantic_catalog_asylee"
 REFUGEE_CATALOG_ALIAS = "sentence_semantic_catalog_refugee"
 OPENSEARCH_PAGE_SIZE = 1000  # Occurrences or sentence keys handled in one request.
 
-# Retry and SQS
+# Job processing
+DOCUMENT_DELETE_BATCH_SIZE = 100  # Documents loaded from text_similarity_input per database query.
+
+# Retry
 RETRY_SECONDS = 5
 MAX_ATTEMPTS = 3
-SQS_WAIT_SECONDS = 10
-SQS_VISIBILITY_SECONDS = 7200
 

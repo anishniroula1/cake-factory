@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: setup test local run localstack send-message
+.PHONY: setup test local run localstack
 
 setup:
 	uv sync --extra dev
@@ -18,10 +18,3 @@ run:
 
 localstack:
 	docker compose up -d --wait localstack
-
-send-message: localstack
-	aws --endpoint-url http://localhost:4566 sqs send-message \
-		--queue-url http://localhost:4566/000000000000/document-delete-local.fifo \
-		--message-body '{"source":"P2","tsp_id":8205,"sent_by":"api-transform"}' \
-		--message-group-id local \
-		--message-deduplication-id $$(date +%s)

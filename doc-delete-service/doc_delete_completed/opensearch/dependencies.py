@@ -4,7 +4,9 @@ from doc_delete_completed.opensearch import constants
 from doc_delete_completed.opensearch.config import Config
 from doc_delete_completed.opensearch.db_store.embeddings_db_store import EmbeddingsDBStore
 from doc_delete_completed.opensearch.db_store.sentence_vector_db_store import SentenceVectorDBStore
+from doc_delete_completed.opensearch.db_store.text_similarity_input_db_store import TextSimilarityInputDBStore
 from doc_delete_completed.opensearch.db_store.titan_matches_db_store import TitanMatchesDBStore
+from doc_delete_completed.opensearch.document_delete_job import DocumentDeleteJob
 from doc_delete_completed.opensearch.handlers.document_delete_handler import DocumentDeleteHandler
 from doc_delete_completed.opensearch.opensearch_store.sentence_catalog_open_search_store import (
     SentenceCatalogOpenSearchStore,
@@ -19,7 +21,7 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class Dependencies:
-    """Build and own the database, OpenSearch, SQS, and handler objects."""
+    """Build and own the database, OpenSearch, outbound SQS, and job objects."""
 
     def __init__(
         self,
@@ -38,30 +40,33 @@ class Dependencies:
             opensearch_port=constants.OPENSEARCH_PORT,
             opensearch_service=constants.OPENSEARCH_SERVICE,
         ).create_client()
-        self.aws_sqs = AwsSQS(
-            queue_url=self.config.receive_sqs_endpoint,
+        self.outbound_sqs = AwsSQS(
+            queue_url=self.config.sent_sqs_endpoint,
             aws_region=self.config.aws_region,
             aws_endpoint_url=self.config.aws_local_endpoint_url or None,
-            max_number_of_messages=1,
-            wait_time=constants.SQS_WAIT_SECONDS,
             logger=self.logger,
-            visibility_timeout=constants.SQS_VISIBILITY_SECONDS,
         )
         sentence_occurrence_open_search_store = SentenceOccurrenceOpenSearchStore(self.opensearch_client)
         sentence_catalog_open_search_store = SentenceCatalogOpenSearchStore(self.opensearch_client)
         sentence_vector_db_store = SentenceVectorDBStore(self.session_factory)
         embeddings_db_store = EmbeddingsDBStore(self.session_factory)
         titan_matches_db_store = TitanMatchesDBStore(self.session_factory)
+        text_similarity_input_db_store = TextSimilarityInputDBStore(self.session_factory)
         self.document_delete_handler = DocumentDeleteHandler(
             sentence_occurrence_open_search_store,
             sentence_catalog_open_search_store,
             sentence_vector_db_store,
             embeddings_db_store,
             titan_matches_db_store,
-            self.aws_sqs,
+            self.outbound_sqs,
             self.config.sent_sqs_endpoint,
             self.logger,
             self.config.database_delete_enabled,
+        )
+        self.document_delete_job = DocumentDeleteJob(
+            text_similarity_input_db_store,
+            self.document_delete_handler,
+            self.logger,
         )
 
     def close(self) -> None:

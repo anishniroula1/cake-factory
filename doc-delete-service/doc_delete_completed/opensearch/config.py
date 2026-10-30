@@ -60,8 +60,7 @@ class Config:
     opensearch_iam_access_role: str
     opensearch_host: str
 
-    # SQS
-    receive_sqs_endpoint: str
+    # Outbound SQS
     sent_sqs_endpoint: str
 
     # Flow control
@@ -84,7 +83,6 @@ class Config:
             aws_local_endpoint_url=os.getenv("AWS_LOCAL_ENDPOINT_URL", "").strip(),
             opensearch_iam_access_role=os.getenv("OPENSEARCH_IAM_ACCESS_ROLE", "").strip(),
             opensearch_host=_aws_hostname(os.getenv("OPENSEARCH_HOST", "").strip()),
-            receive_sqs_endpoint=os.getenv("AWS_RECEIVE_SQS_ENDPOINT", "").strip(),
             sent_sqs_endpoint=os.getenv("AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT", "").strip(),
             database_delete_enabled=_read_boolean("DATABASE_DELETE_ENABLED", False),
         )
@@ -101,7 +99,6 @@ class Config:
             "pgDatabase": self.pg_db_database,
             "pgPort": self.pg_db_port,
             "OPENSEARCH_HOST": self.opensearch_host,
-            "AWS_RECEIVE_SQS_ENDPOINT": self.receive_sqs_endpoint,
             "AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT": self.sent_sqs_endpoint,
         }
         missing = [name for name, value in required_values.items() if not value]

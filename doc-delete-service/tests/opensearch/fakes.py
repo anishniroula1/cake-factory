@@ -118,8 +118,11 @@ class HandlerFake:
         return {"next_message_sent": True}
 
 
-class DependenciesFake:
-    def __init__(self, aws_sqs, handler, logger) -> None:
-        self.aws_sqs = aws_sqs
-        self.document_delete_handler = handler
-        self.logger = logger
+class TextSimilarityInputDBStoreFake:
+    def __init__(self, pages=None) -> None:
+        self.pages = list(pages or [[]])
+        self.calls = []
+
+    def load_ready_for_deletion_tsp_ids(self, after_tsp_id, batch_size):
+        self.calls.append((after_tsp_id, batch_size))
+        return self.pages.pop(0)

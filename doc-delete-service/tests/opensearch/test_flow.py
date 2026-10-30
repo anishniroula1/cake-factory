@@ -3,18 +3,18 @@ from unittest.mock import Mock
 import pytest
 
 from doc_delete_completed.opensearch.contracts import DocumentDeletionContext
+from doc_delete_completed.opensearch.document_delete_job import DocumentDeleteJob
 from doc_delete_completed.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
 from doc_delete_completed.opensearch.handlers.document_delete_handler import DocumentDeleteHandler
-from doc_delete_completed.opensearch.sqs_processor import SqsProcessor
 from tests.opensearch.fakes import (
     AwsSqsFake,
     CatalogStoreFake,
-    DependenciesFake,
     EmbeddingsDBStoreFake,
     HandlerFake,
     LoggerFake,
     OccurrenceStoreFake,
     SentenceVectorDBStoreFake,
+    TextSimilarityInputDBStoreFake,
     TitanMatchesDBStoreFake,
 )
 
@@ -25,7 +25,7 @@ def build_handler(
     sentence_vector_db_store=None,
     embeddings_db_store=None,
     titan_matches_db_store=None,
-    aws_sqs=None,
+    outbound_sqs=None,
     database_delete_enabled=True,
 ):
     logger = LoggerFake()
@@ -35,7 +35,7 @@ def build_handler(
         sentence_vector_db_store or SentenceVectorDBStoreFake(),
         embeddings_db_store or EmbeddingsDBStoreFake(),
         titan_matches_db_store or TitanMatchesDBStoreFake(),
-        aws_sqs or AwsSqsFake(),
+        outbound_sqs or AwsSqsFake(),
         "https://sqs.example/case-similarity-local.fifo",
         logger,
         database_delete_enabled,
@@ -53,9 +53,14 @@ def test_document_deletion_runs_the_complete_flow():
     sentence_vector_db_store = SentenceVectorDBStoreFake()
     embeddings_db_store = EmbeddingsDBStoreFake()
     titan_matches_db_store = TitanMatchesDBStoreFake()
-    aws_sqs = AwsSqsFake()
+    outbound_sqs = AwsSqsFake()
     handler = build_handler(
-        occurrence_store, catalog_store, sentence_vector_db_store, embeddings_db_store, titan_matches_db_store, aws_sqs
+        occurrence_store,
+        catalog_store,
+        sentence_vector_db_store,
+        embeddings_db_store,
+        titan_matches_db_store,
+        outbound_sqs,
     )
 
     deletion_result = handler.process_document_deletion(10)
@@ -75,7 +80,7 @@ def test_document_deletion_runs_the_complete_flow():
     assert occurrence_store.deleted == [1, 2]
     assert catalog_store.deleted == [("Asylee", ["key-a"])]
     assert events == ["delete catalog", "delete occurrences"]
-    assert aws_sqs.sent[0]["message_body"] == {"source": "P2", "tsp_id": "10", "sent_by": "doc-delete"}
+    assert outbound_sqs.sent[0]["message_body"] == {"source": "P2", "tsp_id": "10", "sent_by": "doc-delete"}
 
 
 def test_missing_occurrences_do_not_drive_opensearch_cleanup_from_database():
@@ -105,7 +110,7 @@ def test_occurrence_global_ids_are_used_when_sentence_vector_is_empty():
     assert embeddings_store.deleted == [101]
 
 
-def test_database_deletion_toggle_keeps_postgresql_rows():
+def test_database_deletion_toggle_still_removes_titan_matches():
     occurrence_records = [{"global_id": 1, "sentence_key": "key-a", "analysis_group": "Asylee"}]
     sentence_store = SentenceVectorDBStoreFake()
     embeddings_store = EmbeddingsDBStoreFake()
@@ -120,55 +125,48 @@ def test_database_deletion_toggle_keeps_postgresql_rows():
     ).process_document_deletion(10)
 
     assert deletion_result["database_delete_enabled"] is False
+    assert deletion_result["deleted_match_bucket_count"] == 3
     assert (sentence_store.loaded, sentence_store.deleted, embeddings_store.deleted, titan_store.deleted) == (
         [],
         [],
         [],
-        [],
+        [10],
     )
 
 
-def test_handler_keeps_message_when_next_queue_send_fails():
+def test_handler_reports_when_next_queue_send_fails():
     with pytest.raises(QueueSendError):
-        build_handler(aws_sqs=AwsSqsFake(send_result=False)).process_document_deletion(10)
+        build_handler(outbound_sqs=AwsSqsFake(send_result=False)).process_document_deletion(10)
 
 
-def test_sqs_processor_deletes_only_successful_messages():
-    good = {"tsp_id": 10, "ReceiptHandle": "good-local"}
-    missing = {"ReceiptHandle": "missing-local"}
-    aws_sqs = AwsSqsFake()
+def test_job_processes_ready_documents_in_order():
+    document_store = TextSimilarityInputDBStoreFake([[10, 20], [30], []])
     handler = HandlerFake()
     logger = LoggerFake()
-    processor = SqsProcessor(DependenciesFake(aws_sqs, handler, logger))
+    job = DocumentDeleteJob(document_store, handler, logger)
 
-    processor._process_document_delete_message(missing)
-    processor._process_document_delete_message(good)
+    processed_count = job.run()
 
-    assert (handler.calls, aws_sqs.deleted, logger.generic_message) == ([10], [good], None)
+    assert (processed_count, handler.calls, logger.generic_message) == (3, [10, 20, 30], None)
+    assert document_store.calls == [(None, 100), (20, 100), (30, 100)]
 
 
-@pytest.mark.parametrize(
-    "error", [OperationFailedError("failed"), PermanentDataError("bad data"), QueueSendError("queue failed")]
-)
-def test_sqs_processor_leaves_failed_message_for_sqs(error):
-    message = {"tsp_id": 10, "ReceiptHandle": "failed-local"}
-    aws_sqs = AwsSqsFake()
+@pytest.mark.parametrize("error", [OperationFailedError("failed"), PermanentDataError("bad data"), QueueSendError("queue failed")])
+def test_job_stops_on_failed_document(error):
+    document_store = TextSimilarityInputDBStoreFake([[10]])
     logger = LoggerFake()
-    processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(error), logger))
+    job = DocumentDeleteJob(document_store, HandlerFake(error), logger)
 
-    processor._process_document_delete_message(message)
+    with pytest.raises(type(error)):
+        job.run()
 
-    assert aws_sqs.deleted == []
     assert logger.generic_message is None
 
 
-def test_sqs_processor_run_keeps_listening():
-    message = {"tsp_id": 10, "ReceiptHandle": "receipt-local"}
-    aws_sqs = AwsSqsFake()
-    aws_sqs.listen_sqs_message = Mock(side_effect=[[message], KeyboardInterrupt])
-    processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(), LoggerFake()))
+def test_job_rejects_a_handler_result_without_next_message():
+    handler = HandlerFake()
+    handler.process_document_deletion = Mock(return_value={"next_message_sent": False})
+    job = DocumentDeleteJob(TextSimilarityInputDBStoreFake([[10]]), handler, LoggerFake())
 
-    with pytest.raises(KeyboardInterrupt):
-        processor.run()
-
-    assert aws_sqs.deleted == [message]
+    with pytest.raises(OperationFailedError):
+        job.run()

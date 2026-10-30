@@ -5,9 +5,10 @@ from unittest.mock import Mock, patch
 from doc_delete_completed.opensearch.config import Config
 from doc_delete_completed.opensearch.db_store.embeddings_db_store import EmbeddingsDBStore
 from doc_delete_completed.opensearch.db_store.sentence_vector_db_store import SentenceVectorDBStore
+from doc_delete_completed.opensearch.db_store.text_similarity_input_db_store import TextSimilarityInputDBStore
 from doc_delete_completed.opensearch.db_store.titan_matches_db_store import TitanMatchesDBStore
 from doc_delete_completed.opensearch.dependencies import Dependencies
-from doc_delete_completed.opensearch.main import run_opensearch_flow
+from doc_delete_completed.opensearch.main import run_document_delete_job
 from tests.opensearch.fakes import LoggerFake
 
 
@@ -24,7 +25,6 @@ def service_config(**changes) -> Config:
         aws_local_endpoint_url="",
         opensearch_iam_access_role="",
         opensearch_host="search.example.com",
-        receive_sqs_endpoint="https://sqs.example/source-local.fifo",
         sent_sqs_endpoint="https://sqs.example/next-local.fifo",
         database_delete_enabled=True,
     )
@@ -85,6 +85,17 @@ def test_database_store_returns_empty_context_when_document_has_no_sentences():
     assert (context.analysis_group, context.global_ids, context.sentence_keys) == (None, [], [])
 
 
+def test_text_similarity_input_store_loads_ready_documents_in_order():
+    session = Mock()
+    session.__enter__ = Mock(return_value=session)
+    session.__exit__ = Mock(return_value=False)
+    session.scalars.return_value = [101, 102]
+
+    tsp_ids = TextSimilarityInputDBStore(lambda: session).load_ready_for_deletion_tsp_ids(100, 200)
+
+    assert tsp_ids == [101, 102]
+
+
 def test_embeddings_store_skips_database_when_there_are_no_global_ids():
     session_factory = Mock()
 
@@ -101,7 +112,8 @@ def test_dependencies_build_resources_and_close_pool():
     ):
         dependencies = Dependencies(LoggerFake(), database, service_config())
 
-    assert dependencies.document_delete_handler.aws_sqs is sqs
+    assert dependencies.document_delete_handler.outbound_sqs is sqs
+    assert dependencies.document_delete_job.document_delete_handler is dependencies.document_delete_handler
     dependencies.close()
     database.engine.dispose.assert_called_once()
 
@@ -117,12 +129,11 @@ def test_dependencies_pass_dynamic_database_configuration():
     assert database_connection.call_args.kwargs["use_dynamic_credentials"] is True
 
 
-def test_main_runs_processor_and_always_closes_dependencies():
-    dependencies = SimpleNamespace(logger=LoggerFake(), close=Mock())
+def test_main_runs_job_and_always_closes_dependencies():
+    dependencies = SimpleNamespace(logger=LoggerFake(), document_delete_job=Mock(), close=Mock())
 
-    with patch("doc_delete_completed.opensearch.main.SqsProcessor") as processor:
-        run_opensearch_flow(dependencies=dependencies)
+    run_document_delete_job(dependencies=dependencies)
 
-    processor.return_value.run.assert_called_once()
+    dependencies.document_delete_job.run.assert_called_once()
     dependencies.close.assert_called_once()
     assert dependencies.logger.generic_message is None

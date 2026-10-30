@@ -23,10 +23,11 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class DocumentDeleteHandler:
-    """Delete one document from OpenSearch and optionally from PostgreSQL.
+    """Delete one document from OpenSearch and its Titan match relationships.
 
-    OpenSearch cleanup always runs. PostgreSQL cleanup runs only when the
-    database deletion toggle is enabled.
+    Titan match cleanup always runs because titan_matches belongs to the new
+    OpenSearch flow. Legacy embedding and sentence cleanup uses the database
+    deletion toggle.
     """
 
     def __init__(
@@ -36,7 +37,7 @@ class DocumentDeleteHandler:
         sentence_vector_db_store: SentenceVectorDBStore,
         embeddings_db_store: EmbeddingsDBStore,
         titan_matches_db_store: TitanMatchesDBStore,
-        aws_sqs: AwsSQS,
+        outbound_sqs: AwsSQS,
         sent_sqs_endpoint: str,
         custom_logger: CustomLogger,
         database_delete_enabled: bool,
@@ -46,30 +47,40 @@ class DocumentDeleteHandler:
         self.sentence_vector_db_store = sentence_vector_db_store
         self.embeddings_db_store = embeddings_db_store
         self.titan_matches_db_store = titan_matches_db_store
-        self.aws_sqs = aws_sqs
+        self.outbound_sqs = outbound_sqs
         self.sent_sqs_endpoint = sent_sqs_endpoint
         self.logger = custom_logger
         self.database_delete_enabled = database_delete_enabled
 
     def process_document_deletion(self, tsp_id: TspId) -> DeleteResult:
-        """Run OpenSearch deletion and run database deletion only when enabled.
+        """Delete OpenSearch and Titan data, then optionally delete legacy data.
 
         Input: tsp_id=8205
         Output: deletion counts, toggle state, and next-message confirmation.
 
         The next SQS message is sent only after every enabled deletion step
-        finishes. A failure leaves the source message available for SQS retry.
+        finishes. A failure leaves the document state ready for the next job.
         """
 
         started_at = perf_counter()
         opensearch_deletion_result = self._delete_document_from_opensearch(tsp_id)
-        database_deletion_result = DatabaseDeletionResult()
+        titan_match_deletion_result = self._delete_titan_matches(tsp_id)
+        database_deletion_result = titan_match_deletion_result
         if self.database_delete_enabled:
-            database_deletion_result = self._delete_document_from_database(
+            legacy_deletion_result = self._delete_legacy_document_data(
                 tsp_id, opensearch_deletion_result.global_ids
             )
+            database_deletion_result = DatabaseDeletionResult(
+                deleted_match_bucket_count=titan_match_deletion_result.deleted_match_bucket_count,
+                updated_reverse_bucket_count=titan_match_deletion_result.updated_reverse_bucket_count,
+                deleted_embedding_count=legacy_deletion_result.deleted_embedding_count,
+                deleted_sentence_count=legacy_deletion_result.deleted_sentence_count,
+            )
         else:
-            self.logger.info("Database deletion is disabled. PostgreSQL data was not changed.")
+            self.logger.info(
+                "Legacy database deletion is disabled. Titan matches were cleaned, "
+                "but embeddings and sentence-vector rows were not changed."
+            )
 
         self._send_deletion_result_to_next_queue(tsp_id)
         self.logger.info(
@@ -151,7 +162,7 @@ class DocumentDeleteHandler:
                 )
 
         # Occurrences are deleted last. If catalog cleanup fails, the original
-        # occurrence records remain available and SQS can retry the full flow.
+        # occurrence records remain available for the next scheduled retry.
         if global_ids:
             retry_operation(
                 "Delete sentence occurrences",
@@ -169,15 +180,36 @@ class DocumentDeleteHandler:
             global_ids=global_ids,
         )
 
-    def _delete_document_from_database(self, tsp_id: TspId, opensearch_global_ids: list[int]) -> DatabaseDeletionResult:
-        """Delete Titan matches, embeddings, and sentence rows when the toggle is enabled.
+    def _delete_titan_matches(self, tsp_id: TspId) -> DatabaseDeletionResult:
+        """Delete source and reverse Titan relationships for one document.
+
+        Input: tsp_id=8205
+        Output: deleted source-bucket and updated reverse-bucket counts.
+
+        This cleanup always runs because titan_matches belongs to the new
+        OpenSearch flow and is not controlled by the legacy database toggle.
+        """
+
+        deletion_result = retry_operation(
+            "Delete Titan matches",
+            self.titan_matches_db_store.delete_bidirectional_document_matches,
+            tsp_id,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
+            max_attempts=constants.MAX_ATTEMPTS,
+        )
+        return DatabaseDeletionResult(
+            deleted_match_bucket_count=deletion_result.deleted_match_bucket_count,
+            updated_reverse_bucket_count=deletion_result.updated_reverse_bucket_count,
+        )
+
+    def _delete_legacy_document_data(
+        self, tsp_id: TspId, opensearch_global_ids: list[int]
+    ) -> DatabaseDeletionResult:
+        """Delete legacy embeddings and sentence rows when the toggle is enabled.
 
         Input: tsp_id=8205, global_ids=[100, 101]
-        Output: counts for deleted or updated PostgreSQL rows.
-
-        Titan relationships are removed before their sentence rows. This lets
-        the database function find the source IDs and remove reverse matches
-        owned by other documents.
+        Output: deleted embedding and sentence-row counts.
         """
 
         sentence_vector_context = retry_operation(
@@ -192,14 +224,6 @@ class DocumentDeleteHandler:
         # already cleaned but OpenSearch still returned ID 100, its embedding
         # can still be deleted.
         embedding_global_ids = list(dict.fromkeys(sentence_vector_context.global_ids + opensearch_global_ids))
-        titan_match_deletion_result = retry_operation(
-            "Delete Titan matches",
-            self.titan_matches_db_store.delete_bidirectional_document_matches,
-            tsp_id,
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
-            max_attempts=constants.MAX_ATTEMPTS,
-        )
         deleted_embedding_count = retry_operation(
             "Delete sentence embeddings",
             self.embeddings_db_store.delete_sentence_embeddings,
@@ -217,8 +241,6 @@ class DocumentDeleteHandler:
             max_attempts=constants.MAX_ATTEMPTS,
         )
         return DatabaseDeletionResult(
-            deleted_match_bucket_count=titan_match_deletion_result.deleted_match_bucket_count,
-            updated_reverse_bucket_count=titan_match_deletion_result.updated_reverse_bucket_count,
             deleted_embedding_count=deleted_embedding_count,
             deleted_sentence_count=deleted_sentence_count,
         )
@@ -226,7 +248,7 @@ class DocumentDeleteHandler:
     def _send_deletion_result_to_next_queue(self, tsp_id: TspId) -> None:
         """Send the tsp_id after deletion so Case Similarity can refresh the application."""
 
-        message_sent = self.aws_sqs.send_sqs_message(
+        message_sent = self.outbound_sqs.send_sqs_message(
             send_queue_url=self.sent_sqs_endpoint,
             message_body={"source": "P2", "tsp_id": str(tsp_id), "sent_by": "doc-delete"},
             wait_time=constants.RETRY_SECONDS,

@@ -1,40 +1,41 @@
-# Document Delete OpenSearch Worker
+# Document Delete OpenSearch Job
 
-This worker removes the sentence data owned by one `tsp_id`. It processes one
-SQS message at a time and keeps `tsp.text_similarity_input` so the next Case
-Similarity step can identify and refresh the affected application.
+This scheduled job removes sentence data for documents marked
+`READY_FOR_DELETION`. It reads work directly from `tsp.text_similarity_input`
+and keeps that table so the next state-machine step can continue the document.
 
 ## Processing flow
 
-1. Receive one SQS message containing `tsp_id`.
-2. Read every matching record from `sentence_occurrences`.
-3. Check each sentence key against occurrences from other `tsp_id` values in
+1. Load ordered `tsp_id` values whose document state is `READY_FOR_DELETION`.
+2. Process the records in database pages of 100 documents.
+3. Read every matching record from `sentence_occurrences`.
+4. Check each sentence key against occurrences from other `tsp_id` values in
    the same analysis group.
-4. Delete a catalog vector only when no other document uses that key. The
+5. Delete a catalog vector only when no other document uses that key. The
    Asylee and Refugee catalogs are handled independently.
-5. Bulk-delete the document's occurrence records only after catalog cleanup
-   succeeds. This keeps the occurrence records available when catalog cleanup
-   fails and SQS needs to retry.
-6. When `DATABASE_DELETE_ENABLED=true`, read the document's global IDs from
+6. Bulk-delete the document's occurrence records only after catalog cleanup
+   succeeds. This keeps the occurrence records available when a later job must retry.
+7. Always call `tsp.delete_titan_matches_for_tsp`. It deletes source match
+   buckets, removes reverse JSONB references, and deletes reverse buckets that
+   become empty. This table belongs to the new OpenSearch flow.
+8. When `DATABASE_DELETE_ENABLED=true`, read the document's global IDs from
    `tsp.sentences_vector`, then call
-   `tsp.delete_titan_matches_for_tsp`. It deletes source match buckets, removes
-   reverse JSONB references, and deletes reverse buckets that become empty.
-7. When database deletion is enabled, delete matching rows from
-   `tsp.embeddings`, then delete the document rows from
-   `tsp.sentences_vector`.
-8. Do not delete `tsp.text_similarity_input` or a case-summary row.
-9. Send the same `tsp_id` to the next SQS queue so Case Similarity can rebuild
-    source and reverse application summaries.
-10. Delete the source SQS message only after every step succeeds.
+   `tsp.embeddings`, then delete the document rows from `tsp.sentences_vector`.
+   These legacy-table deletions remain behind the rollout toggle.
+9. Do not delete `tsp.text_similarity_input` or a case-summary row.
+10. Send the completed `tsp_id` to the next SQS queue so the state-machine flow can continue.
+11. Continue until the current run has no more deletion records.
 
-The flow is idempotent. SQS can retry after a partial failure because repeated
-OpenSearch deletes, catalog checks, PostgreSQL cleanup, and match deletion are
-safe.
+The job is idempotent. If one document fails, the job exits with that document
+still marked `READY_FOR_DELETION`. The next scheduled run can safely repeat the
+OpenSearch checks, PostgreSQL cleanup, and outbound SQS send. The deployment
+should use a CronJob concurrency policy of `Forbid` so two deletion jobs do not
+process the same records at the same time.
 
-`DocumentDeleteHandler` keeps OpenSearch and PostgreSQL deletion in separate
-methods. OpenSearch cleanup always runs. PostgreSQL cleanup runs only when
-`DATABASE_DELETE_ENABLED=true`. The default is `false`, which keeps database
-records during the first production rollout.
+`DocumentDeleteHandler` keeps OpenSearch, Titan matches, and legacy database
+deletion in separate methods. OpenSearch and Titan cleanup always run.
+`tsp.embeddings` and `tsp.sentences_vector` cleanup runs only when
+`DATABASE_DELETE_ENABLED=true`.
 
 Each PostgreSQL table has its own store file:
 
@@ -72,11 +73,9 @@ make local
 stops the current worker and starts it again with the updated code. The Docker
 `make run` command keeps the normal production-style behavior without reload.
 
-Send the sample local SQS message with:
-
-```bash
-make send-message
-```
+Set a local `tsp.text_similarity_input` row to `READY_FOR_DELETION`, then run
+`make local`. The job processes the matching records and exits when the query
+returns no more work.
 
 ## Tests
 

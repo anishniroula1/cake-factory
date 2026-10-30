@@ -22,7 +22,6 @@ def config() -> Config:
         aws_local_endpoint_url="",
         opensearch_iam_access_role="",
         opensearch_host="search.example.com",
-        receive_sqs_endpoint="https://sqs.example/source-local.fifo",
         sent_sqs_endpoint="https://sqs.example/next-local.fifo",
         database_delete_enabled=True,
     )

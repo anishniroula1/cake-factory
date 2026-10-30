@@ -17,6 +17,7 @@ class TextSimilarityInput(Base):
     tsp_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     application_id: Mapped[int] = mapped_column(Integer, nullable=False)
     analysis_group: Mapped[str] = mapped_column(String(50), nullable=False)
+    document_state: Mapped[str] = mapped_column(String(50), nullable=False)
 
 
 class SentencesVector(Base):
