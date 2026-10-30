@@ -96,9 +96,7 @@ class ApiTransformHandler:
         """
 
         application_id = application_reference.application_id
-        analysis_group = application_reference.analysis_group
         application_ids = [application_id]
-        is_asylee = analysis_group == "Asylee"
         self.logger.info("Loading the application record from landing.application_id_lookup.")
         application_payload_records = retry_operation(
             "Load application records",
@@ -154,26 +152,7 @@ class ApiTransformHandler:
             "tsp.sentences_vector and tsp.titan_matches."
         )
 
-        if is_asylee:
-            self.logger.info(
-                "Loading the public template from tsp.text_similarity_input and landing.template_registry."
-            )
-        public_template_payloads = (
-            retry_operation(
-                "Load public templates",
-                self.content_db_store.load_public_template_payload_records,
-                application_ids,
-                wait_seconds=constants.RETRY_SECONDS,
-                custom_logger=self.logger,
-            )
-            if is_asylee
-            else {}
-        )
-        if is_asylee:
-            self.logger.info(
-                f"tsp.text_similarity_input and landing.template_registry query completed. Record found: "
-                f"{application_id in public_template_payloads}."
-            )
+        public_template_payloads = self._load_asylee_public_template(application_reference)
 
         application_payload_record = application_payload_records.get(application_id)
         if application_payload_record is None:
@@ -187,6 +166,36 @@ class ApiTransformHandler:
         )
         self.logger.info(f"Built {len(application_events)} Kafka event(s).")
         return self._publish_events_in_size_limited_batches(application_events)
+
+    def _load_asylee_public_template(self, application_reference: ApplicationReference) -> dict[int, dict]:
+        """Load public-template data only when the application is Asylee.
+
+        Input: application_reference with application_id=100 and analysis_group="Asylee"
+        Output: {100: {...}} when a template exists, otherwise {}.
+
+        Refugee applications return an empty dictionary without querying the
+        public-template tables.
+        """
+
+        if application_reference.analysis_group != "Asylee":
+            return {}
+
+        application_id = application_reference.application_id
+        self.logger.info(
+            "Loading the public template from tsp.text_similarity_input and landing.template_registry."
+        )
+        public_template_payloads = retry_operation(
+            "Load public templates",
+            self.content_db_store.load_public_template_payload_records,
+            [application_id],
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
+        )
+        self.logger.info(
+            "tsp.text_similarity_input and landing.template_registry query completed. "
+            f"Record found: {application_id in public_template_payloads}."
+        )
+        return public_template_payloads
 
     def _publish_events_in_size_limited_batches(self, application_events: list[dict]) -> int:
         """Publish before buffered event bytes approach PostgreSQL and worker limits.

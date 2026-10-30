@@ -22,6 +22,7 @@ from transform_completed.opensearch import config as config_module
 from transform_completed.opensearch import constants
 from transform_completed.opensearch import dependencies as dependencies_module
 from transform_completed.opensearch.config import Config, read_boolean, read_integer
+from transform_completed.opensearch.contracts import ApplicationReference
 from transform_completed.opensearch.dependencies import Dependencies
 from transform_completed.opensearch.errors import OperationFailedError, PermanentDataError
 from transform_completed.opensearch.handlers.api_transform_handler import ApiTransformHandler
@@ -81,6 +82,26 @@ def test_handler_builds_titan_payload_without_ner(service_config):
         "sentences",
         "public_templates",
     }
+
+
+def test_refugee_flow_skips_public_template_query(service_config):
+    content_store = ContentStoreFake()
+    content_store.load_public_template_payload_records = Mock()
+    handler = ApiTransformHandler(
+        service_config,
+        ApplicationStoreFake(),
+        ApplicantStoreFake(),
+        content_store,
+        TransmissionStoreFake(),
+        PayloadBuilder(service_config),
+        KafkaProcessorFake(),
+        LoggerFake(),
+    )
+
+    public_templates = handler._load_asylee_public_template(ApplicationReference(100, 900001, "Refugee"))
+
+    assert public_templates == {}
+    content_store.load_public_template_payload_records.assert_not_called()
 
 
 def test_source_and_dlq_messages_are_processed_separately(service_config):
