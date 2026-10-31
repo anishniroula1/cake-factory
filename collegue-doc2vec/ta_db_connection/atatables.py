@@ -128,9 +128,4 @@ class TracerSentence(Base):
         Boolean, nullable=False, default=False
     )
     titan_embedding_list: Mapped[list[float] | bytes | None] = mapped_column(PickleType)
-    last_modified: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
 

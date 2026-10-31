@@ -84,12 +84,9 @@ def sentence_record():
         analysis_group="sentence-row-group",
         embedding_list=[],
         is_non_matcher=False,
-        closest_non_matcher=None,
-        closest_nn_score=None,
         is_tracer=False,
         is_form_language=False,
         is_current=False,
         last_modified=now,
-        in_scope=True,
     )
 

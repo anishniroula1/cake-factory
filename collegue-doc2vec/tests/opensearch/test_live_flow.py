@@ -68,7 +68,6 @@ class LiveSentenceStoreFake:
                 is_non_matcher=False,
                 is_form_language=False,
                 is_tracer=False,
-                in_scope=True,
                 sentence_key=str(self.next_global_id) * 64,
                 last_modified=datetime.now(UTC),
                 tsp=document,

@@ -1,5 +1,4 @@
 from array import array
-from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +14,6 @@ def test_tracer_handler_reuses_saved_vectors_and_creates_missing_vectors(
     service_config,
     custom_logger,
 ):
-    now = datetime.now(UTC)
     tracer_records = [
         TracerSentence(
             tracer_id=10,
@@ -24,7 +22,6 @@ def test_tracer_handler_reuses_saved_vectors_and_creates_missing_vectors(
             is_non_matcher=True,
             is_form_language=False,
             titan_embedding_list=[0.1, 0.2],
-            last_modified=now,
         ),
         TracerSentence(
             tracer_id=20,
@@ -33,7 +30,6 @@ def test_tracer_handler_reuses_saved_vectors_and_creates_missing_vectors(
             is_non_matcher=False,
             is_form_language=True,
             titan_embedding_list=array("f", [0.3, 0.4]).tobytes(),
-            last_modified=now,
         ),
         TracerSentence(
             tracer_id=30,
@@ -42,7 +38,6 @@ def test_tracer_handler_reuses_saved_vectors_and_creates_missing_vectors(
             is_non_matcher=False,
             is_form_language=False,
             titan_embedding_list=None,
-            last_modified=now,
         ),
         TracerSentence(
             tracer_id=40,
@@ -51,7 +46,6 @@ def test_tracer_handler_reuses_saved_vectors_and_creates_missing_vectors(
             is_non_matcher=True,
             is_form_language=False,
             titan_embedding_list=[0.1],
-            last_modified=now,
         ),
     ]
     opensearch = OpenSearchFake()
