@@ -8,7 +8,7 @@ from doc2vec_completed.opensearch.handlers.tracer_handler import TracerHandler
 from doc2vec_completed.opensearch.handlers.train_model_handler import TrainModelHandler
 from doc2vec_completed.opensearch.opensearch_helper import OpenSearchHelper
 from ta_db_connection.database_connection import DatabaseConnection
-from ta_utils.aws.opensearch.OpenSearchClient import OpenSearchClient
+from ta_utils.aws.opnesearch.open_search_client import OpenSearchClient
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
 
