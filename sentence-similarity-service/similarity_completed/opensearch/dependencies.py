@@ -4,7 +4,7 @@ from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.config import Config
 from similarity_completed.opensearch.handlers.sentence_similarity_handler import SentenceSimilarityHandler
 from ta_db_connection.database_connection import DatabaseConnection
-from ta_utils.aws.opensearch.OpenSearchClient import OpenSearchClient
+from ta_utils.aws.opensearch.open_search_client import OpenSearchClient
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
 

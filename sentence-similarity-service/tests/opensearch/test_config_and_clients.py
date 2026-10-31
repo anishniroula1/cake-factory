@@ -22,7 +22,7 @@ def required_environment(monkeypatch):
     monkeypatch.setenv("OPENSEARCH_HOST", "https://search.example.com/")
     monkeypatch.setenv("AWS_LOCAL_ENDPOINT_URL", "http://localhost:4566")
     monkeypatch.setenv("AWS_RECEIVE_SQS_ENDPOINT", "source.fifo")
-    monkeypatch.setenv("AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT", "next.fifo")
+    monkeypatch.setenv("AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT", "next.fifo")
     # These old environment values must not override the service constants.
     monkeypatch.setenv("OPENSEARCH_OCCURRENCE_ALIAS", "ignored-occurrence")
     monkeypatch.setenv("MATCH_THRESHOLD", "10")
@@ -34,7 +34,7 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
 
     config = Config.from_environment()
 
-    assert (config.environment, config.opensearch_host, config.receive_sqs_endpoint, config.sent_sqs_endpoint) == (
+    assert (config.environment, config.opensearch_host, config.receive_sqs_endpoint, config.send_sqs_endpoint) == (
         "local",
         "search.example.com",
         "source.fifo",
@@ -51,7 +51,7 @@ def test_config_reads_vault_and_environment_values(monkeypatch):
         replace(config, opensearch_iam_access_role="not-an-arn"),
         replace(config, opensearch_host=""),
         replace(config, receive_sqs_endpoint=""),
-        replace(config, sent_sqs_endpoint=""),
+        replace(config, send_sqs_endpoint=""),
     ]
     for invalid in invalid_values:
         with pytest.raises(ValueError):

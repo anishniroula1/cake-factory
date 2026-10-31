@@ -325,9 +325,9 @@ class SentenceSimilarityHandler:
         """
 
         message_sent = self.aws_sqs.send_sqs_message(
-            send_queue_url=self.config.sent_sqs_endpoint,
+            send_queue_url=self.config.send_sqs_endpoint,
             message_body={"source": "P2", "tsp_id": str(tsp_id), "sent_by": "sentence-similarity"},
-            is_fifo=self.config.sent_sqs_endpoint.endswith(".fifo"),
+            is_fifo=self.config.send_sqs_endpoint.endswith(".fifo"),
         )
         if not message_sent:
             raise QueueSendError("failed to send the completed message to the next queue")

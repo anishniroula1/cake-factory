@@ -73,7 +73,7 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
         ]
     )
     opensearch, _ = opensearch_mock(sentence_row.sentence_key)
-    config = replace(service_config, receive_sqs_endpoint=source_queue_url, sent_sqs_endpoint=next_queue_url)
+    config = replace(service_config, receive_sqs_endpoint=source_queue_url, send_sqs_endpoint=next_queue_url)
     handler = SentenceSimilarityHandler(config, sessions, opensearch, queue, custom_logger)
     dependencies = Dependencies(queue, handler, custom_logger)
 

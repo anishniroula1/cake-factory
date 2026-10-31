@@ -31,7 +31,7 @@ def service_config(monkeypatch):
         opensearch_iam_access_role="",
         opensearch_host="search.example.com",
         receive_sqs_endpoint="source.fifo",
-        sent_sqs_endpoint="next.fifo",
+        send_sqs_endpoint="next.fifo",
     )
 
 
