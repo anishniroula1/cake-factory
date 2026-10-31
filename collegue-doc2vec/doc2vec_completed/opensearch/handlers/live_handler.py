@@ -47,7 +47,7 @@ class LiveHandler:
         self.logger = custom_logger
         self.text_similarity_input_db_store = TextSimilarityInputDBStore(session_factory)
         self.sentence_vector_db_store = SentenceVectorDBStore(session_factory)
-        self.rrf_filterer = RRFFilterer()
+        self.rrf_filterer = RRFFilterer(custom_logger)
         self.batch_processor = SentenceBatchProcessor(
             opensearch_helper,
             custom_logger,
@@ -86,6 +86,7 @@ class LiveHandler:
                 sentence_vector_records
             )
             document = sentence_vector_records[0].tsp
+            self._log_document_context(document)
             self.logger.info(
                 f"Found {len(sentence_vector_records)} saved sentence(s). "
                 f"Generated {generated_key_count} missing sentence key(s) and "
@@ -170,13 +171,19 @@ class LiveHandler:
             )
             return None, [], None
 
+        self._log_document_context(document)
+
         # Refugee referral documents contain template sections that should not
         # become searchable sentences. Filter those sections before splitting.
         document = self.rrf_filterer.filter_rrfs(document)
         # The old Doc2Vec flow treated line breaks and the legacy Ê separator as
         # spaces. Keep that cleanup so sentence text and boundaries stay stable.
         cleaned_content = re.sub(r"[Ê\n]", " ", document.content or "")
+        self.logger.info("Sentence splitting started.")
         sentences = self._clean_sentences(split_document(cleaned_content))
+        self.logger.info(
+            f"Sentence splitting completed with {len(sentences)} sentence(s)."
+        )
         # A document can contain only spaces or separators after splitting.
         # Send no_content so the existing state-machine flow can handle it.
         if not sentences:
@@ -199,6 +206,14 @@ class LiveHandler:
 
         sentence_vector_records = self._save_document_sentences(document, sentences)
         return document, sentence_vector_records, None
+
+    def _log_document_context(self, document: TextSimilarityInput) -> None:
+        """Log the non-PII identifiers used to process one document."""
+
+        self.logger.info(
+            f"Processing application_id={document.application_id}, "
+            f"analysis_group={document.analysis_group}."
+        )
 
     def _load_saved_document_sentences(
         self,
