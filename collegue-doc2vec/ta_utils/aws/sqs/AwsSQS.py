@@ -1,5 +1,4 @@
 import json
-import time
 import uuid
 
 import boto3
@@ -24,7 +23,6 @@ class AwsSQS:
         wait_time: int = 20,
         logger=None,
         visibility_timeout: int = 7_200,
-        retry_wait_seconds: int = 5,
         sqs_client=None,
     ) -> None:
         self._logger = logger
@@ -37,7 +35,6 @@ class AwsSQS:
         self._max_number_of_messages = max_number_of_messages
         self._wait_time = wait_time
         self._visibility_timeout = visibility_timeout
-        self._retry_wait_seconds = retry_wait_seconds
 
     def receive_messages(self) -> list[RawSqsMessage]:
         """Receive raw messages from the configured source queue.
@@ -45,7 +42,7 @@ class AwsSQS:
         Output: boto3 messages containing Body, MessageId, and ReceiptHandle.
 
         An empty list is returned when no message is available or the request
-        fails. A failed request waits before the next receive attempt.
+        fails.
         """
 
         try:
@@ -62,7 +59,6 @@ class AwsSQS:
                 f"Failed to receive from SQS queue {self._queue_url}: "
                 f"{str(error)[:500]}"
             )
-            time.sleep(self._retry_wait_seconds)
             return []
 
         messages = response.get("Messages", [])

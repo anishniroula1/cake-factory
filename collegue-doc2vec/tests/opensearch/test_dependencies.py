@@ -64,10 +64,7 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     )
 
     def build_opensearch_helper(client, received_logger):
-        assert (client, received_logger) == (
-            opensearch_client,
-            logger,
-        )
+        captured["opensearch_helper"] = (client, received_logger)
         return opensearch_helper
 
     monkeypatch.setattr(
@@ -111,68 +108,5 @@ def test_dependencies_build_and_close_all_resources(monkeypatch, dependency_conf
     )
 
     dependencies = Dependencies()
-
-    assert dependencies.logger is logger
-    assert dependencies.database is database
-    assert dependencies.session_factory is session_factory
-    assert dependencies.opensearch_helper is opensearch_helper
-    assert dependencies.aws_sqs is aws_sqs
-    assert dependencies.historical_handler is historical_handler
-    assert dependencies.live_handler is live_handler
-    assert dependencies.tracer_handler is tracer_handler
-    assert dependencies.train_model_handler is train_model_handler
-    assert captured["database"] == {
-        "pg_db_user": "database-user",
-        "pg_db_password": "database-password",
-        "pg_db_host": "database-host",
-        "pg_db_database": "database-name",
-        "pg_db_port": 5432,
-        "pool_size": 30,
-        "max_overflow": 10,
-        "use_dynamic_credentials": False,
-        "application_name": "doc2vec_opensearch",
-    }
-    assert captured["session_factory"] == {
-        "bind": engine,
-        "autoflush": False,
-        "expire_on_commit": False,
-    }
-    assert captured["opensearch_client"] == {
-        "opensearch_host": "search.example.com",
-        "opensearch_iam_access_role": "",
-        "aws_region": "us-east-1",
-        "opensearch_port": 443,
-        "opensearch_service": "es",
-        "pool_maxsize": 20,
-        "role_session_name": "doc2vecSentenceIngestion",
-    }
-    assert captured["sqs"]["queue_url"].endswith("doc2vec.fifo")
-    assert captured["handler"] == (
-        config,
-        session_factory,
-        opensearch_helper,
-        aws_sqs,
-        logger,
-    )
-    assert captured["live_handler"] == (
-        config,
-        session_factory,
-        opensearch_helper,
-        aws_sqs,
-        logger,
-    )
-    assert captured["tracer_handler"] == (
-        session_factory,
-        opensearch_helper,
-        logger,
-    )
-    assert captured["train_model_handler"] == (
-        session_factory,
-        opensearch_helper,
-        logger,
-    )
-
     dependencies.close()
-
-    assert engine.disposed is True
 

@@ -54,14 +54,27 @@ class LiveHandler:
         )
 
     def process(self, tsp_id: TspId) -> LiveResult | None:
-        """Create or reuse sentence records, then write them to OpenSearch.
+        """Process one document and save its sentences in PostgreSQL and OpenSearch.
 
-        Input: tsp_id=1040
-        Output: {"tsp_id": 1040, "source_count": 65,
-        "indexed_count": 65, "success": True, "reason": ""}
+        The flow first looks for existing sentences_vector records for the
+        supplied tsp_id. Existing records are reused and any missing sentence
+        keys are generated, allowing a retried message to continue without
+        splitting or inserting the document again.
 
-        A document with no usable text sends success=False and reason=no_content
-        so the existing state-machine flow can handle it without retrying SQS.
+        When no saved sentences exist, the document is loaded from
+        text_similarity_input, filtered as needed, split with the existing
+        Syntok logic, and saved in sentences_vector with its sentence keys and
+        generated global IDs.
+
+        Every saved sentence is then written to the sentence occurrence index.
+        Each unique sentence key is also written to the catalog selected by the
+        document's analysis group, where OpenSearch creates any missing Titan
+        embedding.
+
+        After all database and OpenSearch work succeeds, the indexes are
+        refreshed and the processing result is sent to the next SQS queue.
+        Errors are logged by the operation that failed so SQS can retry the
+        source message without creating duplicate records.
         """
 
         started_at = perf_counter()
@@ -93,6 +106,9 @@ class LiveHandler:
         )
         indexed = self._save_sentences_in_opensearch(sentence_vector_records)
 
+        # Bulk writes can finish before OpenSearch's automatic refresh runs.
+        # Refresh both aliases once so Sentence Similarity can immediately find
+        # the new occurrence records and their catalog vectors.
         retry_operation(
             "Refresh indexed sentences",
             self.opensearch_helper.refresh_aliases,

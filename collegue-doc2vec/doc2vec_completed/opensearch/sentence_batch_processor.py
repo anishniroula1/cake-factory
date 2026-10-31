@@ -10,7 +10,7 @@ from doc2vec_completed.opensearch.opensearch_store import (
     SentenceCatalogOpenSearchStore,
     SentenceOccurrenceOpenSearchStore,
 )
-from doc2vec_completed.opensearch.retry import retry_operation
+from doc2vec_completed.opensearch.retry import retry_operation, safe_error_summary
 from doc2vec_completed.opensearch.text import sentence_word_count
 from ta_db_connection.atatables import SentencesVector
 from ta_utils.logger.CustomLogger import CustomLogger
@@ -24,6 +24,7 @@ class SentenceBatchProcessor:
         opensearch_helper: OpenSearchHelper,
         custom_logger: CustomLogger,
     ) -> None:
+        self.opensearch_helper = opensearch_helper
         self.sentence_catalog_opensearch_store = SentenceCatalogOpenSearchStore(
             opensearch_helper,
         )
@@ -171,16 +172,69 @@ class SentenceBatchProcessor:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
-        with_vectors: list[CatalogDocument] = []
-        need_vectors: list[CatalogDocument] = []
-        seen_keys: set[str] = set()
+        documents_with_vectors, documents_needing_vectors = (
+            self._prepare_catalog_documents(
+                sentence_vector_records,
+                existing_keys,
+                embeddings,
+            )
+        )
+
+        if documents_with_vectors:
+            retry_operation(
+                f"Write saved vectors to {catalog_alias} for {label}",
+                self.sentence_catalog_opensearch_store.index_saved_vectors,
+                catalog_alias,
+                documents_with_vectors,
+                wait_seconds=constants.RETRY_SECONDS,
+                max_attempts=1,
+                custom_logger=self.logger,
+            )
+        if documents_needing_vectors:
+            retry_operation(
+                f"Create Bedrock vectors in {catalog_alias} for {label}",
+                self.sentence_catalog_opensearch_store.index_with_bedrock,
+                catalog_alias,
+                documents_needing_vectors,
+                wait_seconds=constants.RETRY_SECONDS,
+                max_attempts=1,
+                custom_logger=self.logger,
+            )
+        return (
+            len(existing_keys),
+            len(documents_with_vectors),
+            len(documents_needing_vectors),
+        )
+
+    def _prepare_catalog_documents(
+        self,
+        sentence_vector_records: list[SentencesVector],
+        existing_keys: set[str],
+        embeddings: dict[int, list[float]],
+    ) -> tuple[list[CatalogDocument], list[CatalogDocument]]:
+        """Build unique catalog documents and separate them by vector source.
+
+        Input: sentence records, keys already stored in the catalog, and saved
+        Titan vectors mapped by global ID.
+        Output: documents with reusable vectors and documents whose vectors
+        must be created by the OpenSearch embedding pipeline.
+
+        Existing catalog keys and duplicate keys in this batch are skipped. A
+        missing or invalid saved vector is left off the document so the
+        OpenSearch pipeline can create a replacement vector.
+        """
+
+        documents_with_vectors: list[CatalogDocument] = []
+        documents_needing_vectors: list[CatalogDocument] = []
+        seen_sentence_keys: set[str] = set()
 
         for sentence_vector_record in sentence_vector_records:
             sentence_key = sentence_vector_record.sentence_key
-            if sentence_key in existing_keys or sentence_key in seen_keys:
+            if sentence_key in existing_keys or sentence_key in seen_sentence_keys:
                 continue
-            seen_keys.add(sentence_key)
-            document: CatalogDocument = {
+
+            seen_sentence_keys.add(sentence_key)
+            catalog_document: CatalogDocument = {
                 "_id": sentence_key,
                 "sentenceKey": sentence_key,
                 "sentenceContent": sentence_vector_record.sentence_content,
@@ -190,35 +244,29 @@ class SentenceBatchProcessor:
                 "createdAt": sentence_vector_record.last_modified.isoformat(),
                 "updatedAt": sentence_vector_record.last_modified.isoformat(),
             }
-            vector = embeddings.get(sentence_vector_record.global_id)
-            if vector is None:
-                need_vectors.append(document)
+            saved_vector = embeddings.get(sentence_vector_record.global_id)
+            if saved_vector is None:
+                documents_needing_vectors.append(catalog_document)
                 continue
-            self.sentence_catalog_opensearch_store.validate_vector(vector)
-            document["sentenceContentVector"] = vector
-            with_vectors.append(document)
 
-        if with_vectors:
-            retry_operation(
-                f"Write saved vectors to {catalog_alias} for {label}",
-                self.sentence_catalog_opensearch_store.index_saved_vectors,
-                catalog_alias,
-                with_vectors,
-                wait_seconds=constants.RETRY_SECONDS,
-                max_attempts=1,
-                custom_logger=self.logger,
-            )
-        if need_vectors:
-            retry_operation(
-                f"Create Bedrock vectors in {catalog_alias} for {label}",
-                self.sentence_catalog_opensearch_store.index_with_bedrock,
-                catalog_alias,
-                need_vectors,
-                wait_seconds=constants.RETRY_SECONDS,
-                max_attempts=1,
-                custom_logger=self.logger,
-            )
-        return len(existing_keys), len(with_vectors), len(need_vectors)
+            try:
+                self.opensearch_helper.validate_vector(saved_vector)
+            except PermanentDataError as error:
+                # Do not reuse an old vector with the wrong dimension. Leaving
+                # it out lets the OpenSearch pipeline create a valid vector.
+                self.logger.warning(
+                    "Saved Titan embedding is invalid for "
+                    f"global_id={sentence_vector_record.global_id}; OpenSearch "
+                    "will create a replacement vector. Cause: "
+                    f"{safe_error_summary(error)}"
+                )
+                documents_needing_vectors.append(catalog_document)
+                continue
+
+            catalog_document["sentenceContentVector"] = saved_vector
+            documents_with_vectors.append(catalog_document)
+
+        return documents_with_vectors, documents_needing_vectors
 
     def _save_occurrence_documents(
         self,

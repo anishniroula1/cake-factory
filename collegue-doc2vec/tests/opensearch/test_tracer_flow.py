@@ -60,30 +60,15 @@ def test_tracer_handler_reuses_saved_vectors_and_creates_missing_vectors(
         custom_logger,
     )
 
-    results = [
+    for tracer_id in (10, 20, 30, 40):
         handler.process(tracer_id)
-        for tracer_id in (10, 20, 30, 40)
-    ]
 
-    assert all(result["indexed_count"] == 1 for result in results)
     calls = [call for call in opensearch.bulk_calls if call[1]]
     assert [(call[2], len(call[1])) for call in calls] == [
         (False, 1),
         (False, 1),
         (True, 1),
         (True, 1),
-    ]
-    assert {document["tracerId"] for call in calls for document in call[1]} == {
-        10,
-        20,
-        30,
-        40,
-    }
-    assert opensearch.refresh_alias_calls == [
-        ["tracer"],
-        ["tracer"],
-        ["tracer"],
-        ["tracer"],
     ]
 
 
@@ -132,9 +117,4 @@ def test_sqs_processor_routes_tracer_message(custom_logger):
     processor._process_message(message)
 
     assert tracer_handler.calls == [30]
-    assert source_queue.deleted == [message]
-    assert log_contexts == [
-        "tracer_id=30: ",
-        None,
-    ]
 

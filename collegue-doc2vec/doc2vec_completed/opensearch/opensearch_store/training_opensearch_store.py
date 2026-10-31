@@ -51,19 +51,3 @@ class TrainingOpenSearchStore:
             needs_embedding=True,
         )
 
-    def validate_vector(self, vector: list[float]) -> None:
-        """Validate one saved Titan vector before training-index insertion.
-
-        Input: vector containing 512 float values.
-        """
-
-        self.opensearch_helper.validate_vector(vector)
-
-    def refresh(self) -> None:
-        """Make newly indexed training documents searchable.
-
-        The store refreshes its configured training alias after all writes finish.
-        """
-
-        self.opensearch_helper.refresh_aliases([self.alias])
-

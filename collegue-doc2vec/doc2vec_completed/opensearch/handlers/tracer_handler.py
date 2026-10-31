@@ -72,12 +72,6 @@ class TracerHandler:
                 custom_logger=self.logger,
             )
 
-        retry_operation(
-            "Refresh the tracer catalog",
-            self.tracer_opensearch_store.refresh,
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
-        )
         self.logger.info(
             f"Tracer processing completed. Indexed count: {indexed_count}."
         )

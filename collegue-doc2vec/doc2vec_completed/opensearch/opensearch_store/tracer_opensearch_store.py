@@ -47,11 +47,4 @@ class TracerOpenSearchStore:
 
         self.opensearch_helper.validate_vector(vector)
 
-    def refresh(self) -> None:
-        """Make newly indexed tracer documents searchable.
-
-        The store refreshes its configured tracer alias after all writes finish.
-        """
-
-        self.opensearch_helper.refresh_aliases([self.alias])
 

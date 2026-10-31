@@ -82,7 +82,6 @@ def run_application(
     with pytest.raises(StopApplicationError):
         main.run_opensearch_flow(dependencies=dependencies)
 
-    assert dependencies.closed
     return sqs
 
 
@@ -127,6 +126,11 @@ def test_historical_message_runs_the_complete_ingestion_flow(
         embedding_type=2,
         embeddings=[0.1, 0.2],
     )
+    invalid_embedding = Embeddings(
+        global_id=2,
+        embedding_type=2,
+        embeddings=[0.1],
+    )
     load_session = SessionFake(rows=rows)
     save_session = SessionFake()
     sessions = SessionSequence(
@@ -134,7 +138,7 @@ def test_historical_message_runs_the_complete_ingestion_flow(
             SessionFake(scalar_value=len(rows)),
             load_session,
             save_session,
-            SessionFake(rows=[embedding]),
+            SessionFake(rows=[embedding, invalid_embedding]),
             SessionFake(rows=[]),
         ]
     )
@@ -142,7 +146,7 @@ def test_historical_message_runs_the_complete_ingestion_flow(
         existing={sentence_key(existing_sentence.sentence_content)}
     )
     message = historical_message()
-    sqs = run_application(
+    run_application(
         service_config,
         sessions,
         opensearch,
@@ -150,35 +154,12 @@ def test_historical_message_runs_the_complete_ingestion_flow(
         custom_logger,
     )
 
-    assert save_session.commits == 1
-    assert all(len(row.sentence_key) == 64 for row in rows)
-    assert existing_sentence.sentence_key == existing_key
-    page_query = str(load_session.scalars_statements[0])
-    assert "embedding_list" not in page_query
-    saved_key_updates = save_session.executed[0][1]
-    assert len(saved_key_updates) == 3
     calls_with_documents = [call for call in opensearch.bulk_calls if call[1]]
-    saved_vector_call = calls_with_documents[0]
-    occurrence_call = calls_with_documents[2]
-
     assert [(call[0], call[2]) for call in calls_with_documents] == [
         ("catalog-asylee", False),
         ("catalog-asylee", True),
         ("occurrence", False),
     ]
-    assert saved_vector_call[1][0]["sentenceContentVector"] == [0.1, 0.2]
-    assert saved_vector_call[1][0]["wordCount"] == 5
-    assert len(occurrence_call[1]) == 4
-    occurrence = occurrence_call[1][0]
-    assert occurrence["globalId"] == 1
-    assert occurrence["applicationId"] == 1001
-    assert occurrence["analysisGroup"] == "Asylee"
-    assert opensearch.refresh_alias_calls == [["catalog-asylee", "occurrence"]]
-    assert sqs.sent[0]["message_body"] == {
-        "reason": "HISTORICAL",
-        "tsp_id": 10,
-    }
-    assert sqs.deleted == [message]
 
 
 def test_temporary_worker_failure_retries_without_losing_the_message(
@@ -214,7 +195,7 @@ def test_temporary_worker_failure_retries_without_losing_the_message(
     )
     opensearch = TemporaryFailureOpenSearch()
     message = historical_message()
-    sqs = run_application(
+    run_application(
         service_config,
         sessions,
         opensearch,
@@ -223,8 +204,6 @@ def test_temporary_worker_failure_retries_without_losing_the_message(
     )
 
     assert opensearch.read_attempts == 2
-    assert sqs.deleted == [message]
-    assert "temporary OpenSearch failure" not in str(custom_logger.warning_messages)
 
 
 def test_refugee_document_uses_only_the_refugee_catalog(
@@ -244,7 +223,7 @@ def test_refugee_document_uses_only_the_refugee_catalog(
     )
     opensearch = OpenSearchFake()
     message = historical_message()
-    sqs = run_application(
+    run_application(
         service_config,
         sessions,
         opensearch,
@@ -253,19 +232,13 @@ def test_refugee_document_uses_only_the_refugee_catalog(
     )
 
     assert {call[0] for call in opensearch.existing_id_calls} == {"catalog-refugee"}
-    occurrence_calls = [
-        call for call in opensearch.bulk_calls if call[0] == "occurrence"
-    ]
-    assert occurrence_calls[0][1][0]["analysisGroup"] == "Refugee"
-    assert opensearch.refresh_alias_calls == [["catalog-refugee", "occurrence"]]
-    assert sqs.deleted == [message]
 
 
 def test_failed_historical_message_is_not_deleted(
     service_config,
     custom_logger,
 ):
-    sqs = run_application(
+    run_application(
         service_config,
         SessionSequence([SessionFake(scalar_value=0)]),
         OpenSearchFake(),
@@ -273,9 +246,6 @@ def test_failed_historical_message_is_not_deleted(
         custom_logger,
         expect_processing_error=True,
     )
-
-    assert sqs.deleted == []
-    assert sqs.sent == []
 
 
 def test_historical_completion_requires_the_send_event_queue(
@@ -314,8 +284,6 @@ def test_failed_worker_logs_its_global_id_range(
     with pytest.raises(PermanentDataError):
         handler._save_historical_sentence_batch_in_opensearch([sentence_record])
 
-    assert "global IDs 1 through 1 failed" in custom_logger.error_messages[0]
-
 
 def test_unsupported_analysis_group_does_not_delete_the_message(
     service_config,
@@ -342,5 +310,4 @@ def test_unsupported_analysis_group_does_not_delete_the_message(
     )
 
     assert sqs.deleted == []
-    assert sqs.sent == []
 

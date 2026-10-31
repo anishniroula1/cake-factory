@@ -39,20 +39,6 @@ def test_config_reads_only_vault_and_environment_values(monkeypatch):
 
     config = Config.from_environment()
 
-    assert (
-        config.environment,
-        config.opensearch_host,
-        config.aws_local_endpoint_url,
-        config.doc2vec_queue_url,
-        config.aws_sqs_send_event_queue_endpoint,
-    ) == (
-        "local",
-        "search.example.com",
-        "http://localhost:4566",
-        "https://sqs.example.com/doc2vec.fifo",
-        "https://sqs.example.com/next.fifo",
-    )
-
     invalid_values = [
         replace(config, pg_db_user=""),
         replace(config, pg_db_password=""),

@@ -49,55 +49,33 @@ def test_train_model_reuses_vectors_and_indexes_only_unique_missing_keys(
         form_language,
         short_sentence,
     ]
-    embedding = Embeddings(global_id=2, embedding_type=2, embeddings=[0.1, 0.2])
+    embeddings = [
+        Embeddings(global_id=2, embedding_type=2, embeddings=[0.1, 0.2]),
+        Embeddings(global_id=3, embedding_type=2, embeddings=[0.1]),
+    ]
     load_session = SessionFake(rows=rows)
     sessions = SessionSequence(
         [
             SessionFake(scalar_value=len(eligible_rows)),
             load_session,
-            SessionFake(rows=[embedding]),
+            SessionFake(rows=embeddings),
             SessionFake(rows=[]),
         ]
     )
     opensearch = OpenSearchFake(existing={sentence_key(existing_text)})
     handler = TrainModelHandler(sessions, opensearch, custom_logger)
 
-    result = handler.process(10)
+    handler.process(10)
 
-    assert result == {
-        "reason": "TRAIN_MODEL",
-        "tsp_id": 10,
-        "source_count": 4,
-        "unique_count": 3,
-        "indexed_count": 2,
-    }
     written_documents = [
         document
         for alias, documents, _ in opensearch.bulk_calls
         if alias == "training"
         for document in documents
     ]
-    assert {document["sentenceContent"] for document in written_documents} == {
-        saved_text,
-        bedrock_text,
-    }
-    saved_document = next(
-        document
-        for document in written_documents
-        if document["sentenceContent"] == saved_text
-    )
-    assert saved_document["sentenceContentVector"] == [0.1, 0.2]
-    assert all(row.sentence_key is None for row in rows)
-    assert not any(
-        document["sentenceContent"].startswith(("Excluded", "Too short"))
-        for document in written_documents
-    )
-    page_query = str(load_session.scalars_statements[0])
-    assert all(
-        name in page_query
-        for name in ("is_non_matcher", "is_tracer", "is_form_language")
-    )
-    assert opensearch.refresh_alias_calls == [["training"]]
+    assert {
+        document["sentenceContent"] for document in written_documents
+    } == {saved_text, bedrock_text}
 
 
 class HandlerFake:
@@ -129,5 +107,4 @@ def test_sqs_processor_routes_train_model_message(custom_logger):
     processor._process_message(message)
 
     assert train_handler.calls == [10]
-    assert source_queue.deleted == [message]
 

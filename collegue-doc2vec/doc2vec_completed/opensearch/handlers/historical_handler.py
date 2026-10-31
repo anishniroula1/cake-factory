@@ -154,8 +154,9 @@ class HistoricalHandler:
             )
             return None
 
-        # Refresh once after all writes. This makes the new sentences searchable
-        # before Sentence Similarity receives its SQS message.
+        # Bulk writes can finish before OpenSearch's automatic refresh runs.
+        # Refresh both aliases once so Sentence Similarity can immediately find
+        # every historical occurrence and its catalog vector after SQS arrives.
         retry_operation(
             "Refresh indexed sentences",
             self.opensearch_helper.refresh_aliases,

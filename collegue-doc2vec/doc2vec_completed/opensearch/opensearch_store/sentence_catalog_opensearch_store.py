@@ -63,11 +63,4 @@ class SentenceCatalogOpenSearchStore:
             needs_embedding=True,
         )
 
-    def validate_vector(self, vector: list[float]) -> None:
-        """Validate one saved Titan vector before catalog indexing.
-
-        Input: vector containing 512 float values.
-        """
-
-        self.opensearch_helper.validate_vector(vector)
 

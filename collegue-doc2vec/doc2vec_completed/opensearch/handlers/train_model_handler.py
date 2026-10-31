@@ -15,11 +15,12 @@ from doc2vec_completed.opensearch.db_store import (
     EmbeddingDBStore,
     SentenceVectorDBStore,
 )
+from doc2vec_completed.opensearch.errors import PermanentDataError
 from doc2vec_completed.opensearch.opensearch_helper import OpenSearchHelper
 from doc2vec_completed.opensearch.opensearch_store import (
     TrainingOpenSearchStore,
 )
-from doc2vec_completed.opensearch.retry import retry_operation
+from doc2vec_completed.opensearch.retry import retry_operation, safe_error_summary
 from doc2vec_completed.opensearch.text import sentence_key, sentence_word_count
 from ta_db_connection.atatables import SentencesVector
 from ta_utils.logger.CustomLogger import CustomLogger
@@ -34,6 +35,7 @@ class TrainModelHandler:
         opensearch_helper: OpenSearchHelper,
         custom_logger: CustomLogger,
     ) -> None:
+        self.opensearch_helper = opensearch_helper
         self.training_opensearch_store = TrainingOpenSearchStore(
             opensearch_helper,
         )
@@ -128,13 +130,6 @@ class TrainModelHandler:
                 source_count += len(eligible_sentence_vector_records)
                 after_global_id = sentence_vector_records[-1].global_id
 
-        if indexed_count:
-            retry_operation(
-                "Refresh the model-training index",
-                self.training_opensearch_store.refresh,
-                wait_seconds=constants.RETRY_SECONDS,
-                custom_logger=self.logger,
-            )
         self.logger.info(
             f"Model-training processing completed. Source count: {source_count}. "
             f"Unique count: {len(seen_keys)}. Indexed count: {indexed_count}."
@@ -201,8 +196,19 @@ class TrainModelHandler:
             }
             vector = embeddings.get(sentence_vector_record.global_id)
             if vector is not None:
-                self.training_opensearch_store.validate_vector(vector)
-                document["sentenceContentVector"] = vector
+                try:
+                    self.opensearch_helper.validate_vector(vector)
+                except PermanentDataError as error:
+                    # The training pipeline can replace a legacy vector whose
+                    # dimension does not match the current Titan model.
+                    self.logger.warning(
+                        "Saved Titan embedding is invalid for "
+                        f"global_id={sentence_vector_record.global_id}; "
+                        "OpenSearch will create a replacement vector. Cause: "
+                        f"{safe_error_summary(error)}"
+                    )
+                else:
+                    document["sentenceContentVector"] = vector
 
             current = documents_by_key.get(key)
             if current is None or (
