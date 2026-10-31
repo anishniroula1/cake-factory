@@ -103,15 +103,12 @@ The completion message is:
 {
   "source": "P2",
   "tsp_id": 1040,
-  "sent_by": "doc2vec",
-  "success": true,
-  "reason": ""
+  "sent_by": "doc2vec"
 }
 ```
 
-When the document contains no usable sentence text, the same message uses
-`success=false` and `reason="no_content"`. No sentence or OpenSearch records are
-created for that document.
+No sentence or OpenSearch records are created when the document contains no
+usable sentence text.
 
 ## Historical flow
 
