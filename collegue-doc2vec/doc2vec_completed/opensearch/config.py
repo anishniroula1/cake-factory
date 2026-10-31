@@ -87,7 +87,7 @@ class Config:
             "pgDatabase": self.pg_db_database,
             "pgPort": self.pg_db_port,
             "OPENSEARCH_HOST": self.opensearch_host,
-            "Doc2Vec SQS queue URL": self.doc2vec_queue_url,
+            "awsReceiveSqsQueueEndpoint": self.doc2vec_queue_url,
             "AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT": self.aws_sqs_send_event_queue_endpoint,
         }
         missing = [name for name, value in required_values.items() if not value]
