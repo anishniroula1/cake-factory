@@ -278,11 +278,11 @@ def test_failed_historical_message_is_not_deleted(
     assert sqs.sent == []
 
 
-def test_historical_completion_requires_the_sentence_similarity_queue(
+def test_historical_completion_requires_the_send_event_queue(
     service_config,
     custom_logger,
 ):
-    service_config.sentence_similarity_backfill_queue_url = ""
+    service_config.aws_sqs_send_event_queue_endpoint = ""
     handler = HistoricalHandler(
         service_config,
         SessionSequence([]),
@@ -291,7 +291,7 @@ def test_historical_completion_requires_the_sentence_similarity_queue(
         custom_logger,
     )
 
-    with pytest.raises(QueueSendError, match="queue URL is not configured"):
+    with pytest.raises(QueueSendError, match="endpoint is not configured"):
         handler._send_sqs_message(10)
 
 

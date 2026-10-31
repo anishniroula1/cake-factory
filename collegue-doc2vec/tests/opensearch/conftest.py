@@ -25,10 +25,7 @@ def dependency_config():
         opensearch_host="search.example.com",
         opensearch_iam_access_role="",
         doc2vec_queue_url="https://sqs.example.com/doc2vec.fifo",
-        sentence_similarity_backfill_queue_url=(
-            "https://sqs.example.com/similarity.fifo"
-        ),
-        state_machine_queue_url="https://sqs.example.com/state.fifo",
+        aws_sqs_send_event_queue_endpoint="https://sqs.example.com/next.fifo",
     )
 
 
@@ -48,11 +45,8 @@ def service_config(monkeypatch):
     monkeypatch.setattr(constants, "TRACER_ALIAS", "tracer")
     monkeypatch.setattr(constants, "SENTENCE_OCCURRENCE_ALIAS", "occurrence")
     return SimpleNamespace(
-        sentence_similarity_backfill_queue_url=(
+        aws_sqs_send_event_queue_endpoint=(
             "https://sqs.us-east-1.amazonaws.com/1/next.fifo"
-        ),
-        state_machine_queue_url=(
-            "https://sqs.us-east-1.amazonaws.com/1/state-machine.fifo"
         ),
         doc2vec_queue_url="https://sqs.us-east-1.amazonaws.com/1/source.fifo",
     )

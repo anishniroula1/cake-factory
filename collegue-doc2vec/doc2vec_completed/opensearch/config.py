@@ -47,8 +47,7 @@ class Config:
 
     # SQS environment
     doc2vec_queue_url: str
-    sentence_similarity_backfill_queue_url: str
-    state_machine_queue_url: str | None
+    aws_sqs_send_event_queue_endpoint: str
 
     @classmethod
     def from_environment(cls) -> Self:
@@ -71,12 +70,9 @@ class Config:
             opensearch_host=_aws_hostname(os.getenv("OPENSEARCH_HOST", "").strip()),
             # SQS resources
             doc2vec_queue_url=str(secrets.get("awsReceiveSqsQueueEndpoint") or ""),
-            sentence_similarity_backfill_queue_url=os.getenv(
-                "SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL", ""
+            aws_sqs_send_event_queue_endpoint=os.getenv(
+                "AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT", ""
             ).strip(),
-            state_machine_queue_url=(
-                str(secrets.get("awsSqsSendEventQueueEndpoint") or "") or None
-            ),
         )
         config.validate()
         return config
@@ -92,7 +88,7 @@ class Config:
             "pgPort": self.pg_db_port,
             "OPENSEARCH_HOST": self.opensearch_host,
             "Doc2Vec SQS queue URL": self.doc2vec_queue_url,
-            "State Machine SQS queue URL": self.state_machine_queue_url,
+            "AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT": self.aws_sqs_send_event_queue_endpoint,
         }
         missing = [name for name, value in required_values.items() if not value]
         if missing:

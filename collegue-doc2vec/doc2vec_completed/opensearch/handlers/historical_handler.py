@@ -238,11 +238,9 @@ class HistoricalHandler:
             QueueSendError: If the queue is missing or SQS rejects the message.
         """
 
-        queue_url = self.config.sentence_similarity_backfill_queue_url
+        queue_url = self.config.aws_sqs_send_event_queue_endpoint
         if not queue_url:
-            raise QueueSendError(
-                "Sentence Similarity backfill SQS queue URL is not configured"
-            )
+            raise QueueSendError("AWS SQS send event queue endpoint is not configured")
 
         message: NextQueueMessage = {
             "tsp_id": tsp_id,

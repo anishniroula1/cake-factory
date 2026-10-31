@@ -261,7 +261,7 @@ safe.
 
 ## Configuration
 
-PostgreSQL and source/next queue values come from Vault:
+PostgreSQL and the source queue value come from Vault:
 
 ```yaml
 pgUser: database-user
@@ -270,7 +270,6 @@ pgHost: database-host
 pgDatabase: database-name
 pgPort: 5432
 awsReceiveSqsQueueEndpoint: doc2vec-queue-url
-awsSqsSendEventQueueEndpoint: state-machine-queue-url
 ```
 
 Dynamic database credentials can use `pgDynamicUser` and
@@ -286,7 +285,7 @@ AWS_DEFAULT_REGION=us-east-1
 AWS_LOCAL_ENDPOINT_URL=http://localhost:4566
 OPENSEARCH_HOST=search-domain.us-east-1.es.amazonaws.com
 OPENSEARCH_IAM_ACCESS_ROLE=arn:aws:iam::123456789012:role/opensearch-role
-SENTENCE_SIMILARITY_BACKFILL_QUEUE_URL=https://sqs.example.com/similarity.fifo
+AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT=https://sqs.example.com/next.fifo
 ```
 
 The shared `OpenSearchClient` uses refreshable assumed-role credentials when an
@@ -313,28 +312,21 @@ doc2vec_completed/opensearch/
 tests/opensearch/            OpenSearch flow tests
 ```
 
-## Run and test
+## Run locally
 
-Run from the `collegue-doc2vec` project root using the Python environment that
-contains the service dependencies:
-
-```bash
-python -m doc2vec_completed.opensearch.main
-pytest tests/opensearch -q
-ruff check doc2vec_completed/opensearch tests/opensearch
-```
-
-The unit tests replace PostgreSQL, OpenSearch, and SQS only at their external
-boundaries. They cover routing and all four handler flows, including transaction
-rollback, retries, alias selection, saved-vector reuse, missing sentence keys,
-short training sentences, refresh behavior, and source-message deletion.
-
-## Portable project copy
-
-`generate_project.py` contains the portable project. Run it from any folder:
+Running the Python worker locally is faster than rebuilding the application
+container after every code change. The configured source and next SQS queues
+must already exist.
 
 ```bash
-python3 generate_project.py /path/to/parent-folder
+make local
 ```
 
-It creates a new `collegue-doc2vec` folder containing the same source and tests.
+## Run tests
+
+Run the Doc2Vec OpenSearch tests:
+
+```bash
+make ostest
+```
+

@@ -387,9 +387,9 @@ class LiveHandler:
         "sent_by": "doc2vec", "success": true, "reason": ""}
         """
 
-        queue_url = self.config.state_machine_queue_url
+        queue_url = self.config.aws_sqs_send_event_queue_endpoint
         if not queue_url:
-            raise QueueSendError("State Machine SQS queue URL is not configured")
+            raise QueueSendError("AWS SQS send event queue endpoint is not configured")
 
         message: LiveNextQueueMessage = {
             "source": "P2",
