@@ -397,8 +397,9 @@ The service reads 30 source rows from `sentences_vector` at a time and uses a
 30-worker thread pool. Each worker handles one source sentence.
 
 The source vectors are loaded from the analysis-group catalog by
-`sentenceKey`. Vector values are read through `docvalue_fields` instead of the
-normal `_source`, which avoids expensive vector source loading.
+`sentenceKey`. Vector values are read as numeric arrays from
+`_source.sentenceContentVector`. IVF-SQ16 compresses the internal Faiss search
+representation but does not change the numeric vector stored in `_source`.
 
 ### Tracer classification
 

@@ -1,6 +1,3 @@
-import base64
-import struct
-
 import pytest
 from opensearchpy.exceptions import OpenSearchException
 
@@ -13,7 +10,7 @@ from similarity_completed.opensearch.opensearch_store import (
 )
 from similarity_completed.opensearch.utill.catalog import select_catalog_alias
 from similarity_completed.opensearch.utill.score import cosine_distance, cosine_similarity, minimum_opensearch_score
-from similarity_completed.opensearch.utill.vector import decode_vector
+from similarity_completed.opensearch.utill.vector import read_catalog_vector
 
 
 class Client:
@@ -30,10 +27,6 @@ class Client:
     def bulk(self, **values):
         self.bulks.append(values)
         return self.bulk_response
-
-
-def encoded_vector(values):
-    return base64.b64encode(struct.pack(f"<{len(values)}f", *values)).decode()
 
 
 def match_bucket(sentence_key, score):
@@ -64,10 +57,10 @@ def test_catalog_records_load_vectors_and_optional_classification(service_config
                                 "isNonMatcher": False,
                                 "isTracer": False,
                                 "isFormLanguage": False,
+                                "sentenceContentVector": [0.25, 0.75],
                             },
-                            "fields": {"sentenceContentVector": [encoded_vector([0.25, 0.75])]},
                         },
-                        {"_id": "missing-vector", "_source": {}, "fields": {}},
+                        {"_id": "missing-vector", "_source": {}},
                     ]
                 }
             }
@@ -199,8 +192,10 @@ def test_target_occurrences_searches_every_page_and_excludes_source_application(
 
 def test_invalid_vector_data_is_rejected(service_config):
     with pytest.raises(PermanentDataError):
-        decode_vector("not-base64", constants.VECTOR_DIMENSION)
+        read_catalog_vector("not-an-array", constants.VECTOR_DIMENSION)
     with pytest.raises(PermanentDataError):
-        decode_vector(encoded_vector([0.1]), constants.VECTOR_DIMENSION)
+        read_catalog_vector([0.1], constants.VECTOR_DIMENSION)
+    with pytest.raises(PermanentDataError):
+        read_catalog_vector([True] * constants.VECTOR_DIMENSION, constants.VECTOR_DIMENSION)
     with pytest.raises(PermanentDataError):
         TracerOpenSearchStore(Client()).search_tracer_classification_by_vector([0.1], "Asylee")

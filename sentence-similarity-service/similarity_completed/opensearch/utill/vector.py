@@ -1,32 +1,34 @@
-import base64
-import binascii
-import struct
+import math
 
 from similarity_completed.opensearch.errors import PermanentDataError
 
 
-def decode_vector(encoded_vector: str, vector_dimension: int) -> list[float]:
-    """Decode a Base64 OpenSearch doc-value vector into float32 values. The
-    decoded value must contain four bytes for every expected float.
+def read_catalog_vector(vector_value: object, vector_dimension: int) -> list[float]:
+    """Read a numeric vector returned in an OpenSearch document source.
 
-    Input: encoded_vector="AACAPwAAAL8=", vector_dimension=2
-    Output: [1.0, -0.5]
+    Input: vector_value=[0.25, -0.5], vector_dimension=2
+    Output: [0.25, -0.5]
 
-    Production Titan vectors use vector_dimension=512.
+    Production Titan vectors contain 512 finite numeric values. IVF-SQ16
+    compresses the internal search index, but the document source still
+    contains the numeric vector originally indexed.
 
     Raises:
-        PermanentDataError: If the value is invalid Base64 or has an invalid size.
+        PermanentDataError: If the value is not a finite numeric array with the
+            expected dimension.
     """
 
-    try:
-        vector_bytes = base64.b64decode(encoded_vector, validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise PermanentDataError("OpenSearch returned an invalid catalog vector") from error
-    # Titan returns float32 values, so a 512-dimension vector needs 2,048 bytes.
-    expected_bytes = vector_dimension * 4
-    if len(vector_bytes) != expected_bytes:
-        raise PermanentDataError(f"catalog vector has {len(vector_bytes)} bytes; expected {expected_bytes}")
-    return list(struct.unpack(f"<{vector_dimension}f", vector_bytes))
+    if not isinstance(vector_value, list):
+        raise PermanentDataError("catalog vector is not a numeric array")
+
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in vector_value):
+        raise PermanentDataError("catalog vector contains a non-numeric value")
+
+    vector = [float(value) for value in vector_value]
+    validate_vector(vector, vector_dimension)
+    if any(not math.isfinite(value) for value in vector):
+        raise PermanentDataError("catalog vector contains a non-finite value")
+    return vector
 
 
 def validate_vector(vector: list[float], vector_dimension: int) -> None:

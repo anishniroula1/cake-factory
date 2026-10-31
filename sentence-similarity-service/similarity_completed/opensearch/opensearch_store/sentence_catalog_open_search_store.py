@@ -6,7 +6,7 @@ from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import CatalogRecord, Classification
 from similarity_completed.opensearch.utill.classification import saved_classification
 from similarity_completed.opensearch.utill.score import cosine_distance, minimum_opensearch_score
-from similarity_completed.opensearch.utill.vector import decode_vector, validate_vector
+from similarity_completed.opensearch.utill.vector import read_catalog_vector, validate_vector
 
 
 class SentenceCatalogOpenSearchStore:
@@ -18,15 +18,15 @@ class SentenceCatalogOpenSearchStore:
     def load_catalog_records_by_sentence_keys(
         self, catalog_alias: str, sentence_keys: list[str]
     ) -> dict[str, CatalogRecord]:
-        """Load vectors and classifications for unique sentence keys. Binary doc
-        values avoid loading vectors from _source, and duplicate keys are read once.
+        """Load vectors and classifications for unique sentence keys. The vector
+        is read as a numeric array from the catalog document source.
 
         Input: catalog_alias="sentence_semantic_catalog_asylee",
         sentence_keys=["abc123", "def456", "abc123"]
         Output: {"abc123": {"sentence_key": "abc123", "word_count": 8,
         "vector": [...], "classification": None}, "def456": {...}}
 
-        Duplicate keys are loaded once. Documents without vector doc values are
+        Duplicate keys are loaded once. Documents without a source vector are
         omitted from the returned mapping.
         """
 
@@ -39,28 +39,35 @@ class SentenceCatalogOpenSearchStore:
             if not sentence_key_batch:
                 continue
 
-            # A search can return the vector through binary doc values. _mget
-            # would instead load the larger JSON vector from _source.
+            # IVF-SQ16 changes the internal search representation, not the
+            # numeric vector kept in the document source. Read that array
+            # directly so this flow does not depend on binary doc-value support.
             search_response = self.client.search(
                 index=catalog_alias,
                 body={
                     "size": len(sentence_key_batch),
                     "track_total_hits": False,
-                    "_source": ["sentenceKey", "wordCount", "isNonMatcher", "isTracer", "isFormLanguage"],
-                    "docvalue_fields": [{"field": constants.VECTOR_FIELD, "format": "binary"}],
+                    "_source": [
+                        "sentenceKey",
+                        "wordCount",
+                        "isNonMatcher",
+                        "isTracer",
+                        "isFormLanguage",
+                        constants.VECTOR_FIELD,
+                    ],
                     "query": {"ids": {"values": sentence_key_batch}},
                 },
             )
             for catalog_hit in search_response["hits"]["hits"]:
                 catalog_source = catalog_hit.get("_source", {})
-                encoded_vector_values = catalog_hit.get("fields", {}).get(constants.VECTOR_FIELD)
-                if not encoded_vector_values:
+                vector_value = catalog_source.get(constants.VECTOR_FIELD)
+                if vector_value is None:
                     continue
                 sentence_key = catalog_source["sentenceKey"]
                 catalog_records[sentence_key] = {
                     "sentence_key": sentence_key,
                     "word_count": int(catalog_source["wordCount"]),
-                    "vector": decode_vector(encoded_vector_values[0], constants.VECTOR_DIMENSION),
+                    "vector": read_catalog_vector(vector_value, constants.VECTOR_DIMENSION),
                     "classification": saved_classification(catalog_source),
                 }
         return catalog_records

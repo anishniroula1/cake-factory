@@ -1,5 +1,3 @@
-import base64
-import struct
 from threading import Lock
 from unittest.mock import MagicMock, create_autospec
 
@@ -78,12 +76,6 @@ class SqsFake:
         return True
 
 
-def _encoded_vector(values):
-    """Encode vectors exactly like OpenSearch binary doc values."""
-
-    return base64.b64encode(struct.pack(f"<{len(values)}f", *values)).decode()
-
-
 class OpenSearchResponseRouter:
     """Return OpenSearch-shaped JSON while the real stores build each query."""
 
@@ -153,8 +145,8 @@ class OpenSearchResponseRouter:
                         "isNonMatcher": classification["is_non_matcher"],
                         "isTracer": classification["is_tracer"],
                         "isFormLanguage": classification["is_form_language"],
+                        "sentenceContentVector": [0.1, 0.2],
                     },
-                    "fields": {"sentenceContentVector": [_encoded_vector([0.1, 0.2])]},
                 }
             )
         return {"hits": {"hits": hits}}
