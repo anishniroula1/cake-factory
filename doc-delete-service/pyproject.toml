@@ -26,12 +26,12 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["doc_delete_completed*", "ta_db_connection*", "ta_utils*"]
+include = ["doc_delete_job*", "ta_db_connection*", "ta_utils*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/opensearch"]
 pythonpath = ["."]
-addopts = "--cov=doc_delete_completed.opensearch --cov-report=term-missing --cov-fail-under=90"
+addopts = "--cov=doc_delete_job.opensearch --cov-report=term-missing --cov-fail-under=90"
 
 [tool.ruff]
 line-length = 120

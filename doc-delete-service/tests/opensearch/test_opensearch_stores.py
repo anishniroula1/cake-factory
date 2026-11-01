@@ -4,9 +4,7 @@ import pytest
 from opensearchpy.exceptions import OpenSearchException
 
 from doc_delete_job.opensearch.errors import PermanentDataError
-from doc_delete_job.opensearch.opensearch_store.sentence_catalog_open_search_store import (
-    SentenceCatalogOpenSearchStore,
-)
+from doc_delete_job.opensearch.opensearch_store.sentence_catalog_open_search_store import SentenceCatalogOpenSearchStore
 from doc_delete_job.opensearch.opensearch_store.sentence_occurrence_open_search_store import (
     SentenceOccurrenceOpenSearchStore,
 )

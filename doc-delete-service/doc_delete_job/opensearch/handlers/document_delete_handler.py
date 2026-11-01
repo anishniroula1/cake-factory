@@ -1,19 +1,12 @@
 from time import perf_counter
 
 from doc_delete_job.opensearch import constants
-from doc_delete_job.opensearch.contracts import (
-    DatabaseDeletionResult,
-    DeleteResult,
-    OpenSearchDeletionResult,
-    TspId,
-)
+from doc_delete_job.opensearch.contracts import DatabaseDeletionResult, DeleteResult, OpenSearchDeletionResult, TspId
 from doc_delete_job.opensearch.db_store.embeddings_db_store import EmbeddingsDBStore
 from doc_delete_job.opensearch.db_store.sentence_vector_db_store import SentenceVectorDBStore
 from doc_delete_job.opensearch.db_store.titan_matches_db_store import TitanMatchesDBStore
 from doc_delete_job.opensearch.errors import QueueSendError
-from doc_delete_job.opensearch.opensearch_store.sentence_catalog_open_search_store import (
-    SentenceCatalogOpenSearchStore,
-)
+from doc_delete_job.opensearch.opensearch_store.sentence_catalog_open_search_store import SentenceCatalogOpenSearchStore
 from doc_delete_job.opensearch.opensearch_store.sentence_occurrence_open_search_store import (
     SentenceOccurrenceOpenSearchStore,
 )

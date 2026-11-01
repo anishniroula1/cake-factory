@@ -8,9 +8,7 @@ from doc_delete_job.opensearch.db_store.text_similarity_input_db_store import Te
 from doc_delete_job.opensearch.db_store.titan_matches_db_store import TitanMatchesDBStore
 from doc_delete_job.opensearch.document_delete_job import DocumentDeleteJob
 from doc_delete_job.opensearch.handlers.document_delete_handler import DocumentDeleteHandler
-from doc_delete_job.opensearch.opensearch_store.sentence_catalog_open_search_store import (
-    SentenceCatalogOpenSearchStore,
-)
+from doc_delete_job.opensearch.opensearch_store.sentence_catalog_open_search_store import SentenceCatalogOpenSearchStore
 from doc_delete_job.opensearch.opensearch_store.sentence_occurrence_open_search_store import (
     SentenceOccurrenceOpenSearchStore,
 )

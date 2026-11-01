@@ -107,8 +107,8 @@ def test_dependencies_build_resources_and_close_pool():
     database = SimpleNamespace(engine=Mock())
     sqs = Mock()
     with (
-        patch("doc_delete_completed.opensearch.dependencies.OpenSearchClient.create_client", return_value=Mock()),
-        patch("doc_delete_completed.opensearch.dependencies.AwsSQS", return_value=sqs),
+        patch("doc_delete_job.opensearch.dependencies.OpenSearchClient.create_client", return_value=Mock()),
+        patch("doc_delete_job.opensearch.dependencies.AwsSQS", return_value=sqs),
     ):
         dependencies = Dependencies(LoggerFake(), database, service_config())
 
@@ -123,7 +123,7 @@ def test_dependencies_pass_dynamic_database_configuration():
     dependencies = Dependencies.__new__(Dependencies)
     dependencies.config = config
 
-    with patch("doc_delete_completed.opensearch.dependencies.DatabaseConnection") as database_connection:
+    with patch("doc_delete_job.opensearch.dependencies.DatabaseConnection") as database_connection:
         dependencies._create_database_connection()
 
     assert database_connection.call_args.kwargs["use_dynamic_credentials"] is True

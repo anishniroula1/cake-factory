@@ -49,7 +49,7 @@ def test_retry_reports_success_and_exhaustion(monkeypatch):
             raise OperationalError("statement", {}, Exception("temporary"))
         return 10
 
-    monkeypatch.setattr("doc_delete_completed.opensearch.retry.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("doc_delete_job.opensearch.retry.time.sleep", lambda seconds: None)
     logger = LoggerFake()
     assert retry_operation("operation", operation, wait_seconds=5, custom_logger=logger) == 10
     assert "statement" not in str(logger.messages)
