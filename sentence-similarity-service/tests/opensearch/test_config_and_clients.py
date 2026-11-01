@@ -22,7 +22,8 @@ def required_environment(monkeypatch):
     monkeypatch.setenv("OPENSEARCH_HOST", "https://search.example.com/")
     monkeypatch.setenv("AWS_LOCAL_ENDPOINT_URL", "http://localhost:4566")
     monkeypatch.setenv("AWS_RECEIVE_SQS_ENDPOINT", "source.fifo")
-    monkeypatch.setenv("AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT", "next.fifo")
+    monkeypatch.setenv("AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT", "wrong-old-name.fifo")
+    monkeypatch.setenv("AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT", "next.fifo")
     # These old environment values must not override the service constants.
     monkeypatch.setenv("OPENSEARCH_OCCURRENCE_ALIAS", "ignored-occurrence")
     monkeypatch.setenv("MATCH_THRESHOLD", "10")

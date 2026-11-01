@@ -2,11 +2,13 @@ from collections.abc import Callable
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import MatchTarget
-from similarity_completed.opensearch.retry import retry_operation
+from similarity_completed.opensearch.errors import PermanentDataError
+from similarity_completed.opensearch.retry import retry_operation, safe_error_summary
 from ta_db_connection.atatables import SentencesVector
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -77,15 +79,25 @@ class TitanMatchesDBStore:
         Output: 500, the count reported by the PostgreSQL function.
         """
 
-        with self.session_factory() as session:
-            processed_relationship_count = session.execute(
-                SAVE_MATCHES,
-                {
-                    "source_global_id": source_sentence.global_id,
-                    "source_tsp_id": source_sentence.tsp_id,
-                    "source_application_id": source_sentence.tsp.application_id,
-                    "matches": match_batch,
-                },
-            ).scalar_one()
-            session.commit()
-            return int(processed_relationship_count)
+        try:
+            with self.session_factory() as session:
+                processed_relationship_count = session.execute(
+                    SAVE_MATCHES,
+                    {
+                        "source_global_id": source_sentence.global_id,
+                        "source_tsp_id": source_sentence.tsp_id,
+                        "source_application_id": source_sentence.tsp.application_id,
+                        "matches": match_batch,
+                    },
+                ).scalar_one()
+                session.commit()
+                return int(processed_relationship_count)
+        except IntegrityError as error:
+            # A constraint failure is a data problem, not a transient database
+            # outage. Keep PostgreSQL's missing-key/constraint explanation, but
+            # do not retain SQLAlchemy's statement and matches parameter in the
+            # displayed exception chain.
+            raise PermanentDataError(
+                f"Titan match write rejected for source global_id={source_sentence.global_id}: "
+                f"{safe_error_summary(error)}"
+            ) from None

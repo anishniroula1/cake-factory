@@ -34,5 +34,6 @@ class DatabaseConnection:
             pool_recycle=1800,
             max_overflow=max_overflow,
             future=True,
+            hide_parameters=True,
             connect_args={"application_name": application_name},
         )

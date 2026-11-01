@@ -18,7 +18,7 @@ services:
     environment:
       AWS_LOCAL_ENDPOINT_URL: http://localstack:4566
       AWS_RECEIVE_SQS_ENDPOINT: http://localstack:4566/000000000000/sentence-similarity-local.fifo
-      AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT: http://localstack:4566/000000000000/case-similarity-local.fifo
+      AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT: http://localstack:4566/000000000000/case-similarity-local.fifo
       VAULT_YAML_PATH: /run/secrets/vault-secrets.yaml
     volumes:
       - ./localVaultSecret.yaml:/run/secrets/vault-secrets.yaml:ro

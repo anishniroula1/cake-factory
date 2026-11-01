@@ -12,15 +12,37 @@ from ta_utils.logger.CustomLogger import CustomLogger
 RETRYABLE_ERRORS = (BotoCoreError, OpenSearchException, SQLAlchemyError, TimeoutError, ConnectionError, QueueSendError)
 
 
+def _single_line(value: object, limit: int = 500) -> str:
+    """Normalize a diagnostic value without including an exception traceback."""
+
+    return " ".join(str(value).split())[:limit]
+
+
 def safe_error_summary(error: object) -> str:
-    """Return useful error details without SQL, parameters, or response bodies."""
+    """Return useful error details without SQL, parameters, or response bodies.
+
+    SQLAlchemy includes the complete statement and bound parameters in its
+    exception string. PostgreSQL exposes the actual failure separately through
+    the driver's diagnostic object, so database summaries use only its primary
+    message and detail.
+    """
 
     error_name = type(error).__name__
     if getattr(error, "safe_for_logging", False):
         return f"{error_name}: {str(error)[:500]}"
     original_error = getattr(error, "orig", None)
     if original_error is not None:
-        return f"{error_name} (database_error={type(original_error).__name__})"
+        summary = f"{error_name} (database_error={type(original_error).__name__})"
+        diagnostic = getattr(original_error, "diag", None)
+        diagnostic_messages = []
+        if diagnostic is not None:
+            for attribute in ("message_primary", "message_detail"):
+                value = getattr(diagnostic, attribute, None)
+                if value:
+                    diagnostic_messages.append(_single_line(value))
+        if diagnostic_messages:
+            summary = f"{summary}: {'; '.join(diagnostic_messages)}"
+        return summary[:1000]
     return error_name
 
 
@@ -66,7 +88,7 @@ def retry_operation[Result](
             if attempt == max_attempts:
                 raise OperationFailedError(
                     f"{label} failed after {max_attempts} attempts: {error_summary}"
-                ) from error
+                ) from None
             custom_logger.warning(
                 f"{label} attempt {attempt} failed: {error_summary}; retrying in {wait_seconds} seconds"
             )
