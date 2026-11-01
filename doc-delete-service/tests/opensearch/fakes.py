@@ -1,4 +1,4 @@
-from doc_delete_job.opensearch.contracts import DocumentDeletionContext, TitanMatchDeletionResult
+from types import SimpleNamespace
 
 
 class LoggerFake:
@@ -30,11 +30,11 @@ class OccurrenceStoreFake:
     def load_document_occurrences(self, tsp_id):
         return self.occurrence_records
 
-    def delete_occurrences_by_global_id(self, global_ids):
+    def delete_occurrences_by_tsp_id(self, tsp_id):
         if self.events is not None:
             self.events.append("delete occurrences")
-        self.deleted.extend(global_ids)
-        return len(global_ids)
+        self.deleted.append(tsp_id)
+        return len(self.occurrence_records)
 
     def find_sentence_keys_used_by_other_documents(self, sentence_keys, analysis_group, excluded_tsp_id):
         self.reference_calls.append((sentence_keys, analysis_group, excluded_tsp_id))
@@ -54,50 +54,62 @@ class CatalogStoreFake:
 
 
 class SentenceVectorDBStoreFake:
-    def __init__(self) -> None:
-        self.context = DocumentDeletionContext(10, "Asylee", [1, 2], ["key-a", "key-b"])
+    def __init__(self, events=None) -> None:
+        self.context = SimpleNamespace(global_ids=[1, 2])
         self.loaded = []
         self.deleted = []
+        self.events = events
 
     def load_document_sentence_context(self, tsp_id):
         self.loaded.append(tsp_id)
         return self.context
 
     def delete_document_sentence_records(self, tsp_id):
+        if self.events is not None:
+            self.events.append("delete sentence vectors")
         self.deleted.append(tsp_id)
         return 2
 
 
 class EmbeddingsDBStoreFake:
-    def __init__(self) -> None:
+    def __init__(self, events=None) -> None:
         self.deleted = []
+        self.events = events
 
     def delete_sentence_embeddings(self, global_ids):
+        if self.events is not None:
+            self.events.append("delete embeddings")
         self.deleted.extend(global_ids)
         return len(global_ids)
 
 
 class TitanMatchesDBStoreFake:
-    def __init__(self) -> None:
+    def __init__(self, events=None) -> None:
         self.deleted = []
+        self.events = events
 
     def delete_bidirectional_document_matches(self, tsp_id):
+        if self.events is not None:
+            self.events.append("delete Titan matches")
         self.deleted.append(tsp_id)
-        return TitanMatchDeletionResult(2, 3, 4, 1)
+        return SimpleNamespace(deleted_match_bucket_count=3, updated_reverse_bucket_count=4)
 
 
 class AwsSqsFake:
-    def __init__(self, messages=None, send_result=True, delete_result=True) -> None:
+    def __init__(self, messages=None, send_result=True, delete_result=True, events=None) -> None:
         self.messages = messages or []
         self.send_result = send_result
         self.delete_result = delete_result
         self.sent = []
         self.deleted = []
+        self.events = events
 
     def listen_sqs_message(self):
         return self.messages
 
     def send_sqs_message(self, **values):
+        if self.events is not None:
+            self.events.append("send SQS")
         self.sent.append(values)
         return self.send_result
 
@@ -119,10 +131,19 @@ class HandlerFake:
 
 
 class TextSimilarityInputDBStoreFake:
-    def __init__(self, pages=None) -> None:
+    def __init__(self, pages=None, events=None, updated_count=1) -> None:
         self.pages = list(pages or [[]])
         self.calls = []
+        self.state_updates = []
+        self.events = events
+        self.updated_count = updated_count
 
     def load_ready_for_deletion_tsp_ids(self, after_tsp_id, batch_size):
         self.calls.append((after_tsp_id, batch_size))
         return self.pages.pop(0)
+
+    def update_document_state(self, tsp_id, document_state):
+        if self.events is not None:
+            self.events.append(f"state={document_state}")
+        self.state_updates.append((tsp_id, document_state))
+        return self.updated_count

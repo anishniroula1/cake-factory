@@ -20,9 +20,9 @@ def config() -> Config:
         environment="local",
         aws_region="us-east-1",
         aws_local_endpoint_url="",
-        opensearch_iam_access_role="",
+        opensearch_iam_access_role="arn:aws:iam::123456789012:role/opensearch",
         opensearch_host="search.example.com",
-        sent_sqs_endpoint="https://sqs.example/next-local.fifo",
+        send_sqs_endpoint="https://sqs.example/next-local.fifo",
         database_delete_enabled=True,
     )
 
@@ -34,6 +34,10 @@ def test_config_normalizes_host_and_validates_required_values():
     config().validate()
     with pytest.raises(ValueError, match="OPENSEARCH_HOST"):
         replace(config(), opensearch_host="").validate()
+    with pytest.raises(ValueError, match="OPENSEARCH_IAM_ACCESS_ROLE"):
+        replace(config(), opensearch_iam_access_role="").validate()
+    with pytest.raises(ValueError, match="AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT"):
+        replace(config(), send_sqs_endpoint="").validate()
     with pytest.raises(ValueError, match="VAULT_YAML_PATH"):
         replace(config(), environment="prod").validate()
     with pytest.raises(ValueError, match="must be an ARN"):

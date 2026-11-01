@@ -2,6 +2,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from doc_delete_job.opensearch import constants
 from doc_delete_job.opensearch.config import Config
 from doc_delete_job.opensearch.db_store.embeddings_db_store import EmbeddingsDBStore
 from doc_delete_job.opensearch.db_store.sentence_vector_db_store import SentenceVectorDBStore
@@ -25,7 +26,7 @@ def service_config(**changes) -> Config:
         aws_local_endpoint_url="",
         opensearch_iam_access_role="",
         opensearch_host="search.example.com",
-        sent_sqs_endpoint="https://sqs.example/next-local.fifo",
+        send_sqs_endpoint="https://sqs.example/next-local.fifo",
         database_delete_enabled=True,
     )
     return replace(values, **changes)
@@ -50,16 +51,14 @@ def test_database_store_loads_context_and_deletes_owned_rows():
     context_session = session_with_results(
         result(
             all=[
-                SimpleNamespace(global_id=1, sentence_key="key-a", analysis_group="Asylee"),
-                SimpleNamespace(global_id=2, sentence_key=None, analysis_group="Asylee"),
+                SimpleNamespace(global_id=1),
+                SimpleNamespace(global_id=2),
             ]
         )
     )
     function_row = SimpleNamespace(
-        source_global_id_count=2,
         deleted_match_bucket_count=3,
         updated_reverse_bucket_count=4,
-        deleted_empty_bucket_count=1,
     )
     match_session = session_with_results(result(one=function_row))
     embedding_session = session_with_results(SimpleNamespace(rowcount=2))
@@ -71,7 +70,7 @@ def test_database_store_loads_context_and_deletes_owned_rows():
     deleted_embeddings = EmbeddingsDBStore(lambda: embedding_session).delete_sentence_embeddings(context.global_ids)
     deleted_sentences = SentenceVectorDBStore(lambda: sentence_delete_session).delete_document_sentence_records(10)
 
-    assert (context.global_ids, context.sentence_keys) == ([1, 2], ["key-a"])
+    assert context.global_ids == [1, 2]
     assert (deleted_matches.deleted_match_bucket_count, deleted_matches.updated_reverse_bucket_count) == (3, 4)
     assert (deleted_embeddings, deleted_sentences) == (2, 2)
     match_session.commit.assert_called_once()
@@ -82,18 +81,24 @@ def test_database_store_returns_empty_context_when_document_has_no_sentences():
 
     context = store.load_document_sentence_context(10)
 
-    assert (context.analysis_group, context.global_ids, context.sentence_keys) == (None, [], [])
+    assert context.global_ids == []
 
 
 def test_text_similarity_input_store_loads_ready_documents_in_order():
-    session = Mock()
-    session.__enter__ = Mock(return_value=session)
-    session.__exit__ = Mock(return_value=False)
-    session.scalars.return_value = [101, 102]
+    load_session = Mock()
+    load_session.__enter__ = Mock(return_value=load_session)
+    load_session.__exit__ = Mock(return_value=False)
+    load_session.scalars.return_value = [101, 102]
+    update_session = session_with_results(SimpleNamespace(rowcount=1))
+    sessions = iter([load_session, update_session])
+    store = TextSimilarityInputDBStore(lambda: next(sessions))
 
-    tsp_ids = TextSimilarityInputDBStore(lambda: session).load_ready_for_deletion_tsp_ids(100, 200)
+    tsp_ids = store.load_ready_for_deletion_tsp_ids(100, 200)
+    updated_count = store.update_document_state(101, "DOC_DELETED")
 
     assert tsp_ids == [101, 102]
+    assert updated_count == 1
+    update_session.commit.assert_called_once()
 
 
 def test_embeddings_store_skips_database_when_there_are_no_global_ids():
@@ -106,12 +111,22 @@ def test_embeddings_store_skips_database_when_there_are_no_global_ids():
 def test_dependencies_build_resources_and_close_pool():
     database = SimpleNamespace(engine=Mock())
     sqs = Mock()
+    config = service_config(opensearch_iam_access_role="arn:aws:iam::123456789012:role/opensearch")
     with (
-        patch("doc_delete_job.opensearch.dependencies.OpenSearchClient.create_client", return_value=Mock()),
+        patch("doc_delete_job.opensearch.dependencies.OpenSearchClient") as open_search_client,
         patch("doc_delete_job.opensearch.dependencies.AwsSQS", return_value=sqs),
     ):
-        dependencies = Dependencies(LoggerFake(), database, service_config())
+        dependencies = Dependencies(LoggerFake(), database, config)
 
+    open_search_client.assert_called_once_with(
+        opensearch_host=config.opensearch_host,
+        opensearch_iam_access_role=config.opensearch_iam_access_role,
+        aws_region=config.aws_region,
+        opensearch_port=constants.OPENSEARCH_PORT,
+        opensearch_service=constants.OPENSEARCH_SERVICE,
+        role_session_name="docDeleteJobRole",
+    )
+    open_search_client.return_value.create_client.assert_called_once_with()
     assert dependencies.document_delete_handler.outbound_sqs is sqs
     assert dependencies.document_delete_job.document_delete_handler is dependencies.document_delete_handler
     dependencies.close()

@@ -14,29 +14,22 @@ class SentenceVectorDBStore:
         self.session_factory = session_factory
 
     def load_document_sentence_context(self, tsp_id: TspId) -> DocumentDeletionContext:
-        """Load the sentence identifiers required by the deletion flow.
+        """Load the sentence global IDs required for embedding deletion.
 
         Input: tsp_id=8205
-        Output: the document's analysis group, global IDs, and sentence keys.
+        Output: the document's global IDs.
         """
 
         with self.session_factory() as session:
             sentence_vector_records = session.execute(
-                select(SentencesVector.global_id, SentencesVector.sentence_key, SentencesVector.analysis_group)
+                select(SentencesVector.global_id)
                 .where(SentencesVector.tsp_id == tsp_id)
                 .order_by(SentencesVector.global_id)
             ).all()
             return DocumentDeletionContext(
-                tsp_id=tsp_id,
-                analysis_group=(str(sentence_vector_records[0].analysis_group) if sentence_vector_records else None),
                 global_ids=[
                     int(sentence_vector_record.global_id) for sentence_vector_record in sentence_vector_records
-                ],
-                sentence_keys=[
-                    str(sentence_vector_record.sentence_key)
-                    for sentence_vector_record in sentence_vector_records
-                    if sentence_vector_record.sentence_key
-                ],
+                ]
             )
 
     def delete_document_sentence_records(self, tsp_id: TspId) -> int:

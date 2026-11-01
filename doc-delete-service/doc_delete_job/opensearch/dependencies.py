@@ -13,7 +13,7 @@ from doc_delete_job.opensearch.opensearch_store.sentence_occurrence_open_search_
     SentenceOccurrenceOpenSearchStore,
 )
 from ta_db_connection.database_connection import DatabaseConnection
-from ta_utils.aws.opensearch.OpenSearchClient import OpenSearchClient
+from ta_utils.aws.opensearch.open_search_client import OpenSearchClient
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -37,9 +37,10 @@ class Dependencies:
             aws_region=self.config.aws_region,
             opensearch_port=constants.OPENSEARCH_PORT,
             opensearch_service=constants.OPENSEARCH_SERVICE,
+            role_session_name="docDeleteJobRole",
         ).create_client()
         self.outbound_sqs = AwsSQS(
-            queue_url=self.config.sent_sqs_endpoint,
+            queue_url=self.config.send_sqs_endpoint,
             aws_region=self.config.aws_region,
             aws_endpoint_url=self.config.aws_local_endpoint_url or None,
             logger=self.logger,
@@ -56,8 +57,9 @@ class Dependencies:
             sentence_vector_db_store,
             embeddings_db_store,
             titan_matches_db_store,
+            text_similarity_input_db_store,
             self.outbound_sqs,
-            self.config.sent_sqs_endpoint,
+            self.config.send_sqs_endpoint,
             self.logger,
             self.config.database_delete_enabled,
         )

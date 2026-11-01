@@ -1,11 +1,33 @@
 import json
 import time
 import uuid
+from typing import TypedDict
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-from doc_delete_job.opensearch.contracts import NextQueueMessage, RawSqsMessage, SqsMessage
+
+class SqsMessage(TypedDict, total=False):
+    tsp_id: int | str
+    source: str
+    sent_by: str
+    reason: str
+    MessageId: str
+    ReceiptHandle: str
+    message_receive_count: int
+
+
+class NextQueueMessage(TypedDict):
+    source: str
+    tsp_id: str
+    sent_by: str
+
+
+class RawSqsMessage(TypedDict, total=False):
+    Body: str
+    MessageId: str
+    ReceiptHandle: str
+    Attributes: dict[str, str]
 
 
 class AwsSQS:

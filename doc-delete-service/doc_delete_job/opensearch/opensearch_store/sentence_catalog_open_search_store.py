@@ -43,6 +43,8 @@ class SentenceCatalogOpenSearchStore:
             delete_actions: list[BulkDeleteAction] = [
                 {"delete": {"_index": catalog_alias, "_id": sentence_key}} for sentence_key in sentence_key_batch
             ]
+            # Wait for the refresh so later steps cannot see catalog vectors
+            # after this deletion has reported success.
             bulk_response = self.client.bulk(body=delete_actions, refresh="wait_for")
             self._raise_for_failed_bulk_deletes(bulk_response)
             deleted_catalog_count += len(sentence_key_batch)

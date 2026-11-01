@@ -51,8 +51,6 @@ class TitanMatchesDBStore:
             deletion_counts_record = session.execute(DELETE_TITAN_MATCHES, {"tsp_id": tsp_id}).one()
             session.commit()
             return TitanMatchDeletionResult(
-                source_global_id_count=int(deletion_counts_record.source_global_id_count),
                 deleted_match_bucket_count=int(deletion_counts_record.deleted_match_bucket_count),
                 updated_reverse_bucket_count=int(deletion_counts_record.updated_reverse_bucket_count),
-                deleted_empty_bucket_count=int(deletion_counts_record.deleted_empty_bucket_count),
             )

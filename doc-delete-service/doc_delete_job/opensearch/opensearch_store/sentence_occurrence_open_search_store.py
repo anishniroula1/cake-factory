@@ -1,7 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from opensearchpy.exceptions import OpenSearchException
 
 from doc_delete_job.opensearch import constants
-from doc_delete_job.opensearch.contracts import BulkDeleteAction, OccurrenceRecord, TspId
+from doc_delete_job.opensearch.contracts import OccurrenceRecord, TspId
 
 
 class SentenceOccurrenceOpenSearchStore:
@@ -14,8 +16,7 @@ class SentenceOccurrenceOpenSearchStore:
         """Load every occurrence belonging to one document.
 
         Input: tsp_id=8205
-        Output: records containing each global ID, sentence key, and analysis
-        group. The global ID is also the OpenSearch document ID.
+        Output: records containing each sentence key and analysis group.
 
         Search-after pagination is used because a document can contain more
         sentences than one OpenSearch response page.
@@ -27,7 +28,7 @@ class SentenceOccurrenceOpenSearchStore:
             search_body = {
                 "size": constants.OPENSEARCH_PAGE_SIZE,
                 "track_total_hits": False,
-                "_source": ["globalId", "sentenceKey", "analysisGroup"],
+                "_source": ["sentenceKey", "analysisGroup"],
                 "query": {"term": {"tspId": tsp_id}},
                 "sort": [{"globalId": {"order": "asc"}}],
             }
@@ -43,7 +44,6 @@ class SentenceOccurrenceOpenSearchStore:
                 occurrence_source = occurrence_hit["_source"]
                 occurrence_records.append(
                     {
-                        "global_id": int(occurrence_source["globalId"]),
                         "sentence_key": str(occurrence_source["sentenceKey"]),
                         "analysis_group": str(occurrence_source["analysisGroup"]),
                     }
@@ -53,26 +53,33 @@ class SentenceOccurrenceOpenSearchStore:
                 return occurrence_records
             search_after = occurrence_hits[-1]["sort"]
 
-    def delete_occurrences_by_global_id(self, global_ids: list[int]) -> int:
-        """Delete occurrence documents and wait until searches see the deletion.
+    def delete_occurrences_by_tsp_id(self, tsp_id: TspId) -> int:
+        """Delete every occurrence owned by one tsp_id in one operation.
 
-        Input: global_ids=[100, 101]
+        Input: tsp_id=8205
         Output: 2
 
-        Waiting for refresh makes the completed delete visible immediately.
+        Occurrence ownership is document-based, so delete-by-query is used
+        instead of creating one bulk delete action per globalId. Refresh makes
+        the completed deletion visible to the following services immediately.
         """
 
-        deleted_occurrence_count = 0
-        for offset in range(0, len(global_ids), constants.OPENSEARCH_PAGE_SIZE):
-            global_id_batch = global_ids[offset : offset + constants.OPENSEARCH_PAGE_SIZE]
-            delete_actions: list[BulkDeleteAction] = [
-                {"delete": {"_index": constants.SENTENCE_OCCURRENCE_ALIAS, "_id": str(global_id)}}
-                for global_id in global_id_batch
-            ]
-            bulk_response = self.client.bulk(body=delete_actions, refresh="wait_for")
-            self._raise_for_failed_bulk_deletes(bulk_response, "occurrence")
-            deleted_occurrence_count += len(global_id_batch)
-        return deleted_occurrence_count
+        delete_response = self.client.delete_by_query(
+            index=constants.SENTENCE_OCCURRENCE_ALIAS,
+            body={"query": {"term": {"tspId": tsp_id}}},
+            conflicts="proceed",
+            refresh=True,
+            wait_for_completion=True,
+        )
+        failures = delete_response.get("failures", [])
+        version_conflict_count = int(delete_response.get("version_conflicts", 0))
+        timed_out = bool(delete_response.get("timed_out", False))
+        if failures or version_conflict_count or timed_out:
+            raise OpenSearchException(
+                "occurrence delete-by-query did not delete every matching document: "
+                f"shard_failures={len(failures)}, version_conflicts={version_conflict_count}, timed_out={timed_out}"
+            )
+        return int(delete_response.get("deleted", 0))
 
     def find_sentence_keys_used_by_other_documents(
         self, sentence_keys: list[str], analysis_group: str, excluded_tsp_id: TspId
@@ -88,66 +95,62 @@ class SentenceOccurrenceOpenSearchStore:
         kept until catalog cleanup succeeds.
         """
 
-        shared_sentence_keys: set[str] = set()
         unique_sentence_keys = list(dict.fromkeys(sentence_keys))
-        for offset in range(0, len(unique_sentence_keys), constants.OPENSEARCH_PAGE_SIZE):
-            sentence_key_batch = unique_sentence_keys[offset : offset + constants.OPENSEARCH_PAGE_SIZE]
-            if not sentence_key_batch:
-                continue
+        if not unique_sentence_keys:
+            return set()
 
-            # Exclude the document being deleted, then return only the unique
-            # sentence keys that are still used by another occurrence.
-            search_response = self.client.search(
-                index=constants.SENTENCE_OCCURRENCE_ALIAS,
-                body={
-                    "size": 0,
-                    "track_total_hits": False,
-                    "query": {
-                        "bool": {
-                            "filter": [
-                                {"terms": {"sentenceKey": sentence_key_batch}},
-                                {"term": {"analysisGroup": analysis_group}},
-                            ],
-                            "must_not": [{"term": {"tspId": excluded_tsp_id}}],
-                        }
-                    },
-                    "aggs": {
-                        "remaining_keys": {
-                            # The aggregation returns the keys without loading
-                            # every matching occurrence document into Python.
-                            "composite": {
-                                "size": len(sentence_key_batch),
-                                "sources": [{"sentenceKey": {"terms": {"field": "sentenceKey"}}}],
-                            }
-                        }
-                    },
-                },
+        worker_count = min(constants.CATALOG_REFERENCE_SEARCH_WORKERS, len(unique_sentence_keys))
+        # Spread keys across at most 30 msearch requests. Each response still
+        # maps one-to-one to its key, so shared and orphaned keys cannot mix.
+        sentence_key_batches = [unique_sentence_keys[offset::worker_count] for offset in range(worker_count)]
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="catalog-reference") as executor:
+            shared_key_batches = executor.map(
+                lambda sentence_key_batch: self._find_shared_sentence_keys_batch(
+                    sentence_key_batch, analysis_group, excluded_tsp_id
+                ),
+                sentence_key_batches,
             )
-            sentence_key_buckets = search_response.get("aggregations", {}).get("remaining_keys", {}).get("buckets", [])
-            shared_sentence_keys.update(
-                str(sentence_key_bucket["key"]["sentenceKey"]) for sentence_key_bucket in sentence_key_buckets
-            )
-        return shared_sentence_keys
+        return set().union(*shared_key_batches)
 
-    @staticmethod
-    def _raise_for_failed_bulk_deletes(bulk_response: dict, operation: str) -> None:
-        """Raise one useful error when a bulk request contains failed items."""
+    def _find_shared_sentence_keys_batch(
+        self, sentence_keys: list[str], analysis_group: str, excluded_tsp_id: TspId
+    ) -> set[str]:
+        """Use one msearch call to test whether each key has another owner."""
 
-        if not bulk_response.get("errors"):
-            return
-        failed_deletes = []
-        for bulk_item in bulk_response.get("items", []):
-            delete_details = bulk_item.get("delete", {})
-            if delete_details.get("error"):
-                failed_deletes.append(
+        msearch_body = []
+        for sentence_key in sentence_keys:
+            msearch_body.extend(
+                [
+                    {},
                     {
-                        "id": delete_details.get("_id"),
-                        "status": delete_details.get("status"),
-                        "error": delete_details.get("error"),
-                    }
-                )
-        if not failed_deletes:
-            return
-        raise OpenSearchException(
-            f"{operation} bulk deletion failed for {len(failed_deletes)} item(s): {failed_deletes[:10]}"
-        )
+                        "size": 1,
+                        "_source": False,
+                        "track_total_hits": False,
+                        "terminate_after": 1,
+                        "query": {
+                            "bool": {
+                                "filter": [
+                                    {"term": {"sentenceKey": sentence_key}},
+                                    {"term": {"analysisGroup": analysis_group}},
+                                ],
+                                "must_not": [{"term": {"tspId": excluded_tsp_id}}],
+                            }
+                        },
+                    },
+                ]
+            )
+
+        msearch_response = self.client.msearch(index=constants.SENTENCE_OCCURRENCE_ALIAS, body=msearch_body)
+        search_responses = msearch_response.get("responses", [])
+        if len(search_responses) != len(sentence_keys):
+            raise OpenSearchException(
+                f"occurrence msearch returned {len(search_responses)} response(s) for {len(sentence_keys)} key(s)"
+            )
+
+        shared_sentence_keys = set()
+        for sentence_key, search_response in zip(sentence_keys, search_responses, strict=True):
+            if search_response.get("error"):
+                raise OpenSearchException(f"occurrence msearch failed while checking sentenceKey={sentence_key}")
+            if search_response.get("hits", {}).get("hits", []):
+                shared_sentence_keys.add(sentence_key)
+        return shared_sentence_keys
