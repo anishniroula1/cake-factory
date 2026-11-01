@@ -92,7 +92,7 @@ class TitanMatchesDBStoreFake:
         if self.events is not None:
             self.events.append("delete Titan matches")
         self.deleted.append(tsp_id)
-        return SimpleNamespace(deleted_match_bucket_count=3, updated_reverse_bucket_count=4)
+        return SimpleNamespace(deleted_match_bucket_count=3)
 
 
 class AwsSqsFake:
@@ -127,7 +127,14 @@ class HandlerFake:
         self.calls.append(tsp_id)
         if self.failure:
             raise self.failure
-        return {"next_message_sent": True}
+        return {
+            "tsp_id": tsp_id,
+            "occurrence_count": 0,
+            "catalog_count": 0,
+            "deleted_match_bucket_count": 0,
+            "deleted_embedding_count": 0,
+            "deleted_sentence_count": 0,
+        }
 
 
 class TextSimilarityInputDBStoreFake:

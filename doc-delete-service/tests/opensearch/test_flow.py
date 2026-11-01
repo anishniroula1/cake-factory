@@ -1,5 +1,4 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 
@@ -73,13 +72,9 @@ def test_document_deletion_runs_the_complete_flow():
         "tsp_id": 10,
         "occurrence_count": 2,
         "catalog_count": 1,
-        "shared_catalog_count": 1,
         "deleted_match_bucket_count": 3,
-        "updated_reverse_bucket_count": 4,
         "deleted_embedding_count": 2,
         "deleted_sentence_count": 2,
-        "database_delete_enabled": True,
-        "next_message_sent": True,
     }
     assert occurrence_store.deleted == [10]
     assert catalog_store.deleted == [("Asylee", ["key-a"])]
@@ -139,8 +134,9 @@ def test_database_deletion_toggle_still_removes_titan_matches():
         database_delete_enabled=False,
     ).process_document_deletion(10)
 
-    assert deletion_result["database_delete_enabled"] is False
     assert deletion_result["deleted_match_bucket_count"] == 3
+    assert deletion_result["deleted_embedding_count"] == 0
+    assert deletion_result["deleted_sentence_count"] == 0
     assert (sentence_store.loaded, sentence_store.deleted, embeddings_store.deleted, titan_store.deleted) == (
         [],
         [],
@@ -197,12 +193,3 @@ def test_job_stops_on_failed_document(error):
         job.run()
 
     assert logger.generic_message is None
-
-
-def test_job_rejects_a_handler_result_without_next_message():
-    handler = HandlerFake()
-    handler.process_document_deletion = Mock(return_value={"next_message_sent": False})
-    job = DocumentDeleteJob(TextSimilarityInputDBStoreFake([[10]]), handler, LoggerFake())
-
-    with pytest.raises(OperationFailedError):
-        job.run()

@@ -58,7 +58,6 @@ def test_database_store_loads_context_and_deletes_owned_rows():
     )
     function_row = SimpleNamespace(
         deleted_match_bucket_count=3,
-        updated_reverse_bucket_count=4,
     )
     match_session = session_with_results(result(one=function_row))
     embedding_session = session_with_results(SimpleNamespace(rowcount=2))
@@ -71,7 +70,7 @@ def test_database_store_loads_context_and_deletes_owned_rows():
     deleted_sentences = SentenceVectorDBStore(lambda: sentence_delete_session).delete_document_sentence_records(10)
 
     assert context.global_ids == [1, 2]
-    assert (deleted_matches.deleted_match_bucket_count, deleted_matches.updated_reverse_bucket_count) == (3, 4)
+    assert deleted_matches.deleted_match_bucket_count == 3
     assert (deleted_embeddings, deleted_sentences) == (2, 2)
     match_session.commit.assert_called_once()
 

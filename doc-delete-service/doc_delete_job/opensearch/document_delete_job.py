@@ -60,9 +60,7 @@ class DocumentDeleteJob:
         self.logger.set_generic_message(f"tsp_id={tsp_id}")
         try:
             self.logger.info("Starting document deletion.")
-            deletion_result = self.document_delete_handler.process_document_deletion(tsp_id)
-            if not deletion_result.get("next_message_sent"):
-                raise OperationFailedError("document deletion did not send the next SQS message")
+            self.document_delete_handler.process_document_deletion(tsp_id)
             self.logger.info("Document deletion completed and sent the next SQS message.")
         except (OperationFailedError, PermanentDataError, QueueSendError) as error:
             self.logger.error(f"Document deletion stopped because of {safe_error_summary(error)}")

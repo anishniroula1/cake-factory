@@ -52,5 +52,4 @@ class TitanMatchesDBStore:
             session.commit()
             return TitanMatchDeletionResult(
                 deleted_match_bucket_count=int(deletion_counts_record.deleted_match_bucket_count),
-                updated_reverse_bucket_count=int(deletion_counts_record.updated_reverse_bucket_count),
             )

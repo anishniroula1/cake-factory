@@ -52,7 +52,7 @@ class DocumentDeleteHandler:
         """Delete OpenSearch and Titan data, then optionally delete legacy data.
 
         Input: tsp_id=8205
-        Output: deletion counts, toggle state, and next-message confirmation.
+        Output: the main deletion counts for the document.
 
         The next SQS message is sent only after every enabled deletion step
         finishes. A failure leaves the document state ready for the next job.
@@ -68,7 +68,6 @@ class DocumentDeleteHandler:
             legacy_deletion_result = self._delete_legacy_document_data(tsp_id)
             database_deletion_result = DatabaseDeletionResult(
                 deleted_match_bucket_count=titan_match_deletion_result.deleted_match_bucket_count,
-                updated_reverse_bucket_count=titan_match_deletion_result.updated_reverse_bucket_count,
                 deleted_embedding_count=legacy_deletion_result.deleted_embedding_count,
                 deleted_sentence_count=legacy_deletion_result.deleted_sentence_count,
             )
@@ -97,13 +96,9 @@ class DocumentDeleteHandler:
             "tsp_id": tsp_id,
             "occurrence_count": opensearch_deletion_result.occurrence_count,
             "catalog_count": opensearch_deletion_result.catalog_count,
-            "shared_catalog_count": opensearch_deletion_result.shared_catalog_count,
             "deleted_match_bucket_count": database_deletion_result.deleted_match_bucket_count,
-            "updated_reverse_bucket_count": database_deletion_result.updated_reverse_bucket_count,
             "deleted_embedding_count": database_deletion_result.deleted_embedding_count,
             "deleted_sentence_count": database_deletion_result.deleted_sentence_count,
-            "database_delete_enabled": self.database_delete_enabled,
-            "next_message_sent": True,
         }
 
     def _delete_document_from_opensearch(self, tsp_id: TspId) -> OpenSearchDeletionResult:
@@ -204,7 +199,6 @@ class DocumentDeleteHandler:
         return OpenSearchDeletionResult(
             occurrence_count=deleted_occurrence_count,
             catalog_count=deleted_catalog_count,
-            shared_catalog_count=len(shared_sentence_keys),
         )
 
     def _delete_titan_matches(self, tsp_id: TspId) -> DatabaseDeletionResult:
@@ -227,7 +221,6 @@ class DocumentDeleteHandler:
         )
         return DatabaseDeletionResult(
             deleted_match_bucket_count=deletion_result.deleted_match_bucket_count,
-            updated_reverse_bucket_count=deletion_result.updated_reverse_bucket_count,
         )
 
     def _delete_legacy_document_data(self, tsp_id: TspId) -> DatabaseDeletionResult:
