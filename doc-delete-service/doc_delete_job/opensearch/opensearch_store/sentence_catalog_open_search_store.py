@@ -1,8 +1,8 @@
 from opensearchpy.exceptions import OpenSearchException
 
-from doc_delete_completed.opensearch import constants
-from doc_delete_completed.opensearch.contracts import BulkDeleteAction
-from doc_delete_completed.opensearch.errors import PermanentDataError
+from doc_delete_job.opensearch import constants
+from doc_delete_job.opensearch.contracts import BulkDeleteAction
+from doc_delete_job.opensearch.errors import PermanentDataError
 
 
 class SentenceCatalogOpenSearchStore:

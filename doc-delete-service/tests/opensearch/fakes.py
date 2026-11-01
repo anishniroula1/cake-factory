@@ -1,4 +1,4 @@
-from doc_delete_completed.opensearch.contracts import DocumentDeletionContext, TitanMatchDeletionResult
+from doc_delete_job.opensearch.contracts import DocumentDeletionContext, TitanMatchDeletionResult
 
 
 class LoggerFake:

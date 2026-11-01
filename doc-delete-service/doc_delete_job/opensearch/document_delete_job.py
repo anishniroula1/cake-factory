@@ -1,8 +1,8 @@
-from doc_delete_completed.opensearch import constants
-from doc_delete_completed.opensearch.db_store.text_similarity_input_db_store import TextSimilarityInputDBStore
-from doc_delete_completed.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
-from doc_delete_completed.opensearch.handlers.document_delete_handler import DocumentDeleteHandler
-from doc_delete_completed.opensearch.retry import retry_operation, safe_error_summary
+from doc_delete_job.opensearch import constants
+from doc_delete_job.opensearch.db_store.text_similarity_input_db_store import TextSimilarityInputDBStore
+from doc_delete_job.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
+from doc_delete_job.opensearch.handlers.document_delete_handler import DocumentDeleteHandler
+from doc_delete_job.opensearch.retry import retry_operation, safe_error_summary
 from ta_utils.logger.CustomLogger import CustomLogger
 
 

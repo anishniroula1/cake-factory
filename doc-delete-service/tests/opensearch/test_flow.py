@@ -2,10 +2,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from doc_delete_completed.opensearch.contracts import DocumentDeletionContext
-from doc_delete_completed.opensearch.document_delete_job import DocumentDeleteJob
-from doc_delete_completed.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
-from doc_delete_completed.opensearch.handlers.document_delete_handler import DocumentDeleteHandler
+from doc_delete_job.opensearch.contracts import DocumentDeletionContext
+from doc_delete_job.opensearch.document_delete_job import DocumentDeleteJob
+from doc_delete_job.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
+from doc_delete_job.opensearch.handlers.document_delete_handler import DocumentDeleteHandler
 from tests.opensearch.fakes import (
     AwsSqsFake,
     CatalogStoreFake,

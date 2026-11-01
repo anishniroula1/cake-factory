@@ -3,7 +3,7 @@ from collections.abc import Callable
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from doc_delete_completed.opensearch.contracts import DocumentDeletionContext, TspId
+from doc_delete_job.opensearch.contracts import DocumentDeletionContext, TspId
 from ta_db_connection.atatables import SentencesVector
 
 

@@ -1,4 +1,4 @@
-from doc_delete_completed.opensearch.dependencies import Dependencies
+from doc_delete_job.opensearch.dependencies import Dependencies
 from ta_db_connection.database_connection import DatabaseConnection
 from ta_utils.logger.CustomLogger import CustomLogger
 

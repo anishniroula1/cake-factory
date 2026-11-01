@@ -1,17 +1,17 @@
 from sqlalchemy.orm import sessionmaker
 
-from doc_delete_completed.opensearch import constants
-from doc_delete_completed.opensearch.config import Config
-from doc_delete_completed.opensearch.db_store.embeddings_db_store import EmbeddingsDBStore
-from doc_delete_completed.opensearch.db_store.sentence_vector_db_store import SentenceVectorDBStore
-from doc_delete_completed.opensearch.db_store.text_similarity_input_db_store import TextSimilarityInputDBStore
-from doc_delete_completed.opensearch.db_store.titan_matches_db_store import TitanMatchesDBStore
-from doc_delete_completed.opensearch.document_delete_job import DocumentDeleteJob
-from doc_delete_completed.opensearch.handlers.document_delete_handler import DocumentDeleteHandler
-from doc_delete_completed.opensearch.opensearch_store.sentence_catalog_open_search_store import (
+from doc_delete_job.opensearch import constants
+from doc_delete_job.opensearch.config import Config
+from doc_delete_job.opensearch.db_store.embeddings_db_store import EmbeddingsDBStore
+from doc_delete_job.opensearch.db_store.sentence_vector_db_store import SentenceVectorDBStore
+from doc_delete_job.opensearch.db_store.text_similarity_input_db_store import TextSimilarityInputDBStore
+from doc_delete_job.opensearch.db_store.titan_matches_db_store import TitanMatchesDBStore
+from doc_delete_job.opensearch.document_delete_job import DocumentDeleteJob
+from doc_delete_job.opensearch.handlers.document_delete_handler import DocumentDeleteHandler
+from doc_delete_job.opensearch.opensearch_store.sentence_catalog_open_search_store import (
     SentenceCatalogOpenSearchStore,
 )
-from doc_delete_completed.opensearch.opensearch_store.sentence_occurrence_open_search_store import (
+from doc_delete_job.opensearch.opensearch_store.sentence_occurrence_open_search_store import (
     SentenceOccurrenceOpenSearchStore,
 )
 from ta_db_connection.database_connection import DatabaseConnection

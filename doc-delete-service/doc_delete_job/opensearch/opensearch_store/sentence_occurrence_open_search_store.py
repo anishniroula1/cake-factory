@@ -1,7 +1,7 @@
 from opensearchpy.exceptions import OpenSearchException
 
-from doc_delete_completed.opensearch import constants
-from doc_delete_completed.opensearch.contracts import BulkDeleteAction, OccurrenceRecord, TspId
+from doc_delete_job.opensearch import constants
+from doc_delete_job.opensearch.contracts import BulkDeleteAction, OccurrenceRecord, TspId
 
 
 class SentenceOccurrenceOpenSearchStore:

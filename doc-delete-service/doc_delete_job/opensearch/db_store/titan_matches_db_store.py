@@ -3,7 +3,7 @@ from collections.abc import Callable
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from doc_delete_completed.opensearch.contracts import TitanMatchDeletionResult, TspId
+from doc_delete_job.opensearch.contracts import TitanMatchDeletionResult, TspId
 
 # This calls the PostgreSQL function installed by DELETE_TITAN_MATCHES.sql.
 # The function finds every titan_matches row owned by the supplied tsp_id and

@@ -3,9 +3,9 @@ from dataclasses import replace
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from doc_delete_completed.opensearch.config import Config, _aws_hostname
-from doc_delete_completed.opensearch.errors import OperationFailedError, PermanentDataError
-from doc_delete_completed.opensearch.retry import retry_operation
+from doc_delete_job.opensearch.config import Config, _aws_hostname
+from doc_delete_job.opensearch.errors import OperationFailedError, PermanentDataError
+from doc_delete_job.opensearch.retry import retry_operation
 from tests.opensearch.fakes import LoggerFake
 
 

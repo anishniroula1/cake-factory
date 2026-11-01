@@ -2,13 +2,13 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from doc_delete_completed.opensearch.config import Config
-from doc_delete_completed.opensearch.db_store.embeddings_db_store import EmbeddingsDBStore
-from doc_delete_completed.opensearch.db_store.sentence_vector_db_store import SentenceVectorDBStore
-from doc_delete_completed.opensearch.db_store.text_similarity_input_db_store import TextSimilarityInputDBStore
-from doc_delete_completed.opensearch.db_store.titan_matches_db_store import TitanMatchesDBStore
-from doc_delete_completed.opensearch.dependencies import Dependencies
-from doc_delete_completed.opensearch.main import run_document_delete_job
+from doc_delete_job.opensearch.config import Config
+from doc_delete_job.opensearch.db_store.embeddings_db_store import EmbeddingsDBStore
+from doc_delete_job.opensearch.db_store.sentence_vector_db_store import SentenceVectorDBStore
+from doc_delete_job.opensearch.db_store.text_similarity_input_db_store import TextSimilarityInputDBStore
+from doc_delete_job.opensearch.db_store.titan_matches_db_store import TitanMatchesDBStore
+from doc_delete_job.opensearch.dependencies import Dependencies
+from doc_delete_job.opensearch.main import run_document_delete_job
 from tests.opensearch.fakes import LoggerFake
 
 

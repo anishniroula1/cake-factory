@@ -6,7 +6,7 @@ from botocore.exceptions import BotoCoreError
 from opensearchpy.exceptions import OpenSearchException
 from sqlalchemy.exc import SQLAlchemyError
 
-from doc_delete_completed.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
+from doc_delete_job.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
 from ta_utils.logger.CustomLogger import CustomLogger
 
 RETRYABLE_ERRORS = (BotoCoreError, OpenSearchException, SQLAlchemyError, TimeoutError, ConnectionError, QueueSendError)

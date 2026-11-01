@@ -5,7 +5,7 @@ import uuid
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-from doc_delete_completed.opensearch.contracts import NextQueueMessage, RawSqsMessage, SqsMessage
+from doc_delete_job.opensearch.contracts import NextQueueMessage, RawSqsMessage, SqsMessage
 
 
 class AwsSQS:
