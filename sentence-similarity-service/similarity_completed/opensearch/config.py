@@ -74,7 +74,7 @@ class Config:
             opensearch_host=_aws_hostname(os.getenv("OPENSEARCH_HOST", "").strip()),
             # SQS resources
             receive_sqs_endpoint=os.getenv("AWS_RECEIVE_SQS_ENDPOINT", "").strip(),
-            send_sqs_endpoint=os.getenv("AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT", "").strip(),
+            send_sqs_endpoint=os.getenv("AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT", "").strip(),
         )
         config.validate()
         return config
@@ -90,7 +90,7 @@ class Config:
             "pgPort": self.pg_db_port,
             "OPENSEARCH_HOST": self.opensearch_host,
             "AWS_RECEIVE_SQS_ENDPOINT": self.receive_sqs_endpoint,
-            "AWS_SQS_SENT_EVENT_QUEUE_ENDPOINT": self.send_sqs_endpoint,
+            "AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT": self.send_sqs_endpoint,
         }
         missing = [name for name, value in required_values.items() if not value]
         if missing:
