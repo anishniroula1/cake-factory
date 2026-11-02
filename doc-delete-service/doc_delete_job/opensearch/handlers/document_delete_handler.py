@@ -32,8 +32,8 @@ class DocumentDeleteHandler:
         embeddings_db_store: EmbeddingsDBStore,
         titan_matches_db_store: TitanMatchesDBStore,
         text_similarity_input_db_store: TextSimilarityInputDBStore,
-        outbound_sqs: AwsSQS,
-        send_sqs_endpoint: str,
+        case_similarity_backfill_sqs: AwsSQS,
+        case_similarity_backfill_queue_url: str,
         custom_logger: CustomLogger,
         database_delete_enabled: bool,
     ) -> None:
@@ -43,8 +43,8 @@ class DocumentDeleteHandler:
         self.embeddings_db_store = embeddings_db_store
         self.titan_matches_db_store = titan_matches_db_store
         self.text_similarity_input_db_store = text_similarity_input_db_store
-        self.outbound_sqs = outbound_sqs
-        self.send_sqs_endpoint = send_sqs_endpoint
+        self.case_similarity_backfill_sqs = case_similarity_backfill_sqs
+        self.case_similarity_backfill_queue_url = case_similarity_backfill_queue_url
         self.logger = custom_logger
         self.database_delete_enabled = database_delete_enabled
 
@@ -54,8 +54,8 @@ class DocumentDeleteHandler:
         Input: tsp_id=8205
         Output: the main deletion counts for the document.
 
-        The next SQS message is sent only after every enabled deletion step
-        finishes. A failure leaves the document state ready for the next job.
+        A Case Similarity Backfill SQS message is sent only after every enabled
+        deletion step finishes. The calling service owns document-state management.
         """
 
         started_at = perf_counter()
@@ -63,7 +63,7 @@ class DocumentDeleteHandler:
         titan_match_deletion_result = self._delete_titan_matches(tsp_id)
         database_deletion_result = titan_match_deletion_result
         # OpenSearch and Titan cleanup always run. This flag additionally gates
-        # legacy embedding/sentence cleanup and TSI state changes.
+        # legacy embedding and sentence-vector cleanup.
         if self.database_delete_enabled:
             legacy_deletion_result = self._delete_legacy_document_data(tsp_id)
             database_deletion_result = DatabaseDeletionResult(
@@ -74,19 +74,16 @@ class DocumentDeleteHandler:
                 deleted_embedding_count=legacy_deletion_result.deleted_embedding_count,
                 deleted_sentence_count=legacy_deletion_result.deleted_sentence_count,
             )
-            self._update_document_state(tsp_id, constants.DELETED_DOCUMENT_STATE)
+            self._update_document_state(tsp_id)
         else:
             self.logger.info(
                 "Legacy database deletion is disabled. Titan matches were cleaned, "
                 "but embeddings and sentence-vector rows were not changed."
             )
 
-        try:
-            self._send_deletion_result_to_next_queue(tsp_id)
-        except QueueSendError:
-            if self.database_delete_enabled:
-                self._update_document_state(tsp_id, constants.READY_FOR_DELETION_DOCUMENT_STATE)
-            raise
+        # Case Similarity must refresh its application-level result after all
+        # OpenSearch and enabled database deletion work has completed.
+        self._send_to_case_similarity_backfill_queue(tsp_id)
         self.logger.info(
             f"Document deletion removed {opensearch_deletion_result.occurrence_count} occurrence(s), "
             f"{opensearch_deletion_result.catalog_count} orphaned catalog vector(s), "
@@ -271,31 +268,34 @@ class DocumentDeleteHandler:
             deleted_sentence_count=deleted_sentence_count,
         )
 
-    def _send_deletion_result_to_next_queue(self, tsp_id: TspId) -> None:
-        """Send the tsp_id after deletion so Case Similarity can refresh the application."""
+    def _send_to_case_similarity_backfill_queue(self, tsp_id: TspId) -> None:
+        """Send the deleted tsp_id to Case Similarity Backfill for refresh."""
 
-        message_sent = self.outbound_sqs.send_sqs_message(
-            send_queue_url=self.send_sqs_endpoint,
+        message_sent = self.case_similarity_backfill_sqs.send_sqs_message(
+            send_queue_url=self.case_similarity_backfill_queue_url,
             message_body={"source": "P2", "tsp_id": str(tsp_id), "sent_by": "doc-delete"},
             wait_time=constants.RETRY_SECONDS,
             retries=constants.MAX_ATTEMPTS - 1,
         )
         if not message_sent:
-            raise QueueSendError("failed to send the document to the next SQS queue")
+            raise QueueSendError(
+                "failed to send the deleted document to the Case Similarity Backfill queue"
+            )
 
-    def _update_document_state(self, tsp_id: TspId, document_state: str) -> None:
-        """Persist the document state and require exactly one retained TSI row."""
+    def _update_document_state(self, tsp_id: TspId) -> None:
+        """Set the retained TSI record to DOC_DELETED without reading its state."""
 
         updated_count = retry_operation(
-            f"Update document state to {document_state}",
+            "Update document state to DOC_DELETED",
             self.text_similarity_input_db_store.update_document_state,
             tsp_id,
-            document_state,
+            constants.DELETED_DOCUMENT_STATE,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
         )
         if updated_count != 1:
             raise PermanentDataError(
-                f"Expected one tsp.text_similarity_input row for tsp_id={tsp_id}, updated {updated_count}."
+                f"Expected one text_similarity_input record for tsp_id={tsp_id}, "
+                f"updated {updated_count}."
             )

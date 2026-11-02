@@ -60,8 +60,8 @@ class Config:
     opensearch_iam_access_role: str
     opensearch_host: str
 
-    # Outbound SQS
-    send_sqs_endpoint: str
+    # Case Similarity Backfill SQS
+    case_similarity_backfill_queue_url: str
 
     # Flow control
     database_delete_enabled: bool
@@ -83,7 +83,9 @@ class Config:
             aws_local_endpoint_url=os.getenv("AWS_LOCAL_ENDPOINT_URL", "").strip(),
             opensearch_iam_access_role=os.getenv("OPENSEARCH_IAM_ACCESS_ROLE", "").strip(),
             opensearch_host=_aws_hostname(os.getenv("OPENSEARCH_HOST", "").strip()),
-            send_sqs_endpoint=os.getenv("AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT", "").strip(),
+            case_similarity_backfill_queue_url=os.getenv(
+                "CASE_SIMILARITY_BACKFILL_QUEUE_URL", ""
+            ).strip(),
             database_delete_enabled=_read_boolean("DATABASE_DELETE_ENABLED", False),
         )
         config.validate()
@@ -100,7 +102,7 @@ class Config:
             "pgPort": self.pg_db_port,
             "OPENSEARCH_HOST": self.opensearch_host,
             "OPENSEARCH_IAM_ACCESS_ROLE": self.opensearch_iam_access_role,
-            "AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT": self.send_sqs_endpoint,
+            "CASE_SIMILARITY_BACKFILL_QUEUE_URL": self.case_similarity_backfill_queue_url,
         }
         missing = [name for name, value in required_values.items() if not value]
         if missing:

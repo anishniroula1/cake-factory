@@ -39,8 +39,8 @@ class Dependencies:
             opensearch_service=constants.OPENSEARCH_SERVICE,
             role_session_name="docDeleteJobRole",
         ).create_client()
-        self.outbound_sqs = AwsSQS(
-            queue_url=self.config.send_sqs_endpoint,
+        self.case_similarity_backfill_sqs = AwsSQS(
+            queue_url=self.config.case_similarity_backfill_queue_url,
             aws_region=self.config.aws_region,
             aws_endpoint_url=self.config.aws_local_endpoint_url or None,
             logger=self.logger,
@@ -58,13 +58,12 @@ class Dependencies:
             embeddings_db_store,
             titan_matches_db_store,
             text_similarity_input_db_store,
-            self.outbound_sqs,
-            self.config.send_sqs_endpoint,
+            self.case_similarity_backfill_sqs,
+            self.config.case_similarity_backfill_queue_url,
             self.logger,
             self.config.database_delete_enabled,
         )
         self.document_delete_job = DocumentDeleteJob(
-            text_similarity_input_db_store,
             self.document_delete_handler,
             self.logger,
         )

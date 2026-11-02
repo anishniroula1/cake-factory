@@ -26,7 +26,9 @@ def service_config(**changes) -> Config:
         aws_local_endpoint_url="",
         opensearch_iam_access_role="",
         opensearch_host="search.example.com",
-        send_sqs_endpoint="https://sqs.example/next-local.fifo",
+        case_similarity_backfill_queue_url=(
+            "https://sqs.example/case-similarity-backfill-local.fifo"
+        ),
         database_delete_enabled=True,
     )
     return replace(values, **changes)
@@ -91,19 +93,13 @@ def test_database_store_returns_empty_context_when_document_has_no_sentences():
     assert context.global_ids == []
 
 
-def test_text_similarity_input_store_loads_ready_documents_in_order():
-    load_session = Mock()
-    load_session.__enter__ = Mock(return_value=load_session)
-    load_session.__exit__ = Mock(return_value=False)
-    load_session.scalars.return_value = [101, 102]
+def test_text_similarity_input_store_updates_state_without_reading_it():
     update_session = session_with_results(SimpleNamespace(rowcount=1))
-    sessions = iter([load_session, update_session])
-    store = TextSimilarityInputDBStore(lambda: next(sessions))
 
-    tsp_ids = store.load_ready_for_deletion_tsp_ids(100, 200)
-    updated_count = store.update_document_state(101, "DOC_DELETED")
+    updated_count = TextSimilarityInputDBStore(
+        lambda: update_session
+    ).update_document_state(101, "DOC_DELETED")
 
-    assert tsp_ids == [101, 102]
     assert updated_count == 1
     update_session.commit.assert_called_once()
 
@@ -134,7 +130,7 @@ def test_dependencies_build_resources_and_close_pool():
         role_session_name="docDeleteJobRole",
     )
     open_search_client.return_value.create_client.assert_called_once_with()
-    assert dependencies.document_delete_handler.outbound_sqs is sqs
+    assert dependencies.document_delete_handler.case_similarity_backfill_sqs is sqs
     assert dependencies.document_delete_job.document_delete_handler is dependencies.document_delete_handler
     dependencies.close()
     database.engine.dispose.assert_called_once()
@@ -154,8 +150,8 @@ def test_dependencies_pass_dynamic_database_configuration():
 def test_main_runs_job_and_always_closes_dependencies():
     dependencies = SimpleNamespace(logger=LoggerFake(), document_delete_job=Mock(), close=Mock())
 
-    run_document_delete_job(dependencies=dependencies)
+    run_document_delete_job([10, 20], dependencies=dependencies)
 
-    dependencies.document_delete_job.run.assert_called_once()
+    dependencies.document_delete_job.run.assert_called_once_with([10, 20])
     dependencies.close.assert_called_once()
     assert dependencies.logger.generic_message is None

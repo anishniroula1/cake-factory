@@ -22,7 +22,9 @@ def config() -> Config:
         aws_local_endpoint_url="",
         opensearch_iam_access_role="arn:aws:iam::123456789012:role/opensearch",
         opensearch_host="search.example.com",
-        send_sqs_endpoint="https://sqs.example/next-local.fifo",
+        case_similarity_backfill_queue_url=(
+            "https://sqs.example/case-similarity-backfill-local.fifo"
+        ),
         database_delete_enabled=True,
     )
 
@@ -36,8 +38,8 @@ def test_config_normalizes_host_and_validates_required_values():
         replace(config(), opensearch_host="").validate()
     with pytest.raises(ValueError, match="OPENSEARCH_IAM_ACCESS_ROLE"):
         replace(config(), opensearch_iam_access_role="").validate()
-    with pytest.raises(ValueError, match="AWS_SQS_SEND_EVENT_QUEUE_ENDPOINT"):
-        replace(config(), send_sqs_endpoint="").validate()
+    with pytest.raises(ValueError, match="CASE_SIMILARITY_BACKFILL_QUEUE_URL"):
+        replace(config(), case_similarity_backfill_queue_url="").validate()
     with pytest.raises(ValueError, match="VAULT_YAML_PATH"):
         replace(config(), environment="prod").validate()
     with pytest.raises(ValueError, match="must be an ARN"):

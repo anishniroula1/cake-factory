@@ -25,7 +25,7 @@ def build_handler(
     embeddings_db_store=None,
     titan_matches_db_store=None,
     text_similarity_input_db_store=None,
-    outbound_sqs=None,
+    case_similarity_backfill_sqs=None,
     database_delete_enabled=True,
 ):
     logger = LoggerFake()
@@ -36,8 +36,8 @@ def build_handler(
         embeddings_db_store or EmbeddingsDBStoreFake(),
         titan_matches_db_store or TitanMatchesDBStoreFake(),
         text_similarity_input_db_store or TextSimilarityInputDBStoreFake(),
-        outbound_sqs or AwsSqsFake(),
-        "https://sqs.example/case-similarity-local.fifo",
+        case_similarity_backfill_sqs or AwsSqsFake(),
+        "https://sqs.example/case-similarity-backfill-local.fifo",
         logger,
         database_delete_enabled,
     )
@@ -54,16 +54,16 @@ def test_document_deletion_runs_the_complete_flow():
     sentence_vector_db_store = SentenceVectorDBStoreFake(events=events)
     embeddings_db_store = EmbeddingsDBStoreFake(events=events)
     titan_matches_db_store = TitanMatchesDBStoreFake(events=events)
-    state_store = TextSimilarityInputDBStoreFake(events=events)
-    outbound_sqs = AwsSqsFake(events=events)
+    text_similarity_input_db_store = TextSimilarityInputDBStoreFake(events=events)
+    case_similarity_backfill_sqs = AwsSqsFake(events=events)
     handler = build_handler(
         occurrence_store,
         catalog_store,
         sentence_vector_db_store,
         embeddings_db_store,
         titan_matches_db_store,
-        state_store,
-        outbound_sqs,
+        text_similarity_input_db_store,
+        case_similarity_backfill_sqs,
     )
 
     deletion_result = handler.process_document_deletion(10)
@@ -90,8 +90,12 @@ def test_document_deletion_runs_the_complete_flow():
         "state=DOC_DELETED",
         "send SQS",
     ]
-    assert state_store.state_updates == [(10, "DOC_DELETED")]
-    assert outbound_sqs.sent[0]["message_body"] == {"source": "P2", "tsp_id": "10", "sent_by": "doc-delete"}
+    assert text_similarity_input_db_store.state_updates == [(10, "DOC_DELETED")]
+    assert case_similarity_backfill_sqs.sent[0]["message_body"] == {
+        "source": "P2",
+        "tsp_id": "10",
+        "sent_by": "doc-delete",
+    }
 
 
 def test_missing_occurrences_do_not_drive_opensearch_cleanup_from_database():
@@ -126,14 +130,11 @@ def test_database_deletion_toggle_still_removes_titan_matches():
     sentence_store = SentenceVectorDBStoreFake()
     embeddings_store = EmbeddingsDBStoreFake()
     titan_store = TitanMatchesDBStoreFake()
-    state_store = TextSimilarityInputDBStoreFake()
-
     deletion_result = build_handler(
         sentence_occurrence_open_search_store=OccurrenceStoreFake(occurrence_records),
         sentence_vector_db_store=sentence_store,
         embeddings_db_store=embeddings_store,
         titan_matches_db_store=titan_store,
-        text_similarity_input_db_store=state_store,
         database_delete_enabled=False,
     ).process_document_deletion(10)
 
@@ -146,53 +147,32 @@ def test_database_deletion_toggle_still_removes_titan_matches():
         [],
         [10],
     )
-    assert state_store.state_updates == []
-
 
 def test_handler_reports_when_next_queue_send_fails():
-    state_store = TextSimilarityInputDBStoreFake()
-
     with pytest.raises(QueueSendError):
         build_handler(
-            text_similarity_input_db_store=state_store,
-            outbound_sqs=AwsSqsFake(send_result=False),
+            case_similarity_backfill_sqs=AwsSqsFake(send_result=False),
         ).process_document_deletion(10)
 
-    assert state_store.state_updates == [(10, "DOC_DELETED"), (10, "READY_FOR_DELETION")]
 
-
-def test_missing_tsi_row_stops_before_sqs_send():
-    state_store = TextSimilarityInputDBStoreFake(updated_count=0)
-    outbound_sqs = AwsSqsFake()
-
-    with pytest.raises(PermanentDataError, match="updated 0"):
-        build_handler(
-            text_similarity_input_db_store=state_store,
-            outbound_sqs=outbound_sqs,
-        ).process_document_deletion(10)
-
-    assert outbound_sqs.sent == []
-
-
-def test_job_processes_ready_documents_in_order():
-    document_store = TextSimilarityInputDBStoreFake([[10, 20], [30], []])
+def test_job_processes_supplied_documents_in_order():
     handler = HandlerFake()
     logger = LoggerFake()
-    job = DocumentDeleteJob(document_store, handler, logger)
+    job = DocumentDeleteJob(handler, logger)
 
-    processed_count = job.run()
+    processed_count = job.run([10, 20, 30])
 
     assert (processed_count, handler.calls, logger.generic_message) == (3, [10, 20, 30], None)
-    assert document_store.calls == [(None, 100), (20, 100), (30, 100)]
 
 
 @pytest.mark.parametrize("error", [OperationFailedError("failed"), PermanentDataError("bad data"), QueueSendError("queue failed")])
-def test_job_stops_on_failed_document(error):
-    document_store = TextSimilarityInputDBStoreFake([[10]])
+def test_job_logs_failed_documents_and_continues(error):
     logger = LoggerFake()
-    job = DocumentDeleteJob(document_store, HandlerFake(error), logger)
+    handler = HandlerFake(error)
+    job = DocumentDeleteJob(handler, logger)
 
-    with pytest.raises(type(error)):
-        job.run()
+    processed_count = job.run([10, 20])
 
+    assert processed_count == 0 and handler.calls == [10, 20]
+    assert any('["10", "20"]' in message for level, message in logger.messages if level == "error")
     assert logger.generic_message is None

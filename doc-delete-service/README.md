@@ -1,13 +1,14 @@
 # Document Delete OpenSearch Job
 
-This scheduled job removes sentence data for documents marked
-`READY_FOR_DELETION`. It reads work directly from `tsp.text_similarity_input`
-and keeps that table so the next state-machine step can continue the document.
+This job removes sentence data for a list of `tsp_id` values supplied by the
+calling service. It does not query `tsp.text_similarity_input` for work or
+check its current status. After enabled database cleanup succeeds, it updates
+the retained record to `DOC_DELETED`.
 
 ## Processing flow
 
-1. Load ordered `tsp_id` values whose document state is `READY_FOR_DELETION`.
-2. Process the records in database pages of 100 documents.
+1. Receive a list such as `[1040, 1041]` from the calling service.
+2. Process each `tsp_id` in the received order.
 3. Read every matching record from `sentence_occurrences`.
 4. Use parallel multi-search requests, with at most 30 workers, to check each
    sentence key against other `tsp_id` values in the same analysis group.
@@ -25,30 +26,28 @@ and keeps that table so the next state-machine step can continue the document.
 8. When `DATABASE_DELETE_ENABLED=true`, read the document's global IDs from
    `tsp.sentences_vector`, then call
    `tsp.embeddings`, delete the document rows from `tsp.sentences_vector`, and
-   update `tsp.text_similarity_input.document_state` to `DOC_DELETED`.
-   These database changes remain behind the rollout toggle.
-9. Keep the `tsp.text_similarity_input` row and do not delete a case-summary row.
-10. Send the completed `tsp_id` to the next SQS queue so the state-machine flow can continue.
-11. Continue until the current run has no more deletion records.
+   update `tsp.text_similarity_input.document_state` to `DOC_DELETED`. These
+   database changes remain behind the rollout toggle.
+9. After every enabled deletion step succeeds, send the completed `tsp_id` to
+   the Case Similarity Backfill queue so its application summary can refresh.
+10. Continue until every supplied ID is processed.
 
-The job is idempotent. If one document fails, the job exits with that document
-still marked `READY_FOR_DELETION`. When an outbound SQS send fails after the
-state update, the job restores `READY_FOR_DELETION` before stopping. The next
-scheduled run can safely repeat the OpenSearch checks, PostgreSQL cleanup, and outbound SQS send. The deployment
-should use a CronJob concurrency policy of `Forbid` so two deletion jobs do not
-process the same records at the same time.
+The job is idempotent. If one document fails with an expected processing,
+data, or outbound-queue error, the job records its `tsp_id` and continues with
+the remaining list. One final error log contains every failed ID so the calling
+service can submit those documents again later. Unexpected programming errors
+still stop the run.
 
 `DocumentDeleteHandler` keeps OpenSearch, Titan matches, and legacy database
 deletion in separate methods. OpenSearch and Titan cleanup always run.
-`tsp.embeddings` and `tsp.sentences_vector` cleanup, plus the `DOC_DELETED`
-state update, run only when `DATABASE_DELETE_ENABLED=true`.
+`tsp.embeddings` and `tsp.sentences_vector` cleanup run only when
+`DATABASE_DELETE_ENABLED=true`.
 
 Each PostgreSQL table has its own store file:
 
 - `titan_matches_db_store.py` runs the bidirectional match deletion function.
 - `embeddings_db_store.py` deletes embeddings by global ID.
 - `sentence_vector_db_store.py` reads and deletes sentence rows by `tsp_id`.
-- `text_similarity_input_db_store.py` loads deletion work and updates the retained document state.
 
 ## PostgreSQL migration
 
@@ -73,19 +72,19 @@ Copy `.env.example` to `.env` and `example.localVaultSecret.yaml` to
 cp .env.example .env
 cp example.localVaultSecret.yaml localVaultSecret.yaml
 make localstack
-make local
 ```
 
-`make local` watches the Python source folders. Saving a Python code change
-stops the current worker and starts it again with the updated code. The Docker
-`make run` command keeps the normal production-style behavior without reload.
+Call `run_document_delete_job([1040, 1041])` from the service that supplies the
+document list. No `text_similarity_input` status is required.
 
-Set a local `tsp.text_similarity_input` row to `READY_FOR_DELETION`, then run
-`make local`. The job processes the matching records and exits when the query
-returns no more work.
+Configure the required destination with:
+
+```text
+CASE_SIMILARITY_BACKFILL_QUEUE_URL=<case-similarity-backfill-queue-url>
+```
 
 ## Tests
 
 ```bash
-make test
+make ostest
 ```

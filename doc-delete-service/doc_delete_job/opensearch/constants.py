@@ -13,9 +13,7 @@ REFUGEE_CATALOG_ALIAS = "sentence_semantic_catalog_refugee"
 OPENSEARCH_PAGE_SIZE = 1000  # Occurrences or sentence keys handled in one request.
 CATALOG_REFERENCE_SEARCH_WORKERS = 30
 
-# Job processing
-DOCUMENT_DELETE_BATCH_SIZE = 100  # Documents loaded from text_similarity_input per database query.
-READY_FOR_DELETION_DOCUMENT_STATE = "READY_FOR_DELETION"
+# Document state written after enabled database deletion finishes.
 DELETED_DOCUMENT_STATE = "DOC_DELETED"
 
 # Retry

@@ -146,16 +146,10 @@ class HandlerFake:
 
 
 class TextSimilarityInputDBStoreFake:
-    def __init__(self, pages=None, events=None, updated_count=1) -> None:
-        self.pages = list(pages or [[]])
-        self.calls = []
+    def __init__(self, events=None, updated_count=1) -> None:
         self.state_updates = []
         self.events = events
         self.updated_count = updated_count
-
-    def load_ready_for_deletion_tsp_ids(self, after_tsp_id, batch_size):
-        self.calls.append((after_tsp_id, batch_size))
-        return self.pages.pop(0)
 
     def update_document_state(self, tsp_id, document_state):
         if self.events is not None:
