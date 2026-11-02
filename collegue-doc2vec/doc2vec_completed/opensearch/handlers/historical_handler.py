@@ -17,7 +17,7 @@ from doc2vec_completed.opensearch.db_store import (
     EmbeddingDBStore,
     SentenceVectorDBStore,
 )
-from doc2vec_completed.opensearch.errors import QueueSendError
+from doc2vec_completed.opensearch.errors import CriticalProcessingError, QueueSendError
 from doc2vec_completed.opensearch.opensearch_helper import OpenSearchHelper
 from doc2vec_completed.opensearch.retry import retry_operation, safe_error_summary
 from doc2vec_completed.opensearch.sentence_batch_processor import (
@@ -66,6 +66,7 @@ class HistoricalHandler:
             f"Historical sentence processing started for {len(tsp_ids)} document(s)."
         )
         document_results: list[HistoricalResult] = []
+        failed_tsp_ids: list[TspId] = []
         catalog_aliases: set[str] = set()
 
         for document_number, tsp_id in enumerate(tsp_ids, start=1):
@@ -73,47 +74,65 @@ class HistoricalHandler:
             self.logger.info(
                 f"Processing historical document {document_number} of {len(tsp_ids)}."
             )
-            document_output = self._process_historical_document(tsp_id)
+            try:
+                document_output = self._process_historical_document(tsp_id)
+            except CriticalProcessingError as error:
+                failed_tsp_ids.append(tsp_id)
+                self.logger.error(
+                    "Historical document failed and was skipped. Cause: "
+                    f"{safe_error_summary(error)}"
+                )
+                continue
             if document_output is None:
-                return None
+                failed_tsp_ids.append(tsp_id)
+                continue
             document_result, catalog_alias = document_output
             document_results.append(document_result)
             catalog_aliases.add(catalog_alias)
 
-        # Bulk writes can finish before OpenSearch's automatic refresh runs.
-        # Refresh each catalog plus occurrences once, after the entire incoming
-        # document list is indexed and before Sentence Similarity receives work.
-        aliases_to_refresh = sorted(catalog_aliases)
-        aliases_to_refresh.append(constants.SENTENCE_OCCURRENCE_ALIAS)
-        retry_operation(
-            "Refresh all indexed historical sentences",
-            self.opensearch_helper.refresh_aliases,
-            aliases_to_refresh,
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
-        )
+        successful_tsp_ids = [result["tsp_id"] for result in document_results]
+        if successful_tsp_ids:
+            # Bulk writes can finish before OpenSearch's automatic refresh runs.
+            # Refresh only the catalogs used by successful documents, then send
+            # only those documents to Sentence Similarity.
+            aliases_to_refresh = sorted(catalog_aliases)
+            aliases_to_refresh.append(constants.SENTENCE_OCCURRENCE_ALIAS)
+            retry_operation(
+                "Refresh all indexed historical sentences",
+                self.opensearch_helper.refresh_aliases,
+                aliases_to_refresh,
+                wait_seconds=constants.RETRY_SECONDS,
+                custom_logger=self.logger,
+            )
 
-        self.logger.info(
-            f"Sending {len(tsp_ids)} completed historical document message(s) "
-            "to the next queue."
-        )
-        retry_operation(
-            "Send historical document batch to next queue",
-            self._send_sqs_messages,
-            tsp_ids,
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
-        )
+            self.logger.info(
+                f"Sending {len(successful_tsp_ids)} completed historical "
+                "document message(s) to the next queue."
+            )
+            retry_operation(
+                "Send historical document batch to next queue",
+                self._send_sqs_messages,
+                successful_tsp_ids,
+                wait_seconds=constants.RETRY_SECONDS,
+                custom_logger=self.logger,
+            )
 
         total_source_count = sum(result["source_count"] for result in document_results)
         total_indexed_count = sum(result["indexed_count"] for result in document_results)
         self.logger.set_generic_message(
             f"historical_document_count={len(tsp_ids)}: "
         )
+        if failed_tsp_ids:
+            failed_id_list = json.dumps([str(tsp_id) for tsp_id in failed_tsp_ids])
+            self.logger.error(
+                f"Failed historical tsp_id(s) requiring manual reprocessing: "
+                f"{failed_id_list}"
+            )
         self.logger.info(
-            f"Historical sentence processing completed for {len(tsp_ids)} "
-            f"document(s). Source count: {total_source_count}. Indexed count: "
-            f"{total_indexed_count}."
+            f"Historical sentence processing completed for "
+            f"{len(successful_tsp_ids)} of {len(tsp_ids)} document(s). "
+            f"Failed document count: {len(failed_tsp_ids)}. Source count: "
+            f"{total_source_count}. Indexed count: {total_indexed_count}."
         )
         self.logger.info(
             f"Historical sentence processing took "
@@ -121,7 +140,7 @@ class HistoricalHandler:
         )
         return {
             "reason": "HISTORICAL",
-            "tsp_ids": tsp_ids,
+            "tsp_ids": successful_tsp_ids,
             "document_count": len(document_results),
             "source_count": total_source_count,
             "indexed_count": total_indexed_count,

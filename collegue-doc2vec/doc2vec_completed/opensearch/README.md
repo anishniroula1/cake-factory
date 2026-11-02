@@ -136,6 +136,11 @@ document IDs.
     messages in each SQS batch request.
 11. Delete the source message only after every downstream message is accepted.
 
+An individual document failure does not stop the remaining IDs in the source
+message. Successful documents are refreshed and sent downstream. Failed
+`tsp_id` values are written together in one error log for manual reprocessing,
+and the source message is deleted after the successful results are sent.
+
 The historical flow fails safely when the next queue is not configured. It does
 not report success and does not allow the source message to be deleted.
 

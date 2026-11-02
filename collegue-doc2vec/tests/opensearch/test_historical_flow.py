@@ -244,18 +244,20 @@ def test_refugee_document_uses_only_the_refugee_catalog(
     assert {call[0] for call in opensearch.existing_id_calls} == {"catalog-refugee"}
 
 
-def test_failed_historical_message_is_not_deleted(
+def test_failed_historical_document_is_logged_and_source_message_is_deleted(
     service_config,
     custom_logger,
 ):
-    run_application(
+    sqs = run_application(
         service_config,
         SessionSequence([SessionFake(scalar_value=0)]),
         OpenSearchFake(),
         historical_message(404),
         custom_logger,
-        expect_processing_error=True,
     )
+
+    assert len(sqs.deleted) == 1
+    assert any('["404"]' in message for message in custom_logger.error_messages)
 
 
 def test_historical_completion_requires_the_send_event_queue(
@@ -299,6 +301,7 @@ def test_historical_list_refreshes_once_and_sends_one_sqs_batch(
                 },
                 "catalog-asylee",
             ),
+            None,
             (
                 {
                     "reason": "HISTORICAL",
@@ -311,12 +314,13 @@ def test_historical_list_refreshes_once_and_sends_one_sqs_batch(
         ]
     )
 
-    result = handler.process([10, 20])
+    result = handler.process([10, 15, 20])
 
     assert opensearch.refresh_alias_calls == [
         ["catalog-asylee", "catalog-refugee", "occurrence"]
     ]
-    assert result["document_count"] == 2 and len(sqs.sent[0]["batch_messages"]) == 2
+    assert result["tsp_ids"] == [10, 20] and len(sqs.sent[0]["batch_messages"]) == 2
+    assert any('["15"]' in message for message in custom_logger.error_messages)
 
 
 def test_historical_send_uses_ten_string_messages_per_batch(
@@ -363,7 +367,7 @@ def test_failed_worker_logs_its_global_id_range(
         handler._save_historical_sentence_batch_in_opensearch([sentence_record])
 
 
-def test_unsupported_analysis_group_does_not_delete_the_message(
+def test_unsupported_analysis_group_is_logged_for_manual_reprocessing(
     service_config,
     sentence_record,
     custom_logger,
@@ -384,8 +388,8 @@ def test_unsupported_analysis_group_does_not_delete_the_message(
         OpenSearchFake(),
         message,
         custom_logger,
-        expect_processing_error=True,
     )
 
-    assert sqs.deleted == []
+    assert len(sqs.deleted) == 1
+    assert any('["10"]' in message for message in custom_logger.error_messages)
 

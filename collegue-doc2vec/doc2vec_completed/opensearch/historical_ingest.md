@@ -59,6 +59,10 @@ the expected fields are visible before a document is sent for bulk indexing.
     per batch to Sentence Similarity.
 11. Delete the source message only after every downstream batch succeeds.
 
+If one document fails, the handler records its `tsp_id` and continues with the
+remaining documents. Only successful documents are sent downstream. All failed
+IDs appear together in the final error log so they can be submitted again.
+
 Documents use stable OpenSearch IDs, so retrying a page updates the same
 documents instead of creating duplicates. Temporary operations retry three
 times by default. The OpenSearch helper continues retrying temporary Lasso,
