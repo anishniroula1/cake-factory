@@ -70,6 +70,9 @@ def test_document_deletion_runs_the_complete_flow():
 
     assert deletion_result == {
         "tsp_id": 10,
+        "affected_application_ids": [100, 200],
+        "affected_tsp_ids": [10, 20],
+        "has_deleted_document": True,
         "occurrence_count": 2,
         "catalog_count": 1,
         "deleted_match_bucket_count": 3,

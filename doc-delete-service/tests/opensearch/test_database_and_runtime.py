@@ -57,6 +57,9 @@ def test_database_store_loads_context_and_deletes_owned_rows():
         )
     )
     function_row = SimpleNamespace(
+        affected_application_ids=[100, 200],
+        affected_tsp_ids=[10, 20],
+        has_deleted_document=True,
         deleted_match_bucket_count=3,
     )
     match_session = session_with_results(result(one=function_row))
@@ -70,7 +73,12 @@ def test_database_store_loads_context_and_deletes_owned_rows():
     deleted_sentences = SentenceVectorDBStore(lambda: sentence_delete_session).delete_document_sentence_records(10)
 
     assert context.global_ids == [1, 2]
-    assert deleted_matches.deleted_match_bucket_count == 3
+    assert (
+        deleted_matches.affected_application_ids,
+        deleted_matches.affected_tsp_ids,
+        deleted_matches.has_deleted_document,
+        deleted_matches.deleted_match_bucket_count,
+    ) == ([100, 200], [10, 20], True, 3)
     assert (deleted_embeddings, deleted_sentences) == (2, 2)
     match_session.commit.assert_called_once()
 

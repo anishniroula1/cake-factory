@@ -67,6 +67,9 @@ class DocumentDeleteHandler:
         if self.database_delete_enabled:
             legacy_deletion_result = self._delete_legacy_document_data(tsp_id)
             database_deletion_result = DatabaseDeletionResult(
+                affected_application_ids=titan_match_deletion_result.affected_application_ids,
+                affected_tsp_ids=titan_match_deletion_result.affected_tsp_ids,
+                has_deleted_document=titan_match_deletion_result.has_deleted_document,
                 deleted_match_bucket_count=titan_match_deletion_result.deleted_match_bucket_count,
                 deleted_embedding_count=legacy_deletion_result.deleted_embedding_count,
                 deleted_sentence_count=legacy_deletion_result.deleted_sentence_count,
@@ -94,6 +97,9 @@ class DocumentDeleteHandler:
         self.logger.info(f"Document deletion took {perf_counter() - started_at:.2f} seconds to complete.")
         return {
             "tsp_id": tsp_id,
+            "affected_application_ids": database_deletion_result.affected_application_ids,
+            "affected_tsp_ids": database_deletion_result.affected_tsp_ids,
+            "has_deleted_document": database_deletion_result.has_deleted_document,
             "occurrence_count": opensearch_deletion_result.occurrence_count,
             "catalog_count": opensearch_deletion_result.catalog_count,
             "deleted_match_bucket_count": database_deletion_result.deleted_match_bucket_count,
@@ -205,7 +211,8 @@ class DocumentDeleteHandler:
         """Delete source and reverse Titan relationships for one document.
 
         Input: tsp_id=8205
-        Output: deleted source-bucket and updated reverse-bucket counts.
+        Output: affected application/document IDs, a found flag, and the
+        deleted source-bucket count.
 
         This cleanup always runs because titan_matches belongs to the new
         OpenSearch flow and is not controlled by the legacy database toggle.
@@ -219,7 +226,12 @@ class DocumentDeleteHandler:
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
         )
+        if not deletion_result.has_deleted_document:
+            self.logger.info("No titan_matches rows were found for this document.")
         return DatabaseDeletionResult(
+            affected_application_ids=deletion_result.affected_application_ids,
+            affected_tsp_ids=deletion_result.affected_tsp_ids,
+            has_deleted_document=deletion_result.has_deleted_document,
             deleted_match_bucket_count=deletion_result.deleted_match_bucket_count,
         )
 

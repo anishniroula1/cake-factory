@@ -18,7 +18,10 @@ and keeps that table so the next state-machine step can continue the document.
    when a later job must retry.
 7. Always call `tsp.delete_titan_matches_for_tsp`. It deletes source match
    buckets, removes reverse JSONB references, and deletes reverse buckets that
-   become empty. This table belongs to the new OpenSearch flow.
+   become empty. It returns the affected application IDs, affected document
+   IDs, and whether the requested document existed in `tsp.titan_matches`. If
+   the document is absent, the function returns immediately without scanning
+   or changing match rows. This table belongs to the new OpenSearch flow.
 8. When `DATABASE_DELETE_ENABLED=true`, read the document's global IDs from
    `tsp.sentences_vector`, then call
    `tsp.embeddings`, delete the document rows from `tsp.sentences_vector`, and

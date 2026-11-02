@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypedDict
 
 TspId = int | str
@@ -18,8 +18,11 @@ class DocumentDeletionContext:
 
 @dataclass(frozen=True)
 class TitanMatchDeletionResult:
-    """Titan deletion counts reported by the document-deletion flow."""
+    """Affected owners and deletion counts reported by the Titan function."""
 
+    affected_application_ids: list[int]
+    affected_tsp_ids: list[int]
+    has_deleted_document: bool
     deleted_match_bucket_count: int
 
 
@@ -33,17 +36,23 @@ class OpenSearchDeletionResult:
 
 @dataclass(frozen=True)
 class DatabaseDeletionResult:
-    """Counts produced by the optional PostgreSQL deletion flow."""
+    """Affected owners and counts produced by PostgreSQL deletion."""
 
+    affected_application_ids: list[int] = field(default_factory=list)
+    affected_tsp_ids: list[int] = field(default_factory=list)
+    has_deleted_document: bool = False
     deleted_match_bucket_count: int = 0
     deleted_embedding_count: int = 0
     deleted_sentence_count: int = 0
 
 
 class DeleteResult(TypedDict):
-    """Main deletion counts returned after one document completes."""
+    """Affected owners and deletion counts returned for one document."""
 
     tsp_id: TspId
+    affected_application_ids: list[int]
+    affected_tsp_ids: list[int]
+    has_deleted_document: bool
     occurrence_count: int
     catalog_count: int
     deleted_match_bucket_count: int
