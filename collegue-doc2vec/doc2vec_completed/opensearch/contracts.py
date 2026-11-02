@@ -43,6 +43,8 @@ class LiveNextQueueMessage(TypedDict):
     source: Literal["P2"]
     tsp_id: TspId
     sent_by: Literal["doc2vec"]
+    success: bool
+    reason: str
 
 
 type NextQueueMessage = HistoricalNextQueueMessage | LiveNextQueueMessage

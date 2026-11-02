@@ -118,7 +118,7 @@ def test_live_handler_saves_indexes_refreshes_and_sends_sqs_message(
     service_config,
     custom_logger,
 ):
-    handler, _, _ = build_handler(
+    handler, _, sqs = build_handler(
         service_config,
         custom_logger,
         live_document("First sentence.\nÊSecond sentence."),
@@ -127,13 +127,20 @@ def test_live_handler_saves_indexes_refreshes_and_sends_sqs_message(
     result = handler.process(10)
 
     assert result["indexed_count"] == 2
+    assert sqs.sent[0]["message_body"] == {
+        "source": "P2",
+        "tsp_id": 10,
+        "sent_by": "doc2vec",
+        "success": True,
+        "reason": "",
+    }
 
 
 def test_live_handler_reports_no_content_without_indexing(
     service_config,
     custom_logger,
 ):
-    handler, _, _ = build_handler(
+    handler, _, sqs = build_handler(
         service_config,
         custom_logger,
         live_document(" ¶  "),
@@ -142,6 +149,8 @@ def test_live_handler_reports_no_content_without_indexing(
     result = handler.process(10)
 
     assert result["reason"] == "no_content"
+    assert sqs.sent[0]["message_body"]["success"] is False
+    assert sqs.sent[0]["message_body"]["reason"] == "no_content"
 
 
 def test_live_handler_filters_refugee_rrf_sections_before_splitting(

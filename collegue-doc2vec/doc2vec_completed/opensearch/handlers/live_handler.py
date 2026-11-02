@@ -297,6 +297,8 @@ class LiveHandler:
             "Send sentence processing result to next queue",
             self._send_sqs_message,
             tsp_id,
+            success,
+            reason,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
@@ -406,12 +408,14 @@ class LiveHandler:
     def _send_sqs_message(
         self,
         tsp_id: TspId,
+        success: bool,
+        reason: str,
     ) -> None:
         """Send the existing Doc2Vec result contract to the state machine.
 
-        Input: tsp_id=1040
+        Input: tsp_id=1040, success=False, reason="no_content"
         Output message: {"source": "P2", "tsp_id": 1040,
-        "sent_by": "doc2vec"}
+        "sent_by": "doc2vec", "success": false, "reason": "no_content"}
         """
 
         queue_url = self.config.aws_sqs_send_event_queue_endpoint
@@ -422,6 +426,8 @@ class LiveHandler:
             "source": "P2",
             "tsp_id": tsp_id,
             "sent_by": "doc2vec",
+            "success": success,
+            "reason": reason,
         }
         sent = self.aws_sqs.send_sqs_message(
             send_queue_url=queue_url,
