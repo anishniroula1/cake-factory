@@ -131,6 +131,16 @@ class SqsFake:
         self.sent.append(values)
         return self.send_result
 
+    def send_batch_messages(self, send_queue_url, batch_messages, **values):
+        self.sent.append(
+            {
+                "send_queue_url": send_queue_url,
+                "batch_messages": batch_messages,
+                **values,
+            }
+        )
+        return {"status": "SUCCEED" if self.send_result else "FAILED"}
+
     def delete_messages(self, message):
         self.deleted.append(message)
         return self.delete_result

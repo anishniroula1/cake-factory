@@ -39,7 +39,7 @@ Historical sentence backfill:
 ```json
 {
   "reason": "HISTORICAL",
-  "tsp_id": 1040
+  "tsp_ids": "[1040, 1041]"
 }
 ```
 
@@ -62,8 +62,9 @@ Tracer, form-language, and non-matcher references:
 ```
 
 `tsp_id` remains an integer or string exactly as supplied by the upstream
-service. `tracer_sentence_id` can be an integer or numeric string and is
-converted to an integer before processing. `HISTORICAL`, `TRAIN_MODEL`, and
+service. Historical `tsp_ids` arrives as a JSON array string and is decoded
+before processing. `tracer_sentence_id` can be an integer or numeric string and
+is converted to an integer before processing. `HISTORICAL`, `TRAIN_MODEL`, and
 `TRACER` select their named handlers. Every other message follows the incoming
 document flow and must contain `tsp_id`.
 
@@ -113,20 +114,23 @@ usable sentence text.
 ## Historical flow
 
 Historical documents already have sentence records, so this flow never splits
-the original document again.
+the original document again. One source SQS message can contain several
+document IDs.
 
-1. Count the document's `sentences_vector` records.
-2. Load up to 3000 records per page in `global_id` order.
-3. Split each page into 30-sentence jobs and run up to 100 jobs concurrently.
-4. Reuse saved sentence keys and update only records whose key is missing.
-5. Load existing Titan vectors from `embeddings` using `embedding_type=2`.
-6. Check the selected catalog by sentence key. A missing catalog key reuses its
+1. Decode the `tsp_ids` JSON string and process each document in order.
+2. Count the document's `sentences_vector` records.
+3. Load up to 3000 records per page in `global_id` order.
+4. Split each page into 30-sentence jobs and run up to 100 jobs concurrently.
+5. Reuse saved sentence keys and update only records whose key is missing.
+6. Load existing Titan vectors from `embeddings` using `embedding_type=2`.
+7. Check the selected catalog by sentence key. A missing catalog key reuses its
    saved vector when available; otherwise the Bedrock pipeline creates it.
-7. Save every sentence occurrence.
-8. Refresh the selected catalog and occurrence aliases after all pages finish.
-9. Send `{"reason": "HISTORICAL", "tsp_id": 1040}` to the Sentence
-   Similarity backfill queue.
-10. Delete the source message only after the next queue accepts the event.
+8. Save every sentence occurrence.
+9. After every document finishes, refresh each affected catalog and the
+   occurrence alias once.
+10. Send one downstream message per `tsp_id` with the SQS batch API. Lists
+    larger than ten are divided into valid ten-entry SQS requests.
+11. Delete the source message only after every downstream message is accepted.
 
 The historical flow fails safely when the next queue is not configured. It does
 not report success and does not allow the source message to be deleted.

@@ -1,3 +1,4 @@
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -42,7 +43,7 @@ class FlowDependencies(Dependencies):
 def historical_message(tsp_id=10):
     return {
         "reason": "HISTORICAL",
-        "tsp_id": tsp_id,
+        "tsp_ids": json.dumps([tsp_id]),
         "MessageId": "message-1",
         "ReceiptHandle": "receipt-1",
         "message_receive_count": 1,
@@ -262,7 +263,51 @@ def test_historical_completion_requires_the_send_event_queue(
     )
 
     with pytest.raises(QueueSendError, match="endpoint is not configured"):
-        handler._send_sqs_message(10)
+        handler._send_sqs_messages([10])
+
+
+def test_historical_list_refreshes_once_and_sends_one_sqs_batch(
+    service_config,
+    custom_logger,
+):
+    opensearch = OpenSearchFake()
+    sqs = SqsFake()
+    handler = HistoricalHandler(
+        service_config,
+        SessionSequence([]),
+        opensearch,
+        sqs,
+        custom_logger,
+    )
+    handler._process_historical_document = Mock(
+        side_effect=[
+            (
+                {
+                    "reason": "HISTORICAL",
+                    "tsp_id": 10,
+                    "source_count": 2,
+                    "indexed_count": 2,
+                },
+                "catalog-asylee",
+            ),
+            (
+                {
+                    "reason": "HISTORICAL",
+                    "tsp_id": 20,
+                    "source_count": 3,
+                    "indexed_count": 3,
+                },
+                "catalog-refugee",
+            ),
+        ]
+    )
+
+    result = handler.process([10, 20])
+
+    assert opensearch.refresh_alias_calls == [
+        ["catalog-asylee", "catalog-refugee", "occurrence"]
+    ]
+    assert result["document_count"] == 2 and len(sqs.sent[0]["batch_messages"]) == 2
 
 
 def test_failed_worker_logs_its_global_id_range(

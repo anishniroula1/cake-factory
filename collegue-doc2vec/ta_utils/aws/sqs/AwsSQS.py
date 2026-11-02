@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 
 import boto3
@@ -196,4 +197,80 @@ class AwsSQS:
                 time.sleep(wait_time)
 
         return False
+
+    def send_batch_messages(
+        self,
+        send_queue_url: str,
+        batch_messages: list[str | NextQueueMessage],
+        wait_time: int = 5,
+        retries: int = 0,
+        is_fifo: bool = True,
+        **kwargs,
+    ) -> dict[str, object]:
+        """Send messages with the SQS batch API in groups of at most ten.
+
+        Input: send_queue_url="https://sqs.../similarity.fifo",
+        batch_messages=[{"reason": "HISTORICAL", "tsp_id": 1040}]
+        Output: {"status": "SUCCEED"} when every batch entry is accepted.
+
+        Amazon SQS accepts no more than ten entries in one batch request. A
+        larger input list is therefore split into multiple API calls.
+        """
+
+        if not batch_messages:
+            return {"status": "SUCCEED"}
+        if not send_queue_url:
+            return {"status": "FAILED", "data": batch_messages}
+
+        for offset in range(0, len(batch_messages), 10):
+            message_batch = batch_messages[offset : offset + 10]
+            entries = []
+            for position, message in enumerate(message_batch):
+                body = message if isinstance(message, str) else json.dumps(message)
+                entry = {
+                    "Id": f"message-{offset + position}",
+                    "MessageBody": body,
+                }
+                if is_fifo:
+                    entry["MessageGroupId"] = kwargs.get(
+                        "message_group_id", "doc2vec-historical"
+                    )
+                    entry["MessageDeduplicationId"] = uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"{send_queue_url}:{body}",
+                    ).hex
+                entries.append(entry)
+
+            for attempt in range(retries + 1):
+                try:
+                    response = self._sqs.send_message_batch(
+                        QueueUrl=send_queue_url,
+                        Entries=entries,
+                    )
+                    status = response.get("ResponseMetadata", {}).get(
+                        "HTTPStatusCode"
+                    )
+                    failed_entries = response.get("Failed", [])
+                    if status == 200 and not failed_entries:
+                        break
+                    error_message = (
+                        f"SQS returned HTTP status {status} with "
+                        f"{len(failed_entries)} failed batch entry(s)"
+                    )
+                except (BotoCoreError, ClientError) as error:
+                    error_message = str(error)[:500]
+
+                self._logger.error(
+                    "Failed to send an SQS message batch to queue "
+                    f"{send_queue_url}: {error_message}"
+                )
+                if attempt < retries:
+                    time.sleep(wait_time)
+            else:
+                return {"status": "FAILED", "data": message_batch}
+
+        self._logger.info(
+            f"Sent {len(batch_messages)} SQS message(s) to queue {send_queue_url}"
+        )
+        return {"status": "SUCCEED"}
 

@@ -23,18 +23,18 @@ standalone default.
 Input:
 
 ```json
-{"reason": "HISTORICAL", "tsp_id": 1040}
+{"reason": "HISTORICAL", "tsp_ids": "[1040, 1041]"}
 ```
 
-The SQS processor requires `reason=HISTORICAL` and a `tsp_id`. A message without
-that reason is logged and is not sent into the historical handler. The worker
-keeps `tsp_id` exactly as received, so both a number and a string are valid. It
-does not accept the alternate name `tspId` in an SQS message.
+The SQS processor requires `reason=HISTORICAL` and a non-empty `tsp_ids` JSON
+array string. The worker converts that string into a Python list and keeps each
+ID exactly as received, so both numbers and strings are valid. A legacy message
+containing one `tsp_id` is also accepted.
 
 The main code types are defined in `contracts.py`. The processing flow is:
 
 ```text
-SqsMessage -> TspId -> list[SentencesVector] -> HistoricalResult
+SqsMessage -> list[TspId] -> list[SentencesVector] -> HistoricalBatchResult
 ```
 
 OpenSearch catalog and occurrence documents also have separate named types, so
@@ -42,19 +42,21 @@ the expected fields are visible before a document is sent for bulk indexing.
 
 ## Historical flow
 
-1. Count all `sentences_vector` rows for the `tsp_id`.
-2. Read up to 3,000 rows at a time in `global_id` order.
-3. Generate and save the SHA-256 `sentence_key` for every row.
-4. Split the page into 30-sentence jobs and run up to 100 workers.
-5. Read the document's one `analysis_group` from `text_similarity_input`,
+1. Decode the `tsp_ids` string and process every listed document.
+2. Count all `sentences_vector` rows for each `tsp_id`.
+3. Read up to 3,000 rows at a time in `global_id` order.
+4. Generate and save the SHA-256 `sentence_key` for every row.
+5. Split the page into 30-sentence jobs and run up to 100 workers.
+6. Read the document's one `analysis_group` from `text_similarity_input`,
    select the Asylee or Refugee catalog, and check which sentence keys exist.
-6. For a missing key, reuse its saved Titan vector from `embeddings` when
+7. For a missing key, reuse its saved Titan vector from `embeddings` when
    `embedding_type = 2`. If no vector exists, let the catalog's Bedrock ingest
    pipeline create it.
-7. Write every sentence occurrence using `global_id` as its OpenSearch ID.
-8. After every page succeeds, send the `tsp_id` and `HISTORICAL` reason to the
-   Sentence Similarity queue.
-9. The SQS processor deletes the source message only after the handler succeeds.
+8. Write every sentence occurrence using `global_id` as its OpenSearch ID.
+9. Refresh every affected catalog and the occurrence alias once after all
+   documents finish.
+10. Batch-send one `HISTORICAL` message per `tsp_id` to Sentence Similarity.
+11. Delete the source message only after every downstream batch succeeds.
 
 Documents use stable OpenSearch IDs, so retrying a page updates the same
 documents instead of creating duplicates. Temporary operations retry three

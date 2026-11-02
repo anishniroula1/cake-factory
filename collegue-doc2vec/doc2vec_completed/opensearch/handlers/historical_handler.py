@@ -8,6 +8,7 @@ from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.batching import batches
 from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import (
+    HistoricalBatchResult,
     HistoricalResult,
     NextQueueMessage,
     TspId,
@@ -49,21 +50,92 @@ class HistoricalHandler:
             custom_logger,
         )
 
-    def process(self, tsp_id: TspId) -> HistoricalResult | None:
-        """Index every saved sentence for one historical document. Pages are
-        processed concurrently, both indexes are refreshed, and Sentence
-        Similarity is notified only after indexing completes.
+    def process(self, tsp_ids: list[TspId]) -> HistoricalBatchResult | None:
+        """Index every historical document carried by one SQS message.
 
-        Input: tsp_id=1040
-        Output: {"reason": "HISTORICAL", "tsp_id": 1040,
-        "source_count": 65, "indexed_count": 65}
+        Input: tsp_ids=[1040, 1041]
+        Output: combined document, source-sentence, and indexed-sentence counts.
 
-        The method returns None when the document has no sentence records or
-        those records disappear before they can be loaded.
+        Each document still uses the existing sentence worker pool. OpenSearch
+        is refreshed once after every document finishes, and the downstream
+        document messages are sent with the SQS batch API.
         """
 
         started_at = perf_counter()
-        self.logger.info("Historical sentence processing started.")
+        self.logger.info(
+            f"Historical sentence processing started for {len(tsp_ids)} document(s)."
+        )
+        document_results: list[HistoricalResult] = []
+        catalog_aliases: set[str] = set()
+
+        for document_number, tsp_id in enumerate(tsp_ids, start=1):
+            self.logger.set_generic_message(f"tsp_id={tsp_id}: ")
+            self.logger.info(
+                f"Processing historical document {document_number} of {len(tsp_ids)}."
+            )
+            document_output = self._process_historical_document(tsp_id)
+            if document_output is None:
+                return None
+            document_result, catalog_alias = document_output
+            document_results.append(document_result)
+            catalog_aliases.add(catalog_alias)
+
+        # Bulk writes can finish before OpenSearch's automatic refresh runs.
+        # Refresh each catalog plus occurrences once, after the entire incoming
+        # document list is indexed and before Sentence Similarity receives work.
+        aliases_to_refresh = sorted(catalog_aliases)
+        aliases_to_refresh.append(constants.SENTENCE_OCCURRENCE_ALIAS)
+        retry_operation(
+            "Refresh all indexed historical sentences",
+            self.opensearch_helper.refresh_aliases,
+            aliases_to_refresh,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
+        )
+
+        self.logger.info(
+            f"Sending {len(tsp_ids)} completed historical document message(s) "
+            "to the next queue."
+        )
+        retry_operation(
+            "Send historical document batch to next queue",
+            self._send_sqs_messages,
+            tsp_ids,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
+        )
+
+        total_source_count = sum(result["source_count"] for result in document_results)
+        total_indexed_count = sum(result["indexed_count"] for result in document_results)
+        self.logger.set_generic_message(
+            f"historical_document_count={len(tsp_ids)}: "
+        )
+        self.logger.info(
+            f"Historical sentence processing completed for {len(tsp_ids)} "
+            f"document(s). Source count: {total_source_count}. Indexed count: "
+            f"{total_indexed_count}."
+        )
+        self.logger.info(
+            f"Historical sentence processing took "
+            f"{perf_counter() - started_at:.2f} seconds to complete."
+        )
+        return {
+            "reason": "HISTORICAL",
+            "tsp_ids": tsp_ids,
+            "document_count": len(document_results),
+            "source_count": total_source_count,
+            "indexed_count": total_indexed_count,
+        }
+
+    def _process_historical_document(
+        self, tsp_id: TspId
+    ) -> tuple[HistoricalResult, str] | None:
+        """Index all saved sentence pages for one historical document.
+
+        Output: the document counts and the catalog alias that received its
+        unique sentence vectors. Refresh and downstream SQS work happen later.
+        """
+
         self.logger.info("Counting historical sentences.")
         total = retry_operation(
             "Count document sentences",
@@ -154,42 +226,19 @@ class HistoricalHandler:
             )
             return None
 
-        # Bulk writes can finish before OpenSearch's automatic refresh runs.
-        # Refresh both aliases once so Sentence Similarity can immediately find
-        # every historical occurrence and its catalog vector after SQS arrives.
-        retry_operation(
-            "Refresh indexed sentences",
-            self.opensearch_helper.refresh_aliases,
-            [catalog_alias, constants.SENTENCE_OCCURRENCE_ALIAS],
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
-        )
-
-        # Tell Sentence Similarity only after every sentence is in OpenSearch.
-        self.logger.info("Sending the completed historical message to the next queue.")
-        retry_operation(
-            "Send sentence processing result to next queue",
-            self._send_sqs_message,
-            tsp_id,
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
-        )
-        self.logger.info("Sent the completed historical message to the next queue.")
         self.logger.info(
-            f"Historical sentence processing completed. Source count: {total}. "
+            f"Historical document indexing completed. Source count: {total}. "
             f"Indexed count: {indexed}."
         )
-        self.logger.info(
-            f"Historical sentence processing took "
-            f"{perf_counter() - started_at:.2f} seconds to complete."
+        return (
+            {
+                "reason": "HISTORICAL",
+                "tsp_id": tsp_id,
+                "source_count": total,
+                "indexed_count": indexed,
+            },
+            catalog_alias,
         )
-
-        return {
-            "reason": "HISTORICAL",
-            "tsp_id": tsp_id,
-            "source_count": total,
-            "indexed_count": indexed,
-        }
 
     def _save_historical_sentence_batch_in_opensearch(
         self,
@@ -229,11 +278,11 @@ class HistoricalHandler:
         )
         return indexed_count
 
-    def _send_sqs_message(self, tsp_id: TspId) -> None:
-        """Send the completed historical document to Sentence Similarity.
+    def _send_sqs_messages(self, tsp_ids: list[TspId]) -> None:
+        """Batch-send completed historical documents to Sentence Similarity.
 
-        Input: tsp_id=1040
-        Output message: {"reason": "HISTORICAL", "tsp_id": 1040}
+        Input: tsp_ids=[1040, 1041]
+        Output: one downstream message per document, sent through SQS batch APIs.
 
         Raises:
             QueueSendError: If the queue is missing or SQS rejects the message.
@@ -243,17 +292,16 @@ class HistoricalHandler:
         if not queue_url:
             raise QueueSendError("AWS SQS send event queue endpoint is not configured")
 
-        message: NextQueueMessage = {
-            "tsp_id": tsp_id,
-            "reason": "HISTORICAL",
-        }
-        sent = self.aws_sqs.send_sqs_message(
+        messages: list[NextQueueMessage] = [
+            {"tsp_id": tsp_id, "reason": "HISTORICAL"} for tsp_id in tsp_ids
+        ]
+        result = self.aws_sqs.send_batch_messages(
             send_queue_url=queue_url,
-            message_body=message,
+            batch_messages=messages,
             is_fifo=queue_url.endswith(".fifo"),
         )
-        if not sent:
+        if result.get("status") != "SUCCEED":
             raise QueueSendError(
-                "Failed to send the completed message to Sentence Similarity"
+                "Failed to send completed messages to Sentence Similarity"
             )
 

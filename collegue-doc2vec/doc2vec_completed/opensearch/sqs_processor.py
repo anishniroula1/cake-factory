@@ -1,3 +1,5 @@
+import json
+
 from doc2vec_completed.opensearch.contracts import SqsMessage, TspId
 from doc2vec_completed.opensearch.dependencies import Dependencies
 from doc2vec_completed.opensearch.errors import (
@@ -25,9 +27,11 @@ class SqsProcessor:
 
         try:
             if raw_message.get("reason") == "HISTORICAL":
-                tsp_id = self._read_tsp_id(raw_message)
-                self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}: ")
-                result = self.dependencies.historical_handler.process(tsp_id)
+                tsp_ids = self._read_tsp_ids(raw_message)
+                self.dependencies.logger.info(
+                    f"Received {len(tsp_ids)} historical tsp_id(s) to process."
+                )
+                result = self.dependencies.historical_handler.process(tsp_ids)
             elif raw_message.get("reason") == "TRAIN_MODEL":
                 tsp_id = self._read_tsp_id(raw_message)
                 self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}: ")
@@ -81,6 +85,33 @@ class SqsProcessor:
         if tsp_id is None or tsp_id == "":
             raise PermanentMessageError("tsp_id is required")
         return tsp_id
+
+    @classmethod
+    def _read_tsp_ids(cls, message: SqsMessage) -> list[TspId]:
+        """Return historical IDs as one list.
+
+        Input: {"tsp_id": 1040} or {"tsp_ids": "[1040, 1041]"}
+        Output: [1040, 1041]
+        """
+
+        raw_tsp_ids = message.get("tsp_ids")
+        if raw_tsp_ids is None:
+            return [cls._read_tsp_id(message)]
+
+        try:
+            tsp_ids = json.loads(raw_tsp_ids) if isinstance(raw_tsp_ids, str) else raw_tsp_ids
+        except json.JSONDecodeError as error:
+            raise PermanentMessageError("tsp_ids must be a valid JSON list") from error
+
+        valid_ids = isinstance(tsp_ids, list) and tsp_ids and all(
+            not isinstance(value, bool)
+            and isinstance(value, (int, str))
+            and (not isinstance(value, str) or bool(value.strip()))
+            for value in tsp_ids
+        )
+        if not valid_ids:
+            raise PermanentMessageError("tsp_ids must be a non-empty list of strings or numbers")
+        return list(dict.fromkeys(tsp_ids))
 
     @staticmethod
     def _read_tracer_id(message: SqsMessage) -> int:

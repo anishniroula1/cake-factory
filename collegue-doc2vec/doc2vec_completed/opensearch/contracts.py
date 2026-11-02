@@ -23,6 +23,7 @@ class SqsMessage(TypedDict, total=False):
 
     reason: str
     tsp_id: TspId
+    tsp_ids: str | list[TspId]
     tracer_sentence_id: int | str
     MessageId: str | None
     ReceiptHandle: str | None
@@ -52,6 +53,16 @@ class HistoricalResult(TypedDict):
 
     reason: Literal["HISTORICAL"]
     tsp_id: TspId
+    source_count: int
+    indexed_count: int
+
+
+class HistoricalBatchResult(TypedDict):
+    """Combined counts after every historical document in one message finishes."""
+
+    reason: Literal["HISTORICAL"]
+    tsp_ids: list[TspId]
+    document_count: int
     source_count: int
     indexed_count: int
 
