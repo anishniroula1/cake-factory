@@ -131,8 +131,9 @@ document IDs.
 8. Save every sentence occurrence.
 9. After every document finishes, refresh each affected catalog and the
    occurrence alias once.
-10. Send one downstream message per `tsp_id` with the SQS batch API. Lists
-    larger than ten are divided into valid ten-entry SQS requests.
+10. Use a separate outbound SQS client configured with the send-event queue.
+    Convert every downstream message to a JSON string and send at most ten
+    messages in each SQS batch request.
 11. Delete the source message only after every downstream message is accepted.
 
 The historical flow fails safely when the next queue is not configured. It does

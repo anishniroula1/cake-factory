@@ -52,6 +52,12 @@ class Dependencies:
             logger=self.logger,
             visibility_timeout=constants.SQS_VISIBILITY_SECONDS,
         )
+        self.historical_send_sqs = AwsSQS(
+            queue_url=self.config.aws_sqs_send_event_queue_endpoint,
+            aws_region=self.config.aws_region,
+            aws_endpoint_url=self.config.aws_local_endpoint_url or None,
+            logger=self.logger,
+        )
         self.live_handler = LiveHandler(
             self.config,
             self.session_factory,
@@ -63,7 +69,7 @@ class Dependencies:
             self.config,
             self.session_factory,
             self.opensearch_helper,
-            self.aws_sqs,
+            self.historical_send_sqs,
             self.logger,
         )
         self.tracer_handler = TracerHandler(

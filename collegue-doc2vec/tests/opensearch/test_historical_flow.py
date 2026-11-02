@@ -319,6 +319,30 @@ def test_historical_list_refreshes_once_and_sends_one_sqs_batch(
     assert result["document_count"] == 2 and len(sqs.sent[0]["batch_messages"]) == 2
 
 
+def test_historical_send_uses_ten_string_messages_per_batch(
+    service_config,
+    custom_logger,
+):
+    sqs = SqsFake()
+    handler = HistoricalHandler(
+        service_config,
+        SessionSequence([]),
+        OpenSearchFake(),
+        sqs,
+        custom_logger,
+    )
+
+    handler._send_sqs_messages(list(range(1, 13)))
+
+    assert [len(call["batch_messages"]) for call in sqs.sent] == [10, 2]
+    assert all(call["retries"] == 3 for call in sqs.sent)
+    assert json.loads(sqs.sent[0]["batch_messages"][0]) == {
+        "source": "P2",
+        "tsp_id": "1",
+        "sent_by": "doc2vec",
+    }
+
+
 def test_failed_worker_logs_its_global_id_range(
     service_config,
     sentence_record,

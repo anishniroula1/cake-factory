@@ -32,8 +32,9 @@ class SqsMessage(TypedDict, total=False):
 class HistoricalNextQueueMessage(TypedDict):
     """Message sent to Sentence Similarity after indexing completes."""
 
-    reason: Literal["HISTORICAL"]
+    source: Literal["P2"]
     tsp_id: TspId
+    sent_by: Literal["doc2vec"]
 
 
 class LiveNextQueueMessage(TypedDict):

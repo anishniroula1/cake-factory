@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
@@ -10,7 +11,6 @@ from doc2vec_completed.opensearch.config import Config
 from doc2vec_completed.opensearch.contracts import (
     HistoricalBatchResult,
     HistoricalResult,
-    NextQueueMessage,
     TspId,
 )
 from doc2vec_completed.opensearch.db_store import (
@@ -36,12 +36,12 @@ class HistoricalHandler:
         config: Config,
         session_factory: Callable[[], Session],
         opensearch_helper: OpenSearchHelper,
-        aws_sqs: AwsSQS,
+        historical_send_sqs: AwsSQS,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
         self.opensearch_helper = opensearch_helper
-        self.aws_sqs = aws_sqs
+        self.historical_send_sqs = historical_send_sqs
         self.logger = custom_logger
         self.sentence_vector_db_store = SentenceVectorDBStore(session_factory)
         self.embedding_db_store = EmbeddingDBStore(session_factory)
@@ -282,7 +282,7 @@ class HistoricalHandler:
         """Batch-send completed historical documents to Sentence Similarity.
 
         Input: tsp_ids=[1040, 1041]
-        Output: one downstream message per document, sent through SQS batch APIs.
+        Output: one JSON-string message per document in batches of at most ten.
 
         Raises:
             QueueSendError: If the queue is missing or SQS rejects the message.
@@ -292,16 +292,27 @@ class HistoricalHandler:
         if not queue_url:
             raise QueueSendError("AWS SQS send event queue endpoint is not configured")
 
-        messages: list[NextQueueMessage] = [
-            {"tsp_id": tsp_id, "reason": "HISTORICAL"} for tsp_id in tsp_ids
-        ]
-        result = self.aws_sqs.send_batch_messages(
-            send_queue_url=queue_url,
-            batch_messages=messages,
-            is_fifo=queue_url.endswith(".fifo"),
-        )
-        if result.get("status") != "SUCCEED":
-            raise QueueSendError(
-                "Failed to send completed messages to Sentence Similarity"
+        messages = [
+            json.dumps(
+                {
+                    "source": "P2",
+                    "tsp_id": str(tsp_id),
+                    "sent_by": "doc2vec",
+                }
             )
+            for tsp_id in tsp_ids
+        ]
+        # SQS accepts no more than ten messages in one batch request. Split the
+        # list here because the shared SQS library does not enforce that limit.
+        for message_batch in batches(messages, constants.SQS_SEND_BATCH_SIZE):
+            result = self.historical_send_sqs.send_batch_messages(
+                send_queue_url=queue_url,
+                batch_messages=message_batch,
+                is_fifo=queue_url.endswith(".fifo"),
+                retries=3,
+            )
+            if result.get("status") != "SUCCEED":
+                raise QueueSendError(
+                    "Failed to send completed messages to Sentence Similarity"
+                )
 

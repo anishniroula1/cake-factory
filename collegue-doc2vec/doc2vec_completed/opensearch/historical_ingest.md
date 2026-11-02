@@ -54,7 +54,9 @@ the expected fields are visible before a document is sent for bulk indexing.
 8. Write every sentence occurrence using `global_id` as its OpenSearch ID.
 9. Refresh every affected catalog and the occurrence alias once after all
    documents finish.
-10. Batch-send one `HISTORICAL` message per `tsp_id` to Sentence Similarity.
+10. Convert each completion message to a JSON string containing `source=P2`,
+    the string `tsp_id`, and `sent_by=doc2vec`. Send no more than ten messages
+    per batch to Sentence Similarity.
 11. Delete the source message only after every downstream batch succeeds.
 
 Documents use stable OpenSearch IDs, so retrying a page updates the same
