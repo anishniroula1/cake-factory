@@ -70,25 +70,36 @@ class HistoricalHandler:
         catalog_aliases: set[str] = set()
 
         for document_number, tsp_id in enumerate(tsp_ids, start=1):
+            document_started_at = perf_counter()
             self.logger.set_generic_message(f"tsp_id={tsp_id}: ")
-            self.logger.info(
-                f"Processing historical document {document_number} of {len(tsp_ids)}."
-            )
             try:
-                document_output = self._process_historical_document(tsp_id)
-            except CriticalProcessingError as error:
-                failed_tsp_ids.append(tsp_id)
-                self.logger.error(
-                    "Historical document failed and was skipped. Cause: "
-                    f"{safe_error_summary(error)}"
+                self.logger.info(
+                    f"Processing historical document {document_number} of "
+                    f"{len(tsp_ids)}."
                 )
-                continue
-            if document_output is None:
-                failed_tsp_ids.append(tsp_id)
-                continue
-            document_result, catalog_alias = document_output
-            document_results.append(document_result)
-            catalog_aliases.add(catalog_alias)
+                try:
+                    document_output = self._process_historical_document(tsp_id)
+                except CriticalProcessingError as error:
+                    failed_tsp_ids.append(tsp_id)
+                    self.logger.error(
+                        "Historical document failed and was skipped. Cause: "
+                        f"{safe_error_summary(error)}"
+                    )
+                    continue
+                if document_output is None:
+                    failed_tsp_ids.append(tsp_id)
+                    continue
+                document_result, catalog_alias = document_output
+                document_results.append(document_result)
+                catalog_aliases.add(catalog_alias)
+            finally:
+                self.logger.info(
+                    f"Historical document processing took "
+                    f"{perf_counter() - document_started_at:.2f} seconds."
+                )
+                # The tsp_id prefix belongs only to this document. Clear it so
+                # refresh and SQS batch logs do not show the last document ID.
+                self.logger.set_generic_message(None)
 
         successful_tsp_ids = [result["tsp_id"] for result in document_results]
         if successful_tsp_ids:
@@ -311,19 +322,24 @@ class HistoricalHandler:
         if not queue_url:
             raise QueueSendError("AWS SQS send event queue endpoint is not configured")
 
-        messages = [
-            json.dumps(
-                {
-                    "source": "P2",
-                    "tsp_id": str(tsp_id),
-                    "sent_by": "doc2vec",
-                }
-            )
-            for tsp_id in tsp_ids
-        ]
         # SQS accepts no more than ten messages in one batch request. Split the
         # list here because the shared SQS library does not enforce that limit.
-        for message_batch in batches(messages, constants.SQS_SEND_BATCH_SIZE):
+        for tsp_id_batch in batches(tsp_ids, constants.SQS_SEND_BATCH_SIZE):
+            string_tsp_ids = [str(tsp_id) for tsp_id in tsp_id_batch]
+            self.logger.info(
+                f"Sending historical SQS batch with tsp_ids="
+                f"{json.dumps(string_tsp_ids)}."
+            )
+            message_batch = [
+                json.dumps(
+                    {
+                        "source": "P2",
+                        "tsp_id": tsp_id,
+                        "sent_by": "doc2vec",
+                    }
+                )
+                for tsp_id in string_tsp_ids
+            ]
             result = self.historical_send_sqs.send_batch_messages(
                 send_queue_url=queue_url,
                 batch_messages=message_batch,

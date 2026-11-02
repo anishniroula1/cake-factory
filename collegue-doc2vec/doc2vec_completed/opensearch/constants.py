@@ -14,7 +14,7 @@ REFUGEE_CATALOG_ALIAS = "sentence_semantic_catalog_refugee"
 TRAINING_ALIAS = "sentence_semantic_training"
 TRACER_ALIAS = "tracer_form_language_catalog"
 OPENSEARCH_BATCH_SIZE = 1000
-OPENSEARCH_BULK_RETRY_COUNT = 15  # Retries after the first bulk request fails.
+OPENSEARCH_BULK_RETRY_COUNT = 30  # Retries after the first bulk request fails.
 VECTOR_DIMENSION = 512
 
 # Processing
