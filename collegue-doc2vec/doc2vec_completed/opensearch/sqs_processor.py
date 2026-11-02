@@ -82,35 +82,46 @@ class SqsProcessor:
         """Return tsp_id exactly as supplied, including a string value."""
 
         tsp_id = message.get("tsp_id")
-        if tsp_id is None or tsp_id == "":
+        if (
+            isinstance(tsp_id, bool)
+            or not isinstance(tsp_id, (int, str))
+            or (isinstance(tsp_id, str) and not tsp_id.strip())
+        ):
             raise PermanentMessageError("tsp_id is required")
         return tsp_id
 
     @classmethod
     def _read_tsp_ids(cls, message: SqsMessage) -> list[TspId]:
-        """Return historical IDs as one list.
+        """Return the historical tsp_id value as one list.
 
-        Input: {"tsp_id": 1040} or {"tsp_ids": "[1040, 1041]"}
+        Input: {"tsp_id": "1040"} or {"tsp_id": "[1040, 1041]"}
         Output: [1040, 1041]
         """
 
-        raw_tsp_ids = message.get("tsp_ids")
-        if raw_tsp_ids is None:
-            return [cls._read_tsp_id(message)]
+        raw_tsp_id = message.get("tsp_id")
+        if isinstance(raw_tsp_id, str):
+            raw_tsp_id = raw_tsp_id.strip()
+            if not raw_tsp_id:
+                raise PermanentMessageError("tsp_id is required")
+            if not raw_tsp_id.startswith("["):
+                return [raw_tsp_id]
 
         try:
-            tsp_ids = json.loads(raw_tsp_ids) if isinstance(raw_tsp_ids, str) else raw_tsp_ids
+            tsp_ids = json.loads(raw_tsp_id) if isinstance(raw_tsp_id, str) else raw_tsp_id
         except json.JSONDecodeError as error:
-            raise PermanentMessageError("tsp_ids must be a valid JSON list") from error
+            raise PermanentMessageError("tsp_id must be a valid JSON list") from error
 
-        valid_ids = isinstance(tsp_ids, list) and tsp_ids and all(
+        if not isinstance(tsp_ids, list):
+            return [cls._read_tsp_id(message)]
+
+        valid_ids = tsp_ids and all(
             not isinstance(value, bool)
             and isinstance(value, (int, str))
             and (not isinstance(value, str) or bool(value.strip()))
             for value in tsp_ids
         )
         if not valid_ids:
-            raise PermanentMessageError("tsp_ids must be a non-empty list of strings or numbers")
+            raise PermanentMessageError("tsp_id must be a non-empty list of strings or numbers")
         return list(dict.fromkeys(tsp_ids))
 
     @staticmethod

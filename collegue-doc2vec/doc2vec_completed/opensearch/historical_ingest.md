@@ -23,13 +23,12 @@ standalone default.
 Input:
 
 ```json
-{"reason": "HISTORICAL", "tsp_ids": "[1040, 1041]"}
+{"reason": "HISTORICAL", "tsp_id": "[1040, 1041]"}
 ```
 
-The SQS processor requires `reason=HISTORICAL` and a non-empty `tsp_ids` JSON
-array string. The worker converts that string into a Python list and keeps each
-ID exactly as received, so both numbers and strings are valid. A legacy message
-containing one `tsp_id` is also accepted.
+The SQS processor requires `reason=HISTORICAL` and `tsp_id`. The value can be
+one string or number, a JSON array string, or a list. The worker always converts
+it into a Python list and keeps each ID exactly as received.
 
 The main code types are defined in `contracts.py`. The processing flow is:
 
@@ -42,7 +41,7 @@ the expected fields are visible before a document is sent for bulk indexing.
 
 ## Historical flow
 
-1. Decode the `tsp_ids` string and process every listed document.
+1. Convert the scalar or JSON-list `tsp_id` value into a list and process every document.
 2. Count all `sentences_vector` rows for each `tsp_id`.
 3. Read up to 3,000 rows at a time in `global_id` order.
 4. Generate and save the SHA-256 `sentence_key` for every row.

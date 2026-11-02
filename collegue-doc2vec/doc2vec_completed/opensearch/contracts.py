@@ -22,8 +22,7 @@ class SqsMessage(TypedDict, total=False):
     """Decoded document message and its delivery metadata."""
 
     reason: str
-    tsp_id: TspId
-    tsp_ids: str | list[TspId]
+    tsp_id: TspId | list[TspId]
     tracer_sentence_id: int | str
     MessageId: str | None
     ReceiptHandle: str | None

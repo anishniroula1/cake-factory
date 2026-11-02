@@ -7,6 +7,7 @@ from doc2vec_completed.opensearch import main
 from doc2vec_completed.opensearch.dependencies import Dependencies
 from doc2vec_completed.opensearch.errors import PermanentDataError, QueueSendError
 from doc2vec_completed.opensearch.handlers.historical_handler import HistoricalHandler
+from doc2vec_completed.opensearch.sqs_processor import SqsProcessor
 from doc2vec_completed.opensearch.text import sentence_key
 from ta_db_connection.atatables import Embeddings, SentencesVector
 from tests.opensearch.fakes import OpenSearchFake, SessionFake, SessionSequence, SqsFake
@@ -43,11 +44,19 @@ class FlowDependencies(Dependencies):
 def historical_message(tsp_id=10):
     return {
         "reason": "HISTORICAL",
-        "tsp_ids": json.dumps([tsp_id]),
+        "tsp_id": json.dumps([tsp_id]),
         "MessageId": "message-1",
         "ReceiptHandle": "receipt-1",
         "message_receive_count": 1,
     }
+
+
+def test_historical_tsp_id_accepts_one_string_or_a_list():
+    assert (
+        SqsProcessor._read_tsp_ids({"tsp_id": "10"}),
+        SqsProcessor._read_tsp_ids({"tsp_id": "[10, 20]"}),
+        SqsProcessor._read_tsp_ids({"tsp_id": [10, 20]}),
+    ) == (["10"], [10, 20], [10, 20])
 
 
 def sentence_from(source, global_id, content):

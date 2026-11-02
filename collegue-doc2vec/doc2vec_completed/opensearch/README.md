@@ -39,7 +39,7 @@ Historical sentence backfill:
 ```json
 {
   "reason": "HISTORICAL",
-  "tsp_ids": "[1040, 1041]"
+  "tsp_id": "[1040, 1041]"
 }
 ```
 
@@ -62,8 +62,8 @@ Tracer, form-language, and non-matcher references:
 ```
 
 `tsp_id` remains an integer or string exactly as supplied by the upstream
-service. Historical `tsp_ids` arrives as a JSON array string and is decoded
-before processing. `tracer_sentence_id` can be an integer or numeric string and
+service. Historical `tsp_id` can contain one ID or a JSON array string and is
+always converted to a list before processing. `tracer_sentence_id` can be an integer or numeric string and
 is converted to an integer before processing. `HISTORICAL`, `TRAIN_MODEL`, and
 `TRACER` select their named handlers. Every other message follows the incoming
 document flow and must contain `tsp_id`.
@@ -120,7 +120,7 @@ Historical documents already have sentence records, so this flow never splits
 the original document again. One source SQS message can contain several
 document IDs.
 
-1. Decode the `tsp_ids` JSON string and process each document in order.
+1. Convert the scalar or JSON-list `tsp_id` value into a list and process each document in order.
 2. Count the document's `sentences_vector` records.
 3. Load up to 3000 records per page in `global_id` order.
 4. Split each page into 30-sentence jobs and run up to 100 jobs concurrently.
