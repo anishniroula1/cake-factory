@@ -14,11 +14,11 @@
  * kept so Case Similarity can refresh the affected application afterward.
  */
 CREATE FUNCTION tsp.delete_titan_matches_for_tsp(
-    p_tsp_id INTEGER
+    p_tsp_id BIGINT
 )
 RETURNS TABLE (
-    affected_application_ids INTEGER[],
-    affected_tsp_ids INTEGER[],
+    affected_application_ids BIGINT[],
+    affected_tsp_ids BIGINT[],
     has_deleted_document BOOLEAN,
     source_global_id_count INTEGER,
     deleted_match_bucket_count INTEGER,
@@ -34,8 +34,8 @@ DECLARE
     deleted_bucket_count INTEGER := 0;
     updated_reverse_count INTEGER := 0;
     deleted_empty_count INTEGER := 0;
-    affected_applications INTEGER[] := ARRAY[]::INTEGER[];
-    affected_documents INTEGER[] := ARRAY[]::INTEGER[];
+    affected_applications BIGINT[] := ARRAY[]::BIGINT[];
+    affected_documents BIGINT[] := ARRAY[]::BIGINT[];
 BEGIN
     /*
      * Stop immediately when this document has no Titan matches.
@@ -50,8 +50,8 @@ BEGIN
     ) THEN
         RETURN QUERY
         SELECT
-            ARRAY[]::INTEGER[],
-            ARRAY[]::INTEGER[],
+            ARRAY[]::BIGINT[],
+            ARRAY[]::BIGINT[],
             FALSE,
             0,
             0,
@@ -108,14 +108,14 @@ BEGIN
     )
     SELECT
         ARRAY(
-            SELECT DISTINCT owner.application_id
+            SELECT DISTINCT owner.application_id::BIGINT
             FROM affected_owners AS owner
-            ORDER BY owner.application_id
+            ORDER BY owner.application_id::BIGINT
         ),
         ARRAY(
-            SELECT DISTINCT owner.tsp_id
+            SELECT DISTINCT owner.tsp_id::BIGINT
             FROM affected_owners AS owner
-            ORDER BY owner.tsp_id
+            ORDER BY owner.tsp_id::BIGINT
         )
     INTO affected_applications, affected_documents;
 
@@ -249,6 +249,6 @@ END;
 $$;
 
 
-COMMENT ON FUNCTION tsp.delete_titan_matches_for_tsp(INTEGER)
+COMMENT ON FUNCTION tsp.delete_titan_matches_for_tsp(BIGINT)
 IS
 'Returns affected application/document IDs and removes one document from bidirectional Titan match buckets.';
