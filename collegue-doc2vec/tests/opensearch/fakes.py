@@ -131,7 +131,7 @@ class SqsFake:
         self.sent.append(values)
         return self.send_result
 
-    def send_message_in_batch(self, queue_url, batch, **values):
+    def send_messages_in_batch(self, queue_url, batch, **values):
         self.sent.append(
             {
                 "queue_url": queue_url,

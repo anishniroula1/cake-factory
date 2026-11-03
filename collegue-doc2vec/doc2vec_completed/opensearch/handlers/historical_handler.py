@@ -340,7 +340,7 @@ class HistoricalHandler:
                 )
                 for tsp_id in string_tsp_ids
             ]
-            result = self.aws_sqs.send_message_in_batch(
+            result = self.aws_sqs.send_messages_in_batch(
                 queue_url=queue_url,
                 batch=message_batch,
                 is_fifo=queue_url.endswith(".fifo"),

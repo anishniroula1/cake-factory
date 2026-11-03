@@ -197,7 +197,7 @@ class AwsSQS:
 
         return False
 
-    def send_message_in_batch(
+    def send_messages_in_batch(
         self,
         queue_url: str,
         batch: list[str | NextQueueMessage],
