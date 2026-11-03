@@ -59,12 +59,34 @@ class DocumentDeleteHandler:
         """
 
         started_at = perf_counter()
+        self.logger.info(
+            "Starting Amazon OpenSearch deletion from sentence occurrence and "
+            "sentence catalog indexes."
+        )
         opensearch_deletion_result = self._delete_document_from_opensearch(tsp_id)
+        self.logger.info(
+            "Amazon OpenSearch deletion completed. Removed "
+            f"{opensearch_deletion_result.occurrence_count} occurrence(s) and "
+            f"{opensearch_deletion_result.catalog_count} orphaned catalog vector(s)."
+        )
+
+        self.logger.info(
+            "Starting PostgreSQL bidirectional deletion from tsp.titan_matches."
+        )
         titan_match_deletion_result = self._delete_titan_matches(tsp_id)
+        self.logger.info(
+            "PostgreSQL tsp.titan_matches deletion completed. Removed "
+            f"{titan_match_deletion_result.deleted_match_bucket_count} source "
+            "bucket(s)."
+        )
         database_deletion_result = titan_match_deletion_result
         # OpenSearch and Titan cleanup always run. This flag additionally gates
         # legacy embedding and sentence-vector cleanup.
         if self.database_delete_enabled:
+            self.logger.info(
+                "Starting enabled PostgreSQL cleanup for tsp.embeddings and "
+                "tsp.sentences_vector."
+            )
             legacy_deletion_result = self._delete_legacy_document_data(tsp_id)
             database_deletion_result = DatabaseDeletionResult(
                 affected_application_ids=titan_match_deletion_result.affected_application_ids,
@@ -75,6 +97,12 @@ class DocumentDeleteHandler:
                 deleted_sentence_count=legacy_deletion_result.deleted_sentence_count,
             )
             self._update_document_state(tsp_id)
+            self.logger.info(
+                "Enabled PostgreSQL cleanup completed. Removed "
+                f"{database_deletion_result.deleted_embedding_count} embedding(s) "
+                f"and {database_deletion_result.deleted_sentence_count} "
+                "sentence-vector row(s), then updated tsp.text_similarity_input."
+            )
         else:
             self.logger.info(
                 "Legacy database deletion is disabled. Titan matches were cleaned, "
@@ -139,6 +167,10 @@ class DocumentDeleteHandler:
 
         # This snapshot supplies sentenceKey values for catalog ownership checks.
         # Occurrence deletion itself uses one tspId delete-by-query operation.
+        self.logger.info(
+            "Loading document occurrences from Amazon OpenSearch alias "
+            f"{constants.SENTENCE_OCCURRENCE_ALIAS}."
+        )
         occurrence_records = retry_operation(
             "Load sentence occurrences",
             self.sentence_occurrence_open_search_store.load_document_occurrences,
@@ -146,6 +178,10 @@ class DocumentDeleteHandler:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
+        )
+        self.logger.info(
+            f"Loaded {len(occurrence_records)} occurrence record(s) from "
+            f"{constants.SENTENCE_OCCURRENCE_ALIAS}."
         )
         # A tsp_id belongs to one analysis group. Catalog aliases are separated
         # by group, so a reference in the other group must not keep this vector.
@@ -159,6 +195,10 @@ class DocumentDeleteHandler:
         shared_sentence_keys: set[str] = set()
         deleted_catalog_count = 0
         if analysis_group and sentence_keys:
+            self.logger.info(
+                f"Checking {len(sentence_keys)} unique sentence key(s) for "
+                f"remaining {analysis_group} occurrence references in Amazon OpenSearch."
+            )
             # Excluding the current tsp_id answers the exact ownership question:
             # which keys will still have a same-group occurrence after this delete?
             shared_sentence_keys = retry_operation(
@@ -171,12 +211,20 @@ class DocumentDeleteHandler:
                 custom_logger=self.logger,
                 max_attempts=constants.MAX_ATTEMPTS,
             )
+            self.logger.info(
+                f"Amazon OpenSearch reference check completed. "
+                f"{len(shared_sentence_keys)} sentence key(s) are still shared."
+            )
             # The set difference is the catalog delete list. Shared keys stay;
             # keys referenced only by this tsp_id are orphaned and are removed.
             orphaned_sentence_keys = [
                 sentence_key for sentence_key in sentence_keys if sentence_key not in shared_sentence_keys
             ]
             if orphaned_sentence_keys:
+                self.logger.info(
+                    f"Deleting {len(orphaned_sentence_keys)} orphaned vector(s) "
+                    f"from the {analysis_group} sentence catalog."
+                )
                 deleted_catalog_count = retry_operation(
                     "Delete unreferenced catalog vectors",
                     self.sentence_catalog_open_search_store.delete_catalog_documents_by_sentence_key,
@@ -186,10 +234,18 @@ class DocumentDeleteHandler:
                     custom_logger=self.logger,
                     max_attempts=constants.MAX_ATTEMPTS,
                 )
+                self.logger.info(
+                    f"Sentence catalog deletion completed for "
+                    f"{deleted_catalog_count} vector(s)."
+                )
 
         # Delete all occurrences for the tsp_id together, including occurrences
         # whose shared sentenceKey caused their catalog vector to be kept. This
         # runs last so catalog failures leave the reference data retryable.
+        self.logger.info(
+            f"Deleting document occurrences from Amazon OpenSearch alias "
+            f"{constants.SENTENCE_OCCURRENCE_ALIAS}."
+        )
         deleted_occurrence_count = retry_operation(
             "Delete sentence occurrences",
             self.sentence_occurrence_open_search_store.delete_occurrences_by_tsp_id,
@@ -197,6 +253,9 @@ class DocumentDeleteHandler:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
+        )
+        self.logger.info(
+            f"Occurrence deletion completed for {deleted_occurrence_count} record(s)."
         )
 
         return OpenSearchDeletionResult(
@@ -215,6 +274,9 @@ class DocumentDeleteHandler:
         OpenSearch flow and is not controlled by the legacy database toggle.
         """
 
+        self.logger.info(
+            "Calling PostgreSQL function tsp.delete_titan_matches_for_tsp."
+        )
         deletion_result = retry_operation(
             "Delete Titan matches",
             self.titan_matches_db_store.delete_bidirectional_document_matches,
@@ -222,6 +284,11 @@ class DocumentDeleteHandler:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
+        )
+        self.logger.info(
+            "PostgreSQL function tsp.delete_titan_matches_for_tsp completed. "
+            f"Affected application count: {len(deletion_result.affected_application_ids)}. "
+            f"Affected tsp_id count: {len(deletion_result.affected_tsp_ids)}."
         )
         if not deletion_result.has_deleted_document:
             self.logger.info("No titan_matches rows were found for this document.")
@@ -239,6 +306,9 @@ class DocumentDeleteHandler:
         Output: deleted embedding and sentence-row counts.
         """
 
+        self.logger.info(
+            "Loading document global IDs from PostgreSQL table tsp.sentences_vector."
+        )
         sentence_vector_context = retry_operation(
             "Load document sentences",
             self.sentence_vector_db_store.load_document_sentence_context,
@@ -247,6 +317,11 @@ class DocumentDeleteHandler:
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
         )
+        self.logger.info(
+            f"Loaded {len(sentence_vector_context.global_ids)} global ID(s) from "
+            "tsp.sentences_vector."
+        )
+        self.logger.info("Deleting document vectors from PostgreSQL table tsp.embeddings.")
         deleted_embedding_count = retry_operation(
             "Delete sentence embeddings",
             self.embeddings_db_store.delete_sentence_embeddings,
@@ -255,6 +330,13 @@ class DocumentDeleteHandler:
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
         )
+        self.logger.info(
+            f"PostgreSQL tsp.embeddings deletion completed for "
+            f"{deleted_embedding_count} row(s)."
+        )
+        self.logger.info(
+            "Deleting document sentences from PostgreSQL table tsp.sentences_vector."
+        )
         deleted_sentence_count = retry_operation(
             "Delete sentence vector rows",
             self.sentence_vector_db_store.delete_document_sentence_records,
@@ -262,6 +344,10 @@ class DocumentDeleteHandler:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
             max_attempts=constants.MAX_ATTEMPTS,
+        )
+        self.logger.info(
+            f"PostgreSQL tsp.sentences_vector deletion completed for "
+            f"{deleted_sentence_count} row(s)."
         )
         return DatabaseDeletionResult(
             deleted_embedding_count=deleted_embedding_count,
@@ -285,6 +371,10 @@ class DocumentDeleteHandler:
     def _update_document_state(self, tsp_id: TspId) -> None:
         """Set the retained TSI record to DOC_DELETED without reading its state."""
 
+        self.logger.info(
+            "Updating document_state in PostgreSQL table tsp.text_similarity_input "
+            "to DOC_DELETED."
+        )
         updated_count = retry_operation(
             "Update document state to DOC_DELETED",
             self.text_similarity_input_db_store.update_document_state,
@@ -299,3 +389,6 @@ class DocumentDeleteHandler:
                 f"Expected one text_similarity_input record for tsp_id={tsp_id}, "
                 f"updated {updated_count}."
             )
+        self.logger.info(
+            "PostgreSQL tsp.text_similarity_input document_state update completed."
+        )

@@ -5,6 +5,12 @@ calling service. It does not query `tsp.text_similarity_input` for work or
 check its current status. After enabled database cleanup succeeds, it updates
 the retained record to `DOC_DELETED`.
 
+The existing batch job remains the entry point. Set
+`OPENSEARCH_FLOW_ENABLED=true` to run the existing deletion flow and the new
+OpenSearch deletion flow in separate threads for the same batch. The job waits
+for both flows to finish before it loads the next batch. When the toggle is
+false, the existing deletion flow runs unchanged.
+
 ## Processing flow
 
 1. Receive a list such as `[1040, 1041]` from the calling service.
