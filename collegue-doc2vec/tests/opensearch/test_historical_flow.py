@@ -319,7 +319,7 @@ def test_historical_list_refreshes_once_and_sends_one_sqs_batch(
     assert opensearch.refresh_alias_calls == [
         ["catalog-asylee", "catalog-refugee", "occurrence"]
     ]
-    assert result["tsp_ids"] == [10, 20] and len(sqs.sent[0]["batch_messages"]) == 2
+    assert result["tsp_ids"] == [10, 20] and len(sqs.sent[0]["batch"]) == 2
     assert any('["15"]' in message for message in custom_logger.error_messages)
 
 
@@ -338,9 +338,10 @@ def test_historical_send_uses_ten_string_messages_per_batch(
 
     handler._send_sqs_messages(list(range(1, 13)))
 
-    assert [len(call["batch_messages"]) for call in sqs.sent] == [10, 2]
+    assert [len(call["batch"]) for call in sqs.sent] == [10, 2]
     assert all(call["retries"] == 3 for call in sqs.sent)
-    assert json.loads(sqs.sent[0]["batch_messages"][0]) == {
+    assert all(call["message_group_id"] is None for call in sqs.sent)
+    assert json.loads(sqs.sent[0]["batch"][0]) == {
         "source": "P2",
         "tsp_id": "1",
         "sent_by": "doc2vec",

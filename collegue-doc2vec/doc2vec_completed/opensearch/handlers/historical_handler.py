@@ -36,12 +36,12 @@ class HistoricalHandler:
         config: Config,
         session_factory: Callable[[], Session],
         opensearch_helper: OpenSearchHelper,
-        historical_send_sqs: AwsSQS,
+        aws_sqs: AwsSQS,
         custom_logger: CustomLogger,
     ) -> None:
         self.config = config
         self.opensearch_helper = opensearch_helper
-        self.historical_send_sqs = historical_send_sqs
+        self.aws_sqs = aws_sqs
         self.logger = custom_logger
         self.sentence_vector_db_store = SentenceVectorDBStore(session_factory)
         self.embedding_db_store = EmbeddingDBStore(session_factory)
@@ -340,13 +340,15 @@ class HistoricalHandler:
                 )
                 for tsp_id in string_tsp_ids
             ]
-            result = self.historical_send_sqs.send_batch_messages(
-                send_queue_url=queue_url,
-                batch_messages=message_batch,
+            result = self.aws_sqs.send_message_in_batch(
+                queue_url=queue_url,
+                batch=message_batch,
                 is_fifo=queue_url.endswith(".fifo"),
+                message_group_id=None,
+                wait_time=constants.RETRY_SECONDS,
                 retries=3,
             )
-            if result.get("status") != "SUCCEED":
+            if result.get("status") != "SUCCEEDED":
                 raise QueueSendError(
                     "Failed to send completed messages to Sentence Similarity"
                 )

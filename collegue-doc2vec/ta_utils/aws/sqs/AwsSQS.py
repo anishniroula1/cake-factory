@@ -24,10 +24,9 @@ class AwsSQS:
         wait_time: int = 20,
         logger=None,
         visibility_timeout: int = 7_200,
-        sqs_client=None,
     ) -> None:
         self._logger = logger
-        self._sqs = sqs_client or boto3.client(
+        self._sqs = boto3.client(
             "sqs",
             region_name=aws_region,
             endpoint_url=aws_endpoint_url,
@@ -198,53 +197,50 @@ class AwsSQS:
 
         return False
 
-    def send_batch_messages(
+    def send_message_in_batch(
         self,
-        send_queue_url: str,
-        batch_messages: list[str | NextQueueMessage],
-        wait_time: int = 5,
-        retries: int = 0,
-        is_fifo: bool = True,
-        **kwargs,
+        queue_url: str,
+        batch: list[str | NextQueueMessage],
+        is_fifo: bool,
+        message_group_id: str | None,
+        wait_time: int,
+        retries: int,
     ) -> dict[str, object]:
         """Send messages with the SQS batch API in groups of at most ten.
 
-        Input: send_queue_url="https://sqs.../similarity.fifo",
-        batch_messages=[{"reason": "HISTORICAL", "tsp_id": 1040}]
-        Output: {"status": "SUCCEED"} when every batch entry is accepted.
+        Input: queue_url="https://sqs.../similarity.fifo",
+        batch=[{"source": "P2", "tsp_id": 1040}], message_group_id=None
+        Output: {"status": "SUCCEEDED", "data": []} when accepted.
 
-        Amazon SQS accepts no more than ten entries in one batch request. A
-        larger input list is therefore split into multiple API calls.
+        A supplied message_group_id is reused for the batch. Otherwise each
+        FIFO message receives its own group and deduplication IDs.
         """
 
-        if not batch_messages:
-            return {"status": "SUCCEED"}
-        if not send_queue_url:
-            return {"status": "FAILED", "data": batch_messages}
+        if not batch:
+            return {"status": "SUCCEEDED", "data": []}
+        if not queue_url:
+            return {"status": "FAILED", "data": batch}
 
-        for offset in range(0, len(batch_messages), 10):
-            message_batch = batch_messages[offset : offset + 10]
+        for offset in range(0, len(batch), 10):
+            message_batch = batch[offset : offset + 10]
             entries = []
-            for position, message in enumerate(message_batch):
+            for message in message_batch:
                 body = message if isinstance(message, str) else json.dumps(message)
                 entry = {
-                    "Id": f"message-{offset + position}",
+                    "Id": uuid.uuid4().hex,
                     "MessageBody": body,
                 }
                 if is_fifo:
-                    entry["MessageGroupId"] = kwargs.get(
-                        "message_group_id", "doc2vec-historical"
+                    entry["MessageGroupId"] = (
+                        message_group_id or uuid.uuid4().hex
                     )
-                    entry["MessageDeduplicationId"] = uuid.uuid5(
-                        uuid.NAMESPACE_URL,
-                        f"{send_queue_url}:{body}",
-                    ).hex
+                    entry["MessageDeduplicationId"] = uuid.uuid4().hex
                 entries.append(entry)
 
             for attempt in range(retries + 1):
                 try:
                     response = self._sqs.send_message_batch(
-                        QueueUrl=send_queue_url,
+                        QueueUrl=queue_url,
                         Entries=entries,
                     )
                     status = response.get("ResponseMetadata", {}).get(
@@ -262,15 +258,13 @@ class AwsSQS:
 
                 self._logger.error(
                     "Failed to send an SQS message batch to queue "
-                    f"{send_queue_url}: {error_message}"
+                    f"{queue_url}: {error_message}"
                 )
                 if attempt < retries:
                     time.sleep(wait_time)
             else:
                 return {"status": "FAILED", "data": message_batch}
 
-        self._logger.info(
-            f"Sent {len(batch_messages)} SQS message(s) to queue {send_queue_url}"
-        )
-        return {"status": "SUCCEED"}
+        self._logger.info(f"Sent {len(batch)} SQS message(s) to queue {queue_url}")
+        return {"status": "SUCCEEDED", "data": []}
 
