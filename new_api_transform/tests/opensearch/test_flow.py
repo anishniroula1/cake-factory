@@ -45,6 +45,42 @@ def test_one_sqs_message_runs_complete_api_transform_flow(service_config):
     assert json.loads(sent.sent[0][1]) == {"source": "P2", "tsp_id": "10", "sent_by": "api-transform"}
 
 
+def test_missing_text_similarity_input_still_forwards_and_deletes_message(
+    service_config,
+):
+    application_store = ApplicationStoreFake()
+    application_store.load_application_reference = Mock(return_value=None)
+    transmission_store = TransmissionStoreFake()
+    handler = ApiTransformHandler(
+        service_config,
+        application_store,
+        ApplicantStoreFake(),
+        ContentStoreFake(),
+        transmission_store,
+        PayloadBuilder(service_config),
+        KafkaProcessorFake(),
+        LoggerFake(),
+    )
+    message = {
+        "tsp_id": 404,
+        "MessageId": "missing-local",
+        "ReceiptHandle": "missing-receipt-local",
+    }
+    source = SqsFake()
+    sent = SqsFake()
+
+    completed = SqsProcessor(
+        DependenciesFake(service_config, source, sent, handler, LoggerFake())
+    )._process_document_message(message)
+
+    assert (completed, len(sent.sent), len(source.deleted), transmission_store.errors) == (
+        True,
+        1,
+        1,
+        [],
+    )
+
+
 def test_backfill_queue_skips_next_event_and_deletes_source_message(service_config):
     message = {"tsp_id": 10, "MessageId": "backfill-local", "ReceiptHandle": "receipt-backfill-local"}
     source = SqsFake([[message]])
@@ -222,7 +258,9 @@ def test_retry_succeeds_then_reports_final_failure():
 
 def test_failure_record_retries_without_hiding_the_transform_error(monkeypatch, service_config):
     application_store = ApplicationStoreFake()
-    application_store.load_application_reference = Mock(return_value=None)
+    application_store.load_application_reference = Mock(
+        side_effect=PermanentDataError("Application data is invalid")
+    )
     transmission_store = TransmissionStoreFake()
     transmission_store.save_transform_error = Mock(
         side_effect=OperationalError("sensitive statement", {}, RuntimeError("database unavailable"))
@@ -240,7 +278,7 @@ def test_failure_record_retries_without_hiding_the_transform_error(monkeypatch, 
     )
     monkeypatch.setattr("transform_completed.opensearch.retry.time.sleep", lambda _seconds: None)
 
-    with pytest.raises(PermanentDataError, match="No current application"):
+    with pytest.raises(PermanentDataError, match="Application data is invalid"):
         handler.process_document(10)
 
     assert transmission_store.save_transform_error.call_count == constants.MAX_ATTEMPTS

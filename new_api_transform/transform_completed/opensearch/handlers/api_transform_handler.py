@@ -57,7 +57,19 @@ class ApiTransformHandler:
                 custom_logger=self.logger,
             )
             if application_reference is None:
-                raise PermanentDataError(f"No current application was found for tsp_id={tsp_id}")
+                self.logger.info(
+                    "API Transform completed without a Kafka event because no "
+                    "current record was found in tsp.text_similarity_input."
+                )
+                self.logger.info(
+                    f"API Transform took {perf_counter() - started_at:.2f} "
+                    "seconds to complete."
+                )
+                return {
+                    "source_message_count": 1,
+                    "application_count": 0,
+                    "kafka_event_count": 0,
+                }
             application_id = application_reference.application_id
             analysis_group = application_reference.analysis_group
             self.logger.info(
