@@ -31,4 +31,4 @@ OCCURRENCE_READINESS_WAIT_SECONDS = 30  # One-time wait for newly indexed occurr
 
 # SQS
 SQS_WAIT_SECONDS = 10
-SQS_VISIBILITY_SECONDS = 7200  # Two-hour message visibility timeout.
+SQS_VISIBILITY_SECONDS = 300  # Five-minute message visibility timeout.

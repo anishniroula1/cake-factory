@@ -28,7 +28,7 @@ MINIMUM_MATCH_WORD_COUNT = 5  # Shorter sentences do not train the IVF model.
 
 # SQS
 SQS_WAIT_SECONDS = 10
-SQS_VISIBILITY_SECONDS = 7200
+SQS_VISIBILITY_SECONDS = 3600
 SQS_SEND_BATCH_SIZE = 10  # Amazon SQS accepts at most ten messages in one batch request.
 
 # Refugee referral documents whose RRF sections are filtered before splitting.

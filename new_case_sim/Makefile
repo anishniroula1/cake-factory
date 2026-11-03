@@ -3,7 +3,7 @@ SHELL := /bin/sh
 .PHONY: setup test local kafka kafka-stop kafka-logs
 
 KAFKA_TOPIC := rfs.ata.text_analytics.hit
-KAFKA_COMPOSE := docker compose -f docker-compose.yml
+KAFKA_COMPOSE := docker compose -f docker-compose-kafka.yaml
 
 setup:
 	uv sync --extra dev

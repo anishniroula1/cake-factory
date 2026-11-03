@@ -12,7 +12,7 @@ MIN_TAH_CASE_COUNT = 3  # Sentence-pair count required for a TAH case.
 RETRY_SECONDS = 5
 MAX_ATTEMPTS = 3
 SQS_WAIT_SECONDS = 10
-SQS_VISIBILITY_SECONDS = 7200
+SQS_VISIBILITY_SECONDS = 300
 
 # Kafka
 TAH_TOPIC = "rfs.ata.text_analytics.hit"
