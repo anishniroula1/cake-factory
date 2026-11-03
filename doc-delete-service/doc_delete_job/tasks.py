@@ -1,29 +1,27 @@
 import itertools
 import json
-from typing import Any
-import uuid
-from ta_similarity.similarity_task.similarity_functions import (
-    load_faiss_and_dict,
-    save_faiss_and_dict,
-)
 import os
-import boto3
+import uuid
 from datetime import datetime
-from ta_db_connection.database_connection import DatabaseConnection
-from ta_db_connection.atatables import (
-    TextSimilarityInput,
-    Matches,
-    SentencesVector,
-    MicroServicesSimilarCases,
-    MicroServicesStatus,
-    SimilarCasesEmb,
-    SentenceMatchesTitan
-)
+from typing import Any
 
+import boto3
 import numpy as np
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.util._collections import immutabledict
-from utils.utils import get_manage_faiss_path
+from ta_similarity.similarity_task.similarity_functions import load_faiss_and_dict, save_faiss_and_dict
+
+from doc_delete_job.utils.utils import get_manage_faiss_path
+from ta_db_connection.atatables import (
+    Matches,
+    MicroServicesSimilarCases,
+    MicroServicesStatus,
+    SentenceMatchesTitan,
+    SentencesVector,
+    SimilarCasesEmb,
+    TextSimilarityInput,
+)
+from ta_db_connection.database_connection import DatabaseConnection
 from ta_utils.logger.CustomLogger import CustomLogger
 
 logger = CustomLogger("doc-delete-job")
@@ -367,7 +365,7 @@ def index_removal(analysis_group, global_ids_to_remove):
     for k in global_ids_to_remove:
         if mapping_dict_base.pop(k, None) is not None:
             popped += 1
-    logger.info(f"Removed {str(count)} global_ids from the {embedding_type} index")
+    logger.info(f"Removed {count!s} global_ids from the {embedding_type} index")
 
     manage_faiss_path = get_manage_faiss_path()
     _atomic_save_faiss_and_dict(
@@ -448,6 +446,6 @@ def keep_track_of_deletions_to_faiss_index(
         )
         logger.info(f"Successfully added global ids {global_ids_to_remove} \
             to {file_name_w_analysis_group} in {s3_bucket}.")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"There was an issue {e} reading the {file_name_w_analysis_group} \
             in {s3_bucket} and new deletions can not be tracked.")

@@ -1,11 +1,17 @@
+import argparse
 import os
 import signal
 import sys
-from argparse import Namespace
-import argparse
-from contextlib import contextmanager
 import time
+from argparse import Namespace
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+
+import newrelic.agent
+
+from doc_delete_job.opensearch.main import run_document_delete_job
 from doc_delete_job.tasks import (
+    embeddings_table_cleanup,
     index_removal,
     matches_table_cleanup,
     pause_or_unpause_service,
@@ -15,13 +21,11 @@ from doc_delete_job.tasks import (
     send_to_state_machine_sqs,
     sentences_vector_table_cleanup,
     similar_cases_cleanup,
-    embeddings_table_cleanup,
 )
-from utils.utils import get_config_params, create_default_sqs_client
+from doc_delete_job.utils.utils import create_default_sqs_client, get_config_params
 from ta_db_connection.database_connection import DatabaseConnection
 from ta_utils.logger.CustomLogger import CustomLogger
 from ta_utils.vault.VaultSecrets import VaultSecrets
-import newrelic.agent
 
 newrelic.agent.initialize()
 newrelic.agent.register_application(timeout=10)
@@ -227,6 +231,56 @@ def delete_batch(db: DatabaseConnection, args: Namespace, analysis_group: str, t
         send_to_state_machine_sqs(tsp_ids, sqs_client)
 
 
+def delete_batch_with_enabled_flows(
+    db: DatabaseConnection,
+    args: Namespace,
+    analysis_group: str,
+    tsp_ids,
+    sqs_client,
+):
+    """Run the existing and OpenSearch deletion flows for one document batch.
+
+    When the OpenSearch toggle is disabled, the existing deletion runs exactly
+    as it did before. When enabled, each flow gets its own worker thread. The
+    method waits for both threads before the caller loads the next batch.
+    """
+
+    opensearch_flow_enabled = (
+        os.getenv("ENABLED_OPENSEARCH_FLOW", "False").lower() == "true"
+    )
+    if not opensearch_flow_enabled:
+        delete_batch(db, args, analysis_group, tsp_ids, sqs_client)
+        return
+
+    logger.info(
+        "OpenSearch deletion is enabled. Starting the existing deletion flow "
+        "and OpenSearch deletion flow in separate threads."
+    )
+    with ThreadPoolExecutor(
+        max_workers=2,
+        thread_name_prefix="document-delete-flow",
+    ) as executor:
+        existing_flow = executor.submit(
+            delete_batch,
+            db,
+            args,
+            analysis_group,
+            tsp_ids,
+            sqs_client,
+        )
+        opensearch_flow = executor.submit(run_document_delete_job, list(tsp_ids))
+
+        # result() waits for each flow and brings a worker failure back to this
+        # batch loop instead of silently losing the error inside the thread.
+        existing_flow.result()
+        opensearch_flow.result()
+
+    logger.info(
+        "The existing deletion flow and OpenSearch deletion flow completed for "
+        "the current batch."
+    )
+
+
 def process_analysis_group(db: DatabaseConnection, args: Namespace,
                            analysis_group: str, budget: TimeBudget, sqs_client):
     logger.info(f"Starting Document Delete Job for {analysis_group}")
@@ -284,7 +338,13 @@ def process_analysis_group(db: DatabaseConnection, args: Namespace,
                 )
                 break
             started = time.monotonic()
-            delete_batch(db, args, analysis_group, batch, sqs_client)
+            delete_batch_with_enabled_flows(
+                db,
+                args,
+                analysis_group,
+                batch,
+                sqs_client,
+            )
             duration = time.monotonic() - started
             batches_done += 1
             batch_estimate = max(batch_estimate, duration)
@@ -300,7 +360,8 @@ def process_analysis_group(db: DatabaseConnection, args: Namespace,
     finally:
         try:
             pause_or_unpause_service(db, service="DOC2VEC", pause=False)
-        except Exception as e:
+        # Unpausing is cleanup and must not hide the original batch failure.
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to unpause DOC2VEC for {analysis_group}: {e}")
 
 
