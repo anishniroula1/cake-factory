@@ -83,8 +83,8 @@ class SentenceCatalogOpenSearchStore:
         Output: {"abc123": 0.0, "def456": 0.08}
 
         The source key is always included with distance 0.0. Other keys are
-        returned only when they satisfy the configured similarity threshold
-        and contain at least five words.
+        returned when they satisfy the configured similarity threshold and
+        contain at least five words.
         """
 
         validate_vector(vector, constants.VECTOR_DIMENSION)

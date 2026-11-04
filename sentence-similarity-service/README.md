@@ -22,12 +22,12 @@ For each SQS message, the service:
 8. Updates the sentence classification in `sentences_vector` table and the sentence catalog.
 9. Skips normal matching when a sentence is a tracer, non-matcher, or form language.
 10. Searches the sentence catalog for every exact and semantic key at or above 76%.
+    Sentences containing fewer than five words do not run this search.
 11. Expands those keys through `sentence_occurrences` and excludes occurrences
     from the source application.
-12. Classifies target sentences and removes ineligible targets.
-13. Saves the remaining relationships in both directions in `tsp.titan_matches`.
-14. Sends the completed `tsp_id` to the next SQS queue (Case Similarity Service).
-15. Deletes the source message only after all work completes successfully.
+12. Saves the remaining relationships in both directions in `tsp.titan_matches`.
+13. Sends the completed `tsp_id` to the next SQS queue (Case Similarity Service).
+14. Deletes the source message only after all work completes successfully.
 
 If processing fails, the source message is not deleted. The SQS retries three time and eventual delivery to the DLQ.
 

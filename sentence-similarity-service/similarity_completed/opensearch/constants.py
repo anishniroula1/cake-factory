@@ -28,7 +28,7 @@ SOURCE_SENTENCE_BATCH_SIZE = 30  # Source sentences loaded from PostgreSQL per p
 THREAD_WORKER_COUNT = 30  # Source sentences processed at the same time.
 RETRY_SECONDS = 5  # Seconds to wait before retrying a failed operation.
 OCCURRENCE_READINESS_WAIT_SECONDS = 30  # One-time wait for newly indexed occurrences.
-SLOW_TARGET_PROCESSING_SECONDS = 5  # Log a stage breakdown when target processing reaches this time.
+SLOW_OCCURRENCE_SEARCH_SECONDS = 5  # Log occurrence expansion when it reaches this time.
 
 # SQS
 SQS_WAIT_SECONDS = 10

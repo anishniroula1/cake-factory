@@ -89,19 +89,6 @@ def test_saved_non_matcher_is_reused(service_config, sentence_row):
     assert classification["is_non_matcher"] is True and router.saved_classifications == []
 
 
-def test_all_missing_catalog_keys_stop_the_current_message(service_config, sentence_row):
-    opensearch, _ = opensearch_mock(sentence_row.sentence_key, missing_catalog_keys={"KEY-B", "KEY-C"})
-    logger = LoggerFake()
-    handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), logger)
-    source_catalog_record = source_record(sentence_row.sentence_key)
-
-    result = handler.tracer_filtering_service.find_eligible_target_occurrences(
-        sentence_row, "catalog-asylee", {"KEY-B": 0.1, "KEY-C": 0.2}, source_catalog_record
-    )
-
-    assert result is None
-
-
 def test_empty_document_stops_without_forwarding(service_config):
     opensearch, _ = opensearch_mock("a" * 64)
     sqs = SqsFake()

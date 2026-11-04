@@ -295,10 +295,8 @@ class SentenceSimilarityHandler:
         )
 
         eligible_target_occurrences = self.tracer_filtering_service.find_eligible_target_occurrences(
-            source_sentence, catalog_alias, sentence_key_distances, source_catalog_record
+            source_sentence, sentence_key_distances
         )
-        if eligible_target_occurrences is None:
-            return None
 
         return {
             "is_non_matcher": sentence_classification["is_non_matcher"],
