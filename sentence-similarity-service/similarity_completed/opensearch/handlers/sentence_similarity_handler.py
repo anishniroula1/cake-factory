@@ -235,6 +235,7 @@ class SentenceSimilarityHandler:
                 "saved_relationships": 0,
             }
 
+        opensearch_started_at = perf_counter()
         sentence_key_distances = retry_operation(
             f"Search sentence catalog for source global_id={source_sentence.global_id}",
             self.sentence_catalog_open_search_store.search_matching_sentence_keys_by_vector,
@@ -244,6 +245,11 @@ class SentenceSimilarityHandler:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
+        self.logger.info(
+            f"OpenSearch sentence catalog search for global_id={source_sentence.global_id} took "
+            f"{perf_counter() - opensearch_started_at:.2f} seconds and returned "
+            f"{len(sentence_key_distances)} matching sentence key(s)."
+        )
 
         eligible_target_occurrences = self.tracer_filtering_service.find_eligible_target_occurrences(
             source_sentence, catalog_alias, sentence_key_distances, source_catalog_record
@@ -251,8 +257,15 @@ class SentenceSimilarityHandler:
         if eligible_target_occurrences is None:
             return None
 
+        titan_match_write_started_at = perf_counter()
         saved_relationship_count = self.titan_matches_db_store.save_bidirectional_sentence_matches(
             source_sentence, eligible_target_occurrences
+        )
+        titan_match_write_seconds = perf_counter() - titan_match_write_started_at
+        self.logger.info(
+            f"titan_matches write for global_id={source_sentence.global_id} took "
+            f"{titan_match_write_seconds:.2f} seconds and saved "
+            f"{saved_relationship_count} relationship(s)."
         )
         return {
             "is_non_matcher": sentence_classification["is_non_matcher"],
