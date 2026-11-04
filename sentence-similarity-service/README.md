@@ -106,26 +106,19 @@ One bucket can look like this:
 
 ```json
 {
-  "200": {
-    "tsp_id": 9001,
-    "application_id": 300,
-    "distance": 0.1
-  },
-  "232": {
-    "tsp_id": 9002,
-    "application_id": 301,
-    "distance": 0.0
-  }
+  "200": 0.1,
+  "232": 0.0
 }
 ```
 
 Distance `0.0` is an exact vector match. Smaller distances are better. The
-PostgreSQL function writes both directions in one transaction and calculates
-`match_count` and `verbatim`. Buckets keep JSONB updates smaller and reduce
-lock contention between sentence workers.
+The `tsp.upsert_bidirectional_titan_match_batch` function receives the complete
+relationship list, writes both directions in one transaction, and calculates
+`match_count` and `verbatim`. It groups relationships first so each affected
+bucket is merged only once.
 
-To know more about the function we use, check `tsp.upsert_bidirectional_titan_matches` function 
-under the `tsp` schema function section.
+The complete SQL and a runnable example are in
+`UPSERT_BIDIRECTIONAL_TITAN_MATCH_BATCH.sql`.
 
 ## Project layout
 

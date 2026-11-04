@@ -20,8 +20,8 @@ class ForeignKeyViolation(Exception):
 
 def test_foreign_key_failure_reports_missing_row_without_query_or_match_input():
     database_error = IntegrityError(
-        "SELECT tsp.upsert_bidirectional_titan_matches(:matches)",
-        {"matches": {"50001": {"private": "large-input"}}},
+        "SELECT tsp.upsert_bidirectional_titan_match_batch(:relationships)",
+        {"relationships": [{"private": "large-input"}]},
         ForeignKeyViolation("foreign key violation"),
     )
     session = session_mock()

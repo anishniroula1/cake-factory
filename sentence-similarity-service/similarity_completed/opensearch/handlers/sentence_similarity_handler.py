@@ -188,8 +188,7 @@ class SentenceSimilarityHandler:
         )
         self.logger.info(
             f"titan_matches bulk write took {perf_counter() - titan_match_write_started_at:.2f} seconds "
-            f"and saved {saved_relationship_count} relationship(s) in batches of at most "
-            f"{constants.TITAN_MATCH_WRITE_BATCH_SIZE}."
+            f"and saved {saved_relationship_count} relationship(s) through one set-based function call."
         )
 
         retry_operation(
