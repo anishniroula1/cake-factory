@@ -6,14 +6,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from similarity_completed.opensearch import constants
-from similarity_completed.opensearch.contracts import MatchTarget
+from similarity_completed.opensearch.contracts import MatchTarget, TitanMatchRelationship
 from similarity_completed.opensearch.errors import PermanentDataError
 from similarity_completed.opensearch.retry import retry_operation, safe_error_summary
-from ta_db_connection.atatables import SentencesVector
 from ta_utils.logger.CustomLogger import CustomLogger
 
-# PostgreSQL selects one of 16 buckets, creates reverse owner rows, and writes
-# both relationship directions inside the same transaction.
+# The existing PostgreSQL function accepts one source sentence and up to 1000
+# target matches. It writes both relationship directions in one transaction.
 SAVE_MATCHES = text(
     """
     SELECT tsp.upsert_bidirectional_titan_matches(
@@ -33,50 +32,68 @@ class TitanMatchesDBStore:
         self.session_factory = session_factory
         self.logger = custom_logger
 
-    def save_bidirectional_sentence_matches(
-        self, source_sentence: SentencesVector, eligible_target_occurrences: dict[str, MatchTarget]
+    def save_bidirectional_match_relationships(
+        self, match_relationships: list[TitanMatchRelationship]
     ) -> int:
-        """Persist bidirectional relationships through the PostgreSQL bucket
-        function. Large results use bounded writes, and each call stores both
-        relationship directions.
+        """Save collected relationships in batches of 1000 after searching ends.
 
-        Input: source_sentence.global_id=39205, eligible_target_occurrences={"50001": {"tsp_id": 9001,
-        "application_id": 200, "distance": 0.08}}
-        Output: 1, the number of target relationships processed.
-
-        The output counts the supplied targets. PostgreSQL also writes the
-        reverse 50001-to-39205 relationship without increasing this count.
+        Example: relationships 100 -> 200 and 100 -> 232 are grouped under
+        source 100 and sent as one p_matches object containing targets 200 and
+        232. The method returns 2; PostgreSQL also saves 200 -> 100 and
+        232 -> 100.
         """
 
-        # No database row is needed when no relationship was found.
-        if not eligible_target_occurrences:
+        if not match_relationships:
             return 0
 
-        match_items = list(eligible_target_occurrences.items())
-        match_batches = [
-            dict(match_items[offset : offset + constants.TITAN_MATCH_WRITE_BATCH_SIZE])
-            for offset in range(0, len(match_items), constants.TITAN_MATCH_WRITE_BATCH_SIZE)
-        ]
-        saved_relationship_count = 0
-        for batch_number, match_batch in enumerate(match_batches, start=1):
-            saved_relationship_count += retry_operation(
-                f"Save Titan match batch {batch_number} for source global_id={source_sentence.global_id}",
-                self._save_bidirectional_match_batch,
-                source_sentence,
-                match_batch,
-                wait_seconds=constants.RETRY_SECONDS,
-                custom_logger=self.logger,
+        relationships_by_source: dict[tuple[int, int, int], dict[str, MatchTarget]] = {}
+        for relationship in match_relationships:
+            source_identity = (
+                relationship["source_global_id"],
+                relationship["source_tsp_id"],
+                relationship["source_application_id"],
             )
+            relationships_by_source.setdefault(source_identity, {})[
+                str(relationship["target_global_id"])
+            ] = {
+                "tsp_id": relationship["target_tsp_id"],
+                "application_id": relationship["target_application_id"],
+                "distance": relationship["distance"],
+            }
+
+        saved_relationship_count = 0
+        for source_identity in sorted(relationships_by_source):
+            source_global_id, source_tsp_id, source_application_id = source_identity
+            match_items = list(relationships_by_source[source_identity].items())
+            match_batches = [
+                dict(match_items[offset : offset + constants.TITAN_MATCH_WRITE_BATCH_SIZE])
+                for offset in range(0, len(match_items), constants.TITAN_MATCH_WRITE_BATCH_SIZE)
+            ]
+            for batch_number, match_batch in enumerate(match_batches, start=1):
+                saved_relationship_count += retry_operation(
+                    f"Save Titan match batch {batch_number} of {len(match_batches)} "
+                    f"for source global_id={source_global_id}",
+                    self._save_bidirectional_match_batch,
+                    source_global_id,
+                    source_tsp_id,
+                    source_application_id,
+                    match_batch,
+                    wait_seconds=constants.RETRY_SECONDS,
+                    custom_logger=self.logger,
+                )
         return saved_relationship_count
 
     def _save_bidirectional_match_batch(
-        self, source_sentence: SentencesVector, match_batch: dict[str, MatchTarget]
+        self,
+        source_global_id: int,
+        source_tsp_id: int,
+        source_application_id: int,
+        match_batch: dict[str, MatchTarget],
     ) -> int:
-        """Persist one relationship batch in a dedicated transaction. This is
-        the retry boundary for transient PostgreSQL errors such as deadlocks.
+        """Commit one source sentence's bounded match batch.
 
-        Input: source_sentence.global_id=39205 and a match_batch containing 500 targets.
-        Output: 500, the count reported by the PostgreSQL function.
+        Input: one source identity and up to 1000 target matches.
+        Output: the number of eligible relationships handled by PostgreSQL.
         """
 
         try:
@@ -84,9 +101,9 @@ class TitanMatchesDBStore:
                 processed_relationship_count = session.execute(
                     SAVE_MATCHES,
                     {
-                        "source_global_id": source_sentence.global_id,
-                        "source_tsp_id": source_sentence.tsp_id,
-                        "source_application_id": source_sentence.tsp.application_id,
+                        "source_global_id": source_global_id,
+                        "source_tsp_id": source_tsp_id,
+                        "source_application_id": source_application_id,
                         "matches": match_batch,
                     },
                 ).scalar_one()
@@ -98,6 +115,6 @@ class TitanMatchesDBStore:
             # do not retain SQLAlchemy's statement and matches parameter in the
             # displayed exception chain.
             raise PermanentDataError(
-                f"Titan match write rejected for source global_id={source_sentence.global_id}: "
+                f"Titan match write rejected for source global_id={source_global_id}: "
                 f"{safe_error_summary(error)}"
             ) from None

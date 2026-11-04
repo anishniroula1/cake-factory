@@ -27,7 +27,7 @@ def test_non_matcher_skips_catalog_search_without_creating_match_row(service_con
 
     result = handler._process_source_sentence(sentence_row, "catalog-asylee", record)
 
-    assert result == {**classification, "saved_relationships": 0}
+    assert result == {**classification, "match_relationships": []}
     lock_statement = str(classification_update.scalars.call_args.args[0].compile(dialect=postgresql.dialect()))
     assert "ORDER BY" in lock_statement and "FOR NO KEY UPDATE" in lock_statement
     assert router.semantic_search_count == 0
@@ -47,7 +47,7 @@ def test_tracer_and_form_language_skip_catalog_search(service_config, sentence_r
 
     result = handler._process_source_sentence(sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key))
 
-    assert result == {**classification, "saved_relationships": 0}
+    assert result == {**classification, "match_relationships": []}
     assert router.semantic_search_count == 0
 
 
@@ -60,7 +60,7 @@ def test_short_sentence_is_classified_but_skips_catalog_matching(service_config,
         sentence_row, "catalog-asylee", source_record(sentence_row.sentence_key, word_count=4)
     )
 
-    assert result["saved_relationships"] == 0
+    assert result["match_relationships"] == []
     assert router.semantic_search_count == 0
 
 

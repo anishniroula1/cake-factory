@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 from sqlalchemy.exc import IntegrityError
 
@@ -28,16 +26,21 @@ def test_foreign_key_failure_reports_missing_row_without_query_or_match_input():
     )
     session = session_mock()
     session.execute.side_effect = database_error
-    source_sentence = SimpleNamespace(
-        global_id=39205,
-        tsp_id=8205,
-        tsp=SimpleNamespace(application_id=100),
-    )
-    match_input = {"50001": {"tsp_id": 9001, "application_id": 200, "distance": 0.08}}
+    match_input = [
+        {
+            "source_global_id": 39205,
+            "source_tsp_id": 8205,
+            "source_application_id": 100,
+            "target_global_id": 50001,
+            "target_tsp_id": 9001,
+            "target_application_id": 200,
+            "distance": 0.08,
+        }
+    ]
     store = TitanMatchesDBStore(SessionSequence([session]), LoggerFake())
 
     with pytest.raises(PermanentDataError) as captured:
-        store.save_bidirectional_sentence_matches(source_sentence, match_input)
+        store.save_bidirectional_match_relationships(match_input)
 
     displayed_error = str(captured.value)
     assert "source global_id=39205" in displayed_error

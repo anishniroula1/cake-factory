@@ -68,8 +68,8 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
             session_mock(rows=[sentence_row]),
             source_update,
             target_update,
-            match_write,
             session_mock(rows=[]),
+            match_write,
         ]
     )
     opensearch, _ = opensearch_mock(sentence_row.sentence_key)

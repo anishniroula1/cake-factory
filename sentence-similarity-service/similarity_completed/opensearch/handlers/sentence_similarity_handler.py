@@ -1,6 +1,6 @@
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from time import perf_counter
 
 from opensearchpy import OpenSearch
@@ -8,7 +8,14 @@ from sqlalchemy.orm import Session
 
 from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.config import Config
-from similarity_completed.opensearch.contracts import CatalogRecord, ProcessResult, SentenceResult, TspId
+from similarity_completed.opensearch.contracts import (
+    CatalogRecord,
+    MatchTarget,
+    ProcessResult,
+    SentenceResult,
+    TitanMatchRelationship,
+    TspId,
+)
 from similarity_completed.opensearch.db_store import SentenceVectorDBStore, TitanMatchesDBStore
 from similarity_completed.opensearch.errors import QueueSendError
 from similarity_completed.opensearch.opensearch_store import (
@@ -86,79 +93,104 @@ class SentenceSimilarityHandler:
         tracer_count = 0
         form_language_count = 0
         matched_sentence_count = 0
-        saved_relationship_count = 0
+        collected_match_relationships: list[TitanMatchRelationship] = []
         after_global_id = 0
-        batch_number = 0
+        page_number = 0
+        more_sentences_available = True
 
         with ThreadPoolExecutor(
             max_workers=constants.THREAD_WORKER_COUNT, thread_name_prefix="sentence-similarity"
         ) as executor:
-            while True:
-                batch_number += 1
-                sentence_vector_records = retry_operation(
-                    f"Load source sentence batch {batch_number}",
-                    self.sentence_vector_db_store.load_document_sentence_batch,
-                    tsp_id,
-                    after_global_id,
-                    wait_seconds=constants.RETRY_SECONDS,
-                    custom_logger=self.logger,
-                )
-                if not sentence_vector_records:
-                    break
-
-                catalog_alias = select_catalog_alias(sentence_vector_records[0].tsp.analysis_group)
-                source_catalog_records = retry_operation(
-                    f"Load catalog vectors for sentence batch {batch_number}",
-                    self.sentence_catalog_open_search_store.load_catalog_records_by_sentence_keys,
-                    catalog_alias,
-                    [sentence_vector_record.sentence_key for sentence_vector_record in sentence_vector_records],
-                    wait_seconds=constants.RETRY_SECONDS,
-                    custom_logger=self.logger,
-                )
-                missing_catalog_records = [
-                    sentence_vector_record
-                    for sentence_vector_record in sentence_vector_records
-                    if sentence_vector_record.sentence_key not in source_catalog_records
-                ]
-                if missing_catalog_records:
-                    missing_details = ", ".join(
-                        f"global_id={sentence_vector_record.global_id}"
-                        for sentence_vector_record in missing_catalog_records
+            pending_jobs: set[Future[SentenceResult | None]] = set()
+            while more_sentences_available or pending_jobs:
+                # Keep work queued behind the active workers. As soon as a
+                # worker finishes, the executor can start another sentence
+                # without waiting for the other sentences in its original page.
+                if more_sentences_available and len(pending_jobs) < constants.THREAD_WORKER_COUNT:
+                    page_number += 1
+                    sentence_vector_records = retry_operation(
+                        f"Load source sentence page {page_number}",
+                        self.sentence_vector_db_store.load_document_sentence_batch,
+                        tsp_id,
+                        after_global_id,
+                        wait_seconds=constants.RETRY_SECONDS,
+                        custom_logger=self.logger,
                     )
-                    self.logger.error(f"Source catalog vectors are missing for these sentences: {missing_details}.")
-                    return None
+                    if not sentence_vector_records:
+                        more_sentences_available = False
+                    else:
+                        catalog_alias = select_catalog_alias(sentence_vector_records[0].tsp.analysis_group)
+                        source_catalog_records = retry_operation(
+                            f"Load catalog vectors for sentence page {page_number}",
+                            self.sentence_catalog_open_search_store.load_catalog_records_by_sentence_keys,
+                            catalog_alias,
+                            [record.sentence_key for record in sentence_vector_records],
+                            wait_seconds=constants.RETRY_SECONDS,
+                            custom_logger=self.logger,
+                        )
+                        missing_catalog_records = [
+                            record
+                            for record in sentence_vector_records
+                            if record.sentence_key not in source_catalog_records
+                        ]
+                        if missing_catalog_records:
+                            missing_details = ", ".join(
+                                f"global_id={record.global_id}" for record in missing_catalog_records
+                            )
+                            self.logger.error(
+                                "Source catalog vectors are missing for these sentences: "
+                                f"{missing_details}."
+                            )
+                            for pending_job in pending_jobs:
+                                pending_job.cancel()
+                            return None
 
-                sentence_processing_jobs = [
-                    executor.submit(
-                        self._process_source_sentence,
-                        sentence_vector_record,
-                        catalog_alias,
-                        source_catalog_records[sentence_vector_record.sentence_key],
-                    )
-                    for sentence_vector_record in sentence_vector_records
-                ]
-                starting_global_id = sentence_vector_records[0].global_id
-                ending_global_id = sentence_vector_records[-1].global_id
-                self.logger.info(
-                    f"Processing source sentence batch {batch_number} with {len(sentence_vector_records)} sentence(s); "
-                    f"starting_global_id={starting_global_id}, ending_global_id={ending_global_id}."
-                )
-                for sentence_processing_job in sentence_processing_jobs:
-                    sentence_result = sentence_processing_job.result()
+                        pending_jobs.update(
+                            executor.submit(
+                                self._process_source_sentence,
+                                record,
+                                catalog_alias,
+                                source_catalog_records[record.sentence_key],
+                            )
+                            for record in sentence_vector_records
+                        )
+                        after_global_id = sentence_vector_records[-1].global_id
+                        self.logger.info(
+                            f"Queued source sentence page {page_number} with "
+                            f"{len(sentence_vector_records)} sentence(s); "
+                            f"starting_global_id={sentence_vector_records[0].global_id}, "
+                            f"ending_global_id={after_global_id}."
+                        )
+
+                if not pending_jobs:
+                    continue
+
+                completed_jobs, _ = wait(pending_jobs, return_when=FIRST_COMPLETED)
+                for completed_job in completed_jobs:
+                    pending_jobs.remove(completed_job)
+                    sentence_result = completed_job.result()
                     if sentence_result is None:
+                        for pending_job in pending_jobs:
+                            pending_job.cancel()
                         return None
+
+                    match_relationships = sentence_result["match_relationships"]
                     processed_sentence_count += 1
                     non_matcher_count += int(sentence_result["is_non_matcher"])
                     tracer_count += int(sentence_result["is_tracer"])
                     form_language_count += int(sentence_result["is_form_language"])
-                    matched_sentence_count += int(sentence_result["saved_relationships"] > 0)
-                    saved_relationship_count += sentence_result["saved_relationships"]
+                    matched_sentence_count += int(bool(match_relationships))
+                    collected_match_relationships.extend(match_relationships)
 
-                after_global_id = ending_global_id
-                self.logger.info(
-                    f"Completed source sentence batch {batch_number} with {len(sentence_vector_records)} sentence(s); "
-                    f"starting_global_id={starting_global_id}, ending_global_id={ending_global_id}."
-                )
+        titan_match_write_started_at = perf_counter()
+        saved_relationship_count = self.titan_matches_db_store.save_bidirectional_match_relationships(
+            collected_match_relationships
+        )
+        self.logger.info(
+            f"titan_matches bulk write took {perf_counter() - titan_match_write_started_at:.2f} seconds "
+            f"and saved {saved_relationship_count} relationship(s) in batches of at most "
+            f"{constants.TITAN_MATCH_WRITE_BATCH_SIZE}."
+        )
 
         retry_operation(
             "Send completed document to the next queue",
@@ -189,15 +221,15 @@ class SentenceSimilarityHandler:
     def _process_source_sentence(
         self, source_sentence: SentencesVector, catalog_alias: str, source_catalog_record: CatalogRecord
     ) -> SentenceResult | None:
-        """Classify one source sentence and persist its eligible relationships.
+        """Classify one source sentence and collect its eligible relationships.
         Ineligible classifications stop immediately; eligible sentences continue
-        through catalog search, target filtering, and Titan match storage.
+        through catalog search, target filtering, and relationship preparation.
 
         Input: source_sentence.global_id=39205,
         catalog_alias="sentence_semantic_catalog_asylee", and a source_catalog_record
         containing a 512-value vector.
         Output: {"is_non_matcher": False, "is_tracer": False,
-        "is_form_language": False, "saved_relationships": 12}
+        "is_form_language": False, "match_relationships": [{...}]}
 
         The method returns None when a required target catalog record is missing.
         """
@@ -217,7 +249,7 @@ class SentenceSimilarityHandler:
                 "is_non_matcher": sentence_classification["is_non_matcher"],
                 "is_tracer": sentence_classification["is_tracer"],
                 "is_form_language": sentence_classification["is_form_language"],
-                "saved_relationships": 0,
+                "match_relationships": [],
             }
 
         # Short sentences are still checked against the tracer catalog, but
@@ -232,7 +264,7 @@ class SentenceSimilarityHandler:
                 "is_non_matcher": sentence_classification["is_non_matcher"],
                 "is_tracer": sentence_classification["is_tracer"],
                 "is_form_language": sentence_classification["is_form_language"],
-                "saved_relationships": 0,
+                "match_relationships": [],
             }
 
         opensearch_started_at = perf_counter()
@@ -257,22 +289,34 @@ class SentenceSimilarityHandler:
         if eligible_target_occurrences is None:
             return None
 
-        titan_match_write_started_at = perf_counter()
-        saved_relationship_count = self.titan_matches_db_store.save_bidirectional_sentence_matches(
-            source_sentence, eligible_target_occurrences
-        )
-        titan_match_write_seconds = perf_counter() - titan_match_write_started_at
-        self.logger.info(
-            f"titan_matches write for global_id={source_sentence.global_id} took "
-            f"{titan_match_write_seconds:.2f} seconds and saved "
-            f"{saved_relationship_count} relationship(s)."
-        )
         return {
             "is_non_matcher": sentence_classification["is_non_matcher"],
             "is_tracer": sentence_classification["is_tracer"],
             "is_form_language": sentence_classification["is_form_language"],
-            "saved_relationships": saved_relationship_count,
+            "match_relationships": self._build_titan_match_relationships(
+                source_sentence, eligible_target_occurrences
+            ),
         }
+
+    @staticmethod
+    def _build_titan_match_relationships(
+        source_sentence: SentencesVector,
+        eligible_target_occurrences: dict[str, MatchTarget],
+    ) -> list[TitanMatchRelationship]:
+        """Convert one sentence's matches into rows accepted by the bulk SQL function."""
+
+        return [
+            {
+                "source_global_id": source_sentence.global_id,
+                "source_tsp_id": source_sentence.tsp_id,
+                "source_application_id": source_sentence.tsp.application_id,
+                "target_global_id": int(target_global_id),
+                "target_tsp_id": target["tsp_id"],
+                "target_application_id": target["application_id"],
+                "distance": target["distance"],
+            }
+            for target_global_id, target in eligible_target_occurrences.items()
+        ]
 
     def _wait_for_document_occurrences(self, tsp_id: TspId) -> bool:
         """Wait once for Doc2Vec occurrence records to become searchable.

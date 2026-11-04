@@ -53,11 +53,21 @@ class MatchTarget(TypedDict):
     distance: float
 
 
+class TitanMatchRelationship(TypedDict):
+    source_global_id: int
+    source_tsp_id: int
+    source_application_id: int
+    target_global_id: int
+    target_tsp_id: int
+    target_application_id: int
+    distance: float
+
+
 class SentenceResult(TypedDict):
     is_non_matcher: bool
     is_tracer: bool
     is_form_language: bool
-    saved_relationships: int
+    match_relationships: list[TitanMatchRelationship]
 
 
 class ProcessResult(TypedDict):
