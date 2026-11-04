@@ -33,7 +33,7 @@ class TitanMatchesDBStore:
     def save_bidirectional_match_relationships(
         self, match_relationships: list[TitanMatchRelationship]
     ) -> int:
-        """Clean, group, and save a list of Titan sentence matches.
+        """Group and save the target matches returned by OpenSearch.
 
         Input example:
             [
@@ -47,36 +47,32 @@ class TitanMatchesDBStore:
                     "distance": 0.10,
                 },
                 {
-                    "source_global_id": 200,
-                    "source_tsp_id": 20,
-                    "source_application_id": 2,
-                    "target_global_id": 100,
-                    "target_tsp_id": 10,
-                    "target_application_id": 1,
+                    "source_global_id": 100,
+                    "source_tsp_id": 10,
+                    "source_application_id": 1,
+                    "target_global_id": 300,
+                    "target_tsp_id": 30,
+                    "target_application_id": 3,
                     "distance": 0.08,
                 },
             ]
 
         Output example:
-            1
+            2
 
-        Both input items describe the same match, so they become one item with
-        distance 0.08. The method groups matches by source global ID, splits each
-        source into groups of at most 3000 targets, and saves the groups in order.
-        It returns the total number of unique relationships saved.
+        The method keeps OpenSearch target results grouped under source global
+        ID 100. A source with more than 3000 targets is split across multiple
+        SQL-function calls. The function saves both directions in PostgreSQL.
         """
 
         if not match_relationships:
             return 0
 
-        grouped_matches = self._group_unique_relationships(match_relationships)
+        grouped_matches = self._group_relationships_by_source(match_relationships)
 
         saved_relationship_count = 0
-        for source_global_id in sorted(grouped_matches):
-            source_group = grouped_matches[source_global_id]
-            target_items = sorted(
-                source_group["matches"].items(), key=lambda item: int(item[0])
-            )
+        for source_global_id, source_group in grouped_matches.items():
+            target_items = list(source_group["matches"].items())
             batch_count = (
                 len(target_items) + constants.TITAN_MATCH_WRITE_BATCH_SIZE - 1
             ) // constants.TITAN_MATCH_WRITE_BATCH_SIZE
@@ -106,10 +102,10 @@ class TitanMatchesDBStore:
         return saved_relationship_count
 
     @staticmethod
-    def _group_unique_relationships(
+    def _group_relationships_by_source(
         match_relationships: list[TitanMatchRelationship],
     ) -> dict[int, TitanMatchSourceGroup]:
-        """Remove invalid or repeated matches and group the rest by source global ID.
+        """Put each OpenSearch target under the source sentence that found it.
 
         Input example:
             [
@@ -117,9 +113,9 @@ class TitanMatchesDBStore:
                  "source_tsp_id": 10, "target_tsp_id": 20,
                  "source_application_id": 1, "target_application_id": 2,
                  "distance": 0.10},
-                {"source_global_id": 200, "target_global_id": 100,
-                 "source_tsp_id": 20, "target_tsp_id": 10,
-                 "source_application_id": 2, "target_application_id": 1,
+                {"source_global_id": 100, "target_global_id": 300,
+                 "source_tsp_id": 10, "target_tsp_id": 30,
+                 "source_application_id": 1, "target_application_id": 3,
                  "distance": 0.08},
             ]
 
@@ -132,18 +128,24 @@ class TitanMatchesDBStore:
                         "200": {
                             "tsp_id": 20,
                             "application_id": 2,
+                            "distance": 0.10,
+                        },
+                        "300": {
+                            "tsp_id": 30,
+                            "application_id": 3,
                             "distance": 0.08,
                         }
                     },
                 }
             }
 
-        This method treats 100 -> 200 and 200 -> 100 as the same pair. It keeps
-        one copy and uses the smaller distance. It also removes self-matches and
-        matches where both sentences belong to the same application.
+        OpenSearch already excludes the source application and returns target
+        occurrences keyed by global ID. This method only reshapes that result
+        for the existing PostgreSQL function. If the same target appears twice,
+        the smaller distance is kept.
         """
 
-        unique_pairs: dict[tuple[int, int], TitanMatchRelationship] = {}
+        grouped_matches: dict[int, TitanMatchSourceGroup] = {}
         for relationship in match_relationships:
             source_global_id = relationship["source_global_id"]
             target_global_id = relationship["target_global_id"]
@@ -154,16 +156,6 @@ class TitanMatchesDBStore:
             ):
                 continue
 
-            pair = tuple(sorted((source_global_id, target_global_id)))
-            saved_relationship = unique_pairs.get(pair)
-            if saved_relationship is None:
-                unique_pairs[pair] = relationship.copy()
-            elif relationship["distance"] < saved_relationship["distance"]:
-                saved_relationship["distance"] = relationship["distance"]
-
-        grouped_matches: dict[int, TitanMatchSourceGroup] = {}
-        for relationship in unique_pairs.values():
-            source_global_id = relationship["source_global_id"]
             source_group = grouped_matches.setdefault(
                 source_global_id,
                 {
@@ -172,7 +164,11 @@ class TitanMatchesDBStore:
                     "matches": {},
                 },
             )
-            source_group["matches"][str(relationship["target_global_id"])] = {
+            target_key = str(target_global_id)
+            saved_target = source_group["matches"].get(target_key)
+            if saved_target is not None and saved_target["distance"] <= relationship["distance"]:
+                continue
+            source_group["matches"][target_key] = {
                 "tsp_id": relationship["target_tsp_id"],
                 "application_id": relationship["target_application_id"],
                 "distance": relationship["distance"],

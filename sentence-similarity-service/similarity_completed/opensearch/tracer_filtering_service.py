@@ -1,5 +1,3 @@
-from time import perf_counter
-
 from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import CatalogRecord, Classification, MatchTarget
 from similarity_completed.opensearch.db_store import SentenceVectorDBStore
@@ -60,7 +58,6 @@ class TracerFilteringService:
         sentence_classification = self.resolve_sentence_classification(
             catalog_alias, source_catalog_record, source_sentence.tsp.analysis_group, source_sentence.global_id
         )
-        source_classification_update_started_at = perf_counter()
         retry_operation(
             f"Update source classification for global_id={source_sentence.global_id}",
             self.sentence_vector_db_store.update_sentence_classification_by_global_ids,
@@ -68,11 +65,6 @@ class TracerFilteringService:
             sentence_classification,
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
-        )
-        self.logger.info(
-            f"Source classification database update for "
-            f"global_id={source_sentence.global_id} took "
-            f"{perf_counter() - source_classification_update_started_at:.2f} seconds."
         )
         return sentence_classification
 
@@ -133,7 +125,6 @@ class TracerFilteringService:
         expands those accepted sentence keys through the occurrence index.
         """
 
-        occurrence_search_started_at = perf_counter()
         target_occurrences = retry_operation(
             f"Expand matching occurrences for source global_id={source_sentence.global_id}",
             self.occurrence_open_search_store.search_target_occurrences_outside_source_application,
@@ -143,14 +134,6 @@ class TracerFilteringService:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
-        occurrence_search_seconds = perf_counter() - occurrence_search_started_at
-        if occurrence_search_seconds >= constants.SLOW_OCCURRENCE_SEARCH_SECONDS:
-            self.logger.warning(
-                f"Occurrence expansion for source global_id={source_sentence.global_id} "
-                f"took {occurrence_search_seconds:.2f} seconds; "
-                f"matching_key_count={len(sentence_key_distances)}, "
-                f"target_occurrence_count={len(target_occurrences)}."
-            )
 
         return {
             str(target_occurrence["global_id"]): {

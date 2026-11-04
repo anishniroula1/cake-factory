@@ -69,12 +69,12 @@ def test_relationships_are_deduplicated_and_saved_sequentially():
             "distance": 0.10,
         },
         {
-            "source_global_id": 200,
-            "source_tsp_id": 20,
-            "source_application_id": 2,
-            "target_global_id": 100,
-            "target_tsp_id": 10,
-            "target_application_id": 1,
+            "source_global_id": 100,
+            "source_tsp_id": 10,
+            "source_application_id": 1,
+            "target_global_id": 200,
+            "target_tsp_id": 20,
+            "target_application_id": 2,
             "distance": 0.08,
         },
         {
