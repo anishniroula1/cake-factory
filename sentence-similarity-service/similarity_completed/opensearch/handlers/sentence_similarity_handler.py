@@ -97,6 +97,7 @@ class SentenceSimilarityHandler:
         after_global_id = 0
         page_number = 0
         more_sentences_available = True
+        worker_processing_started_at = perf_counter()
 
         with ThreadPoolExecutor(
             max_workers=constants.THREAD_WORKER_COUNT, thread_name_prefix="sentence-similarity"
@@ -182,13 +183,24 @@ class SentenceSimilarityHandler:
                     matched_sentence_count += int(bool(match_relationships))
                     collected_match_relationships.extend(match_relationships)
 
+        self.logger.info(
+            f"Sentence worker processing completed in "
+            f"{perf_counter() - worker_processing_started_at:.2f} seconds and "
+            f"collected {len(collected_match_relationships)} relationship(s)."
+        )
+
+        self.logger.info(
+            f"Starting titan_matches database writes for "
+            f"{len(collected_match_relationships)} collected relationship(s)."
+        )
         titan_match_write_started_at = perf_counter()
         saved_relationship_count = self.titan_matches_db_store.save_bidirectional_match_relationships(
             collected_match_relationships
         )
         self.logger.info(
-            f"titan_matches database writes took {perf_counter() - titan_match_write_started_at:.2f} seconds "
-            f"and saved {saved_relationship_count} unique relationship(s) through sequential SQL-function calls."
+            f"titan_matches database writes completed in "
+            f"{perf_counter() - titan_match_write_started_at:.2f} seconds and "
+            f"saved {saved_relationship_count} unique relationship(s)."
         )
 
         retry_operation(

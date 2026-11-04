@@ -1,5 +1,4 @@
 from collections.abc import Callable
-from time import perf_counter
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -71,14 +70,6 @@ class TitanMatchesDBStore:
             return 0
 
         grouped_matches = self._group_unique_relationships(match_relationships)
-        unique_relationship_count = sum(
-            len(source_group["matches"]) for source_group in grouped_matches.values()
-        )
-        self.logger.info(
-            f"Cleaned {len(match_relationships)} collected Titan relationship(s) "
-            f"into {unique_relationship_count} unique relationship(s) for "
-            f"{len(grouped_matches)} source global_id(s)."
-        )
 
         saved_relationship_count = 0
         for source_global_id in sorted(grouped_matches):
@@ -99,20 +90,6 @@ class TitanMatchesDBStore:
                         offset : offset + constants.TITAN_MATCH_WRITE_BATCH_SIZE
                     ]
                 )
-                target_global_ids = [int(value) for value in target_batch]
-                target_global_id_summary = self._summarize_global_ids(
-                    target_global_ids
-                )
-                relationship_count = len(target_batch)
-                write_started_at = perf_counter()
-                self.logger.info(
-                    "Saving Titan relationships: "
-                    f"source_global_id={source_global_id}, "
-                    f"target_global_ids={target_global_id_summary}, "
-                    f"relationship_count={relationship_count}, "
-                    f"batch={batch_number}/{batch_count}."
-                )
-
                 saved_count = retry_operation(
                     f"Save Titan relationships for source global_id={source_global_id}, "
                     f"batch {batch_number}/{batch_count}",
@@ -125,13 +102,6 @@ class TitanMatchesDBStore:
                     custom_logger=self.logger,
                 )
                 saved_relationship_count += saved_count
-                self.logger.info(
-                    "Saved Titan relationships: "
-                    f"source_global_id={source_global_id}, "
-                    f"target_global_ids={target_global_id_summary}, "
-                    f"relationship_count={saved_count}, "
-                    f"duration_seconds={perf_counter() - write_started_at:.2f}."
-                )
 
         return saved_relationship_count
 
@@ -208,29 +178,6 @@ class TitanMatchesDBStore:
                 "distance": relationship["distance"],
             }
         return grouped_matches
-
-    @staticmethod
-    def _summarize_global_ids(global_ids: list[int]) -> str:
-        """Create a short global ID list for the Titan write log.
-
-        Input example:
-            [200, 201, 202]
-        Output example:
-            "[200, 201, 202]"
-
-        Input example for a batch containing more than ten IDs:
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-        Output example:
-            "[1, 2, 3, 4, 5] ... [8, 9, 10, 11, 12]"
-
-        Lists with ten or fewer IDs show every value. Larger lists show the first
-        five and last five values. This returned text is used only in the log.
-        The original global ID list is not changed.
-        """
-
-        if len(global_ids) <= 10:
-            return str(global_ids)
-        return f"{global_ids[:5]} ... {global_ids[-5:]}"
 
     def _call_bidirectional_match_function(
         self,
