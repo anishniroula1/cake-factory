@@ -20,8 +20,8 @@ class ForeignKeyViolation(Exception):
 
 def test_foreign_key_failure_reports_missing_row_without_query_or_match_input():
     database_error = IntegrityError(
-        "SELECT tsp.upsert_bidirectional_titan_match_batch(:relationships)",
-        {"relationships": [{"private": "large-input"}]},
+        "SELECT tsp.upsert_bidirectional_titan_matches(:matches)",
+        {"matches": {"50001": {"private": "large-input"}}},
         ForeignKeyViolation("foreign key violation"),
     )
     session = session_mock()
@@ -50,3 +50,55 @@ def test_foreign_key_failure_reports_missing_row_without_query_or_match_input():
     assert "large-input" not in displayed_error
     assert captured.value.__suppress_context__ is True
     assert session.execute.call_count == 1
+
+
+def test_relationships_are_deduplicated_and_saved_sequentially():
+    first_write = session_mock(execute_value=2)
+    second_write = session_mock(execute_value=1)
+    store = TitanMatchesDBStore(
+        SessionSequence([first_write, second_write]), LoggerFake()
+    )
+    relationships = [
+        {
+            "source_global_id": 100,
+            "source_tsp_id": 10,
+            "source_application_id": 1,
+            "target_global_id": 200,
+            "target_tsp_id": 20,
+            "target_application_id": 2,
+            "distance": 0.10,
+        },
+        {
+            "source_global_id": 200,
+            "source_tsp_id": 20,
+            "source_application_id": 2,
+            "target_global_id": 100,
+            "target_tsp_id": 10,
+            "target_application_id": 1,
+            "distance": 0.08,
+        },
+        {
+            "source_global_id": 100,
+            "source_tsp_id": 10,
+            "source_application_id": 1,
+            "target_global_id": 300,
+            "target_tsp_id": 30,
+            "target_application_id": 3,
+            "distance": 0.20,
+        },
+        {
+            "source_global_id": 101,
+            "source_tsp_id": 10,
+            "source_application_id": 1,
+            "target_global_id": 301,
+            "target_tsp_id": 30,
+            "target_application_id": 3,
+            "distance": 0.15,
+        },
+    ]
+
+    saved_count = store.save_bidirectional_match_relationships(relationships)
+
+    assert saved_count == 3
+    assert first_write.execute.call_args.args[1]["matches"]["200"]["distance"] == 0.08
+    assert second_write.execute.call_args.args[1]["source_global_id"] == 101

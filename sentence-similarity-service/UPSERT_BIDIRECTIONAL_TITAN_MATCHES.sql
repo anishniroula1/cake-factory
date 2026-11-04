@@ -2,7 +2,7 @@
  * Save sentence matches in both directions.
  *
  * The Sentence Similarity service calls this function for one source sentence.
- * Python can send up to 1000 target matches in p_matches per call.
+ * Python can send up to 3000 target matches in p_matches per call.
  *
  * Example input:
  *

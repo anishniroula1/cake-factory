@@ -111,14 +111,15 @@ One bucket can look like this:
 }
 ```
 
-Distance `0.0` is an exact vector match. Smaller distances are better. The
-The `tsp.upsert_bidirectional_titan_match_batch` function receives the complete
-relationship list, writes both directions in one transaction, and calculates
-`match_count` and `verbatim`. It groups relationships first so each affected
-bucket is merged only once.
+Distance `0.0` is an exact vector match. Smaller distances are better. Python
+removes duplicate forward/reverse pairs and groups the remaining matches
+by source global ID. The `tsp.upsert_bidirectional_titan_matches` function then
+receives at most 3000 targets per call, writes both directions, and calculates
+`match_count` and `verbatim`. Calls run sequentially and commit independently so
+one completed source batch does not keep its locks while the next batch runs.
 
 The complete SQL and a runnable example are in
-`UPSERT_BIDIRECTIONAL_TITAN_MATCH_BATCH.sql`.
+`UPSERT_BIDIRECTIONAL_TITAN_MATCHES.sql`.
 
 ## Project layout
 

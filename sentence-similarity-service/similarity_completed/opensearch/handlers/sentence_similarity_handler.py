@@ -187,8 +187,8 @@ class SentenceSimilarityHandler:
             collected_match_relationships
         )
         self.logger.info(
-            f"titan_matches bulk write took {perf_counter() - titan_match_write_started_at:.2f} seconds "
-            f"and saved {saved_relationship_count} relationship(s) through one set-based function call."
+            f"titan_matches database writes took {perf_counter() - titan_match_write_started_at:.2f} seconds "
+            f"and saved {saved_relationship_count} unique relationship(s) through sequential SQL-function calls."
         )
 
         retry_operation(
@@ -302,7 +302,7 @@ class SentenceSimilarityHandler:
         source_sentence: SentencesVector,
         eligible_target_occurrences: dict[str, MatchTarget],
     ) -> list[TitanMatchRelationship]:
-        """Convert one sentence's matches into rows accepted by the bulk SQL function."""
+        """Convert one sentence's matches into relationships grouped later for database writes."""
 
         return [
             {

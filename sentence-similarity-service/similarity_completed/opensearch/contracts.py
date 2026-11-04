@@ -53,6 +53,18 @@ class MatchTarget(TypedDict):
     distance: float
 
 
+class TitanMatchTarget(TypedDict):
+    tsp_id: int
+    application_id: int
+    distance: float
+
+
+class TitanMatchSourceGroup(TypedDict):
+    tsp_id: int
+    application_id: int
+    matches: dict[str, TitanMatchTarget]
+
+
 class TitanMatchRelationship(TypedDict):
     source_global_id: int
     source_tsp_id: int

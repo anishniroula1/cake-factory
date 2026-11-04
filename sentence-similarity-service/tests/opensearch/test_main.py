@@ -85,14 +85,15 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
     assert json.loads(next_message["Body"]) == {"source": "P2", "tsp_id": "10", "sent_by": "sentence-similarity"}
 
     parameters = match_write.execute.call_args.args[1]
-    assert parameters["relationships"] == [
-        {
-            "source_global_id": 100,
-            "source_tsp_id": 10,
-            "source_application_id": 1,
-            "target_global_id": 200,
-            "target_tsp_id": 20,
-            "target_application_id": 2,
-            "distance": 0.0,
-        }
-    ]
+    assert parameters == {
+        "source_global_id": 100,
+        "source_tsp_id": 10,
+        "source_application_id": 1,
+        "matches": {
+            "200": {
+                "tsp_id": 20,
+                "application_id": 2,
+                "distance": 0.0,
+            }
+        },
+    }
