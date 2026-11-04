@@ -4,6 +4,7 @@
 DATABASE_POOL_SIZE = 30
 DATABASE_MAX_OVERFLOW = 10
 TITAN_MATCH_WRITE_BATCH_SIZE = 1000
+TITAN_MATCH_WRITE_WORKER_COUNT = 5  # Source sentences written by the SQL function at the same time.
 DATABASE_CLASSIFICATION_BATCH_SIZE = 1000
 
 # OpenSearch
@@ -31,4 +32,4 @@ OCCURRENCE_READINESS_WAIT_SECONDS = 30  # One-time wait for newly indexed occurr
 
 # SQS
 SQS_WAIT_SECONDS = 10
-SQS_VISIBILITY_SECONDS = 300  # Five-minute message visibility timeout.
+SQS_VISIBILITY_SECONDS = 7200  # Two-hour message visibility timeout.

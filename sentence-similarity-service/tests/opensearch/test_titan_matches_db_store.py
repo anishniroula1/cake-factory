@@ -20,8 +20,8 @@ class ForeignKeyViolation(Exception):
 
 def test_foreign_key_failure_reports_missing_row_without_query_or_match_input():
     database_error = IntegrityError(
-        "WITH raw_relationships AS (:relationships)",
-        {"relationships": [{"private": "large-input"}]},
+        "SELECT tsp.upsert_bidirectional_titan_matches(:matches)",
+        {"matches": {"50001": {"private": "large-input"}}},
         ForeignKeyViolation("foreign key violation"),
     )
     session = session_mock()
@@ -43,7 +43,7 @@ def test_foreign_key_failure_reports_missing_row_without_query_or_match_input():
         store.save_bidirectional_match_relationships(match_input)
 
     displayed_error = str(captured.value)
-    assert "Titan relationship batch was rejected" in displayed_error
+    assert "Titan matches were rejected" in displayed_error
     assert "fk_titan_matches_sentence_vector" in displayed_error
     assert "Key (global_id)=(50001) is not present" in displayed_error
     assert "SELECT" not in displayed_error

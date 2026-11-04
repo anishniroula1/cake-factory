@@ -84,9 +84,9 @@ class TracerFilteringService:
         """
 
         saved_classification = catalog_record["classification"]
-        # A saved excluded sentence is searched again because only the three
-        # catalog flags are reusable. Allowed sentences can be reused.
-        if saved_classification is not None and not self.should_skip_sentence_catalog_search(saved_classification):
+        # All three catalog fields are present, so this sentence key was
+        # already classified. Reuse both allowed and excluded decisions.
+        if saved_classification is not None:
             return saved_classification
 
         sentence_key = catalog_record["sentence_key"]

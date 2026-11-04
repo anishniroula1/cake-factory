@@ -76,7 +76,7 @@ def test_missing_classification_is_calculated_and_saved(service_config, sentence
     assert record["classification"] == classification and len(router.saved_classifications) == 1
 
 
-def test_saved_non_matcher_is_rechecked(service_config, sentence_row):
+def test_saved_non_matcher_is_reused(service_config, sentence_row):
     non_matcher = {"is_non_matcher": True, "is_tracer": False, "is_form_language": False}
     opensearch, router = opensearch_mock(sentence_row.sentence_key, tracer_result=non_matcher)
     handler = SentenceSimilarityHandler(service_config, SessionSequence([]), opensearch, SqsFake(), LoggerFake())
@@ -86,7 +86,7 @@ def test_saved_non_matcher_is_rechecked(service_config, sentence_row):
         "catalog-asylee", record, "Asylee", sentence_row.global_id
     )
 
-    assert classification["is_non_matcher"] is True and len(router.saved_classifications) == 1
+    assert classification["is_non_matcher"] is True and router.saved_classifications == []
 
 
 def test_all_missing_catalog_keys_stop_the_current_message(service_config, sentence_row):
