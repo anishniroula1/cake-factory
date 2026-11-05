@@ -1,5 +1,6 @@
 from similarity_completed.opensearch import constants
 from similarity_completed.opensearch.contracts import CatalogRecord
+from similarity_completed.opensearch.errors import CatalogNotReadyError
 from similarity_completed.opensearch.utill.score import cosine_distance, minimum_opensearch_score
 from similarity_completed.opensearch.utill.vector import read_catalog_vector, validate_vector
 
@@ -20,8 +21,9 @@ class SentenceCatalogOpenSearchStore:
         Output: {"abc123": {"sentence_key": "abc123", "vector": [...]},
         "def456": {...}}
 
-        Duplicate keys are loaded once. Documents without a source vector are
-        omitted from the returned mapping.
+        Duplicate keys are loaded once. A missing document or vector raises a
+        retryable error because a recent catalog refresh may still be becoming
+        visible.
         """
 
         unique_sentence_keys = list(dict.fromkeys(sentence_keys))
@@ -58,6 +60,16 @@ class SentenceCatalogOpenSearchStore:
                     "sentence_key": sentence_key,
                     "vector": read_catalog_vector(vector_value, constants.VECTOR_DIMENSION),
                 }
+
+        missing_sentence_keys = [
+            sentence_key
+            for sentence_key in unique_sentence_keys
+            if sentence_key not in catalog_records
+        ]
+        if missing_sentence_keys:
+            raise CatalogNotReadyError(
+                f"{len(missing_sentence_keys)} source catalog vector(s) are not visible yet"
+            )
         return catalog_records
 
     def search_matching_sentence_keys_by_vector(

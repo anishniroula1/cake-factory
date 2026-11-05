@@ -77,12 +77,15 @@ class SentenceSimilarityHandler:
             catalog_alias = select_catalog_alias(
                 eligible_source_sentences[0].tsp.analysis_group
             )
-            source_catalog_records = self._load_source_catalog_records_with_readiness_retry(
+            source_catalog_records = retry_operation(
+                "Load source catalog vectors",
+                self.sentence_catalog_open_search_store.load_catalog_records_by_sentence_keys,
                 catalog_alias,
-                eligible_source_sentences,
+                [record.sentence_key for record in eligible_source_sentences],
+                wait_seconds=constants.RETRY_SECONDS,
+                max_attempts=5,
+                custom_logger=self.logger,
             )
-            if source_catalog_records is None:
-                return None
 
             self.logger.info(
                 f"Processing {len(eligible_source_sentences)} eligible source "
@@ -271,58 +274,6 @@ class SentenceSimilarityHandler:
             f"tracer: {tracer_count}, form language: {form_language_count})."
         )
         return eligible_source_sentences
-
-    def _load_source_catalog_records_with_readiness_retry(
-        self,
-        catalog_alias: str,
-        source_sentence_records: list[SentencesVector],
-    ) -> dict[str, CatalogRecord] | None:
-        """Retry catalog keys that are temporarily missing from OpenSearch.
-
-        Input: eligible source rows and their selected sentence catalog.
-        Output: every required catalog record, or None after three incomplete
-        reads. Each later request asks only for keys still missing.
-        """
-
-        catalog_records: dict[str, CatalogRecord] = {}
-        missing_sentence_records = source_sentence_records
-        for attempt in range(1, constants.CATALOG_READINESS_MAX_ATTEMPTS + 1):
-            loaded_records = retry_operation(
-                f"Load missing source catalog vectors, readiness attempt {attempt}",
-                self.sentence_catalog_open_search_store.load_catalog_records_by_sentence_keys,
-                catalog_alias,
-                [record.sentence_key for record in missing_sentence_records],
-                wait_seconds=constants.RETRY_SECONDS,
-                custom_logger=self.logger,
-            )
-            catalog_records.update(loaded_records)
-            missing_sentence_records = [
-                record
-                for record in source_sentence_records
-                if record.sentence_key not in catalog_records
-            ]
-            if not missing_sentence_records:
-                return catalog_records
-
-            missing_details = ", ".join(
-                f"global_id={record.global_id}"
-                for record in missing_sentence_records
-            )
-            if attempt == constants.CATALOG_READINESS_MAX_ATTEMPTS:
-                self.logger.error(
-                    "Source catalog vectors are still missing after "
-                    f"{attempt} readiness attempts in alias {catalog_alias}: "
-                    f"{missing_details}."
-                )
-                return None
-
-            self.logger.warning(
-                f"Source catalog vectors are missing on readiness attempt "
-                f"{attempt} in alias {catalog_alias}: {missing_details}. "
-                f"Waiting {constants.CATALOG_READINESS_WAIT_SECONDS} seconds "
-                "before retrying only the missing keys."
-            )
-            time.sleep(constants.CATALOG_READINESS_WAIT_SECONDS)
 
     def _process_source_sentence(
         self, source_sentence: SentencesVector, catalog_alias: str, source_catalog_record: CatalogRecord

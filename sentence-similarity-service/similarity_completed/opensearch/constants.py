@@ -20,13 +20,11 @@ IVF_NPROBES = 64  # IVF clusters searched by each sentence-catalog query.
 
 # Processing
 DATABASE_SENTENCE_LOAD_BATCH_SIZE = 1000  # Sentence rows loaded in each PostgreSQL query.
-SOURCE_SENTENCE_PROGRESS_BATCH_SIZE = 30  # Source sentences grouped in worker progress logs.
-THREAD_WORKER_COUNT = 30  # Source sentences processed at the same time.
+SOURCE_SENTENCE_PROGRESS_BATCH_SIZE = 100  # Source sentences grouped in worker progress logs.
+THREAD_WORKER_COUNT = 60  # Source sentences processed at the same time.
 RETRY_SECONDS = 5  # Seconds to wait before retrying a failed operation.
 OCCURRENCE_READINESS_WAIT_SECONDS = 30  # One-time wait for newly indexed occurrences.
-CATALOG_READINESS_WAIT_SECONDS = 30  # Wait before retrying catalog keys that are not visible.
-CATALOG_READINESS_MAX_ATTEMPTS = 3  # Catalog reads allowed before the message stops.
 
 # SQS
 SQS_WAIT_SECONDS = 10
-SQS_VISIBILITY_SECONDS = 1800  # Keep a received message hidden for 30 minutes.
+SQS_VISIBILITY_SECONDS = 3600  # Keep a received message hidden for one hour.
