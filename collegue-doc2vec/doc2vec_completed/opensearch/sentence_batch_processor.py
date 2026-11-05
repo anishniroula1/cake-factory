@@ -103,12 +103,16 @@ class SentenceBatchProcessor:
             sentence_vector_records,
             label,
         )
+        created_catalog_count = saved_vector_count + bedrock_count
+        duplicate_sentence_count = len(sentence_vector_records) - len(classifications)
         self.logger.info(
             f"{label} completed: {generated_count} new key(s), "
-            f"{reused_count} reused key(s), {existing_count} existing catalog "
-            f"key(s), {saved_vector_count} saved vector(s), {bedrock_count} "
-            f"Bedrock vector(s), {len(classifications)} classified key(s), and "
-            f"{occurrence_count} occurrence(s)."
+            f"{reused_count} reused key(s); catalog keys: "
+            f"{created_catalog_count} created ({saved_vector_count} with saved "
+            f"vectors and {bedrock_count} with Bedrock), {existing_count} "
+            f"reused; {duplicate_sentence_count} duplicate occurrence(s) reused "
+            "an already handled sentence key; "
+            f"{occurrence_count} occurrence(s) indexed."
         )
         return len(sentence_vector_records)
 
@@ -157,12 +161,14 @@ class SentenceBatchProcessor:
             sentence_vector_records,
             label,
         )
+        duplicate_sentence_count = len(sentence_vector_records) - len(classifications)
         self.logger.info(
             f"{label} completed: {generated_count} new key(s), "
-            f"{reused_count} reused key(s), {existing_count} existing catalog "
-            f"key(s), {bedrock_count} Bedrock vector(s), "
-            f"{len(classifications)} classified key(s), and "
-            f"{occurrence_count} occurrence(s)."
+            f"{reused_count} reused key(s); catalog keys: {bedrock_count} "
+            f"created with Bedrock, {existing_count} reused; "
+            f"{duplicate_sentence_count} duplicate occurrence(s) reused an "
+            f"already handled sentence key; {occurrence_count} occurrence(s) "
+            "indexed."
         )
         return len(sentence_vector_records)
 
@@ -192,10 +198,11 @@ class SentenceBatchProcessor:
             label,
         )
         self._apply_classifications(sentence_vector_records, classifications)
+        duplicate_sentence_count = len(sentence_vector_records) - len(classifications)
         self.logger.info(
-            f"{label} prepared: {existing_count} existing catalog key(s), "
-            f"{bedrock_count} Bedrock vector(s), and {len(classifications)} "
-            "classified key(s)."
+            f"{label} prepared: catalog keys: {bedrock_count} created with "
+            f"Bedrock, {existing_count} reused; {duplicate_sentence_count} "
+            "duplicate occurrence(s) reused an already handled sentence key."
         )
         return classifications
 
@@ -333,6 +340,7 @@ class SentenceBatchProcessor:
                 catalog_alias,
                 catalog_records,
                 analysis_group,
+                label,
             )
         )
         return classifications

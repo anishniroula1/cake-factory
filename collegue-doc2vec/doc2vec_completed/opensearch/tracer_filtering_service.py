@@ -26,6 +26,7 @@ class TracerFilteringService:
         catalog_alias: str,
         catalog_records: dict[str, CatalogRecord],
         analysis_group: str,
+        label: str,
     ) -> dict[str, Classification]:
         """Reuse saved classifications and classify only unfinished keys.
 
@@ -59,4 +60,12 @@ class TracerFilteringService:
                 max_attempts=1,
                 custom_logger=self.logger,
             )
+        reused_classification_count = len(classifications) - len(new_classifications)
+        self.logger.info(
+            f"{label} tracer classification completed: "
+            f"{len(new_classifications)} unique sentence key(s) searched in "
+            f"the tracer catalog; {reused_classification_count} skipped the "
+            "tracer search because a complete classification already existed "
+            "in the sentence catalog."
+        )
         return classifications

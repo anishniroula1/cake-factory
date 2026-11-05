@@ -104,6 +104,12 @@ already completed.
     finishes.
 16. Send the existing state-machine result and delete the source SQS message.
 
+Each worker summary reports how many unique catalog keys were created or
+reused, how many unique keys searched the tracer catalog, and how many reused
+an existing catalog classification. Duplicate sentence occurrences are counted
+separately because they share one catalog key and do not need another tracer
+search.
+
 The completion message is:
 
 ```json
@@ -146,6 +152,10 @@ document IDs.
     Convert every downstream message to a JSON string and send at most ten
     messages in each SQS batch request.
 13. Delete the source message only after every downstream message is accepted.
+
+Historical worker summaries use the same catalog and tracer counts. Catalog
+creation is additionally separated into saved Titan vectors and vectors created
+through the Bedrock pipeline.
 
 An individual document failure does not stop the remaining IDs in the source
 message. Successful documents are refreshed and sent downstream. Failed
