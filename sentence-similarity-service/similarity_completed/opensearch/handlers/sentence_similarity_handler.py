@@ -19,7 +19,7 @@ from similarity_completed.opensearch.contracts import (
 from similarity_completed.opensearch.db_store import SentenceVectorDBStore, TitanMatchesDBStore
 from similarity_completed.opensearch.errors import QueueSendError
 from similarity_completed.opensearch.opensearch_store import OccurrenceOpenSearchStore, SentenceCatalogOpenSearchStore
-from similarity_completed.opensearch.retry import retry_operation
+from similarity_completed.opensearch.retry import retry_operation, safe_error_summary
 from similarity_completed.opensearch.utill.catalog import select_catalog_alias
 from ta_db_connection.atatables import SentencesVector
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
@@ -111,26 +111,69 @@ class SentenceSimilarityHandler:
                 max_workers=constants.THREAD_WORKER_COUNT,
                 thread_name_prefix="sentence-similarity",
             ) as executor:
-                sentence_jobs = [
-                    executor.submit(
-                        self._process_source_sentence,
-                        source_sentence,
-                        catalog_alias,
-                        source_catalog_records[source_sentence.sentence_key],
+                sentence_job_batches = []
+                all_sentence_jobs = []
+                for batch_number, offset in enumerate(
+                    range(
+                        0,
+                        len(eligible_source_sentences),
+                        constants.SOURCE_SENTENCE_PROGRESS_BATCH_SIZE,
+                    ),
+                    start=1,
+                ):
+                    source_sentence_batch = eligible_source_sentences[
+                        offset : offset
+                        + constants.SOURCE_SENTENCE_PROGRESS_BATCH_SIZE
+                    ]
+                    starting_global_id = source_sentence_batch[0].global_id
+                    ending_global_id = source_sentence_batch[-1].global_id
+                    self.logger.info(
+                        f"Starting source sentence thread batch {batch_number} "
+                        f"with {len(source_sentence_batch)} sentence(s); "
+                        f"starting_global_id={starting_global_id}, "
+                        f"ending_global_id={ending_global_id}."
                     )
-                    for source_sentence in eligible_source_sentences
-                ]
-                for sentence_job in sentence_jobs:
-                    sentence_result = sentence_job.result()
-                    if sentence_result is None:
-                        for unfinished_job in sentence_jobs:
-                            unfinished_job.cancel()
-                        return None
+                    sentence_jobs = [
+                        executor.submit(
+                            self._process_source_sentence_with_error_logging,
+                            source_sentence,
+                            catalog_alias,
+                            source_catalog_records[source_sentence.sentence_key],
+                        )
+                        for source_sentence in source_sentence_batch
+                    ]
+                    all_sentence_jobs.extend(sentence_jobs)
+                    sentence_job_batches.append(
+                        (
+                            batch_number,
+                            starting_global_id,
+                            ending_global_id,
+                            sentence_jobs,
+                        )
+                    )
 
-                    match_relationships = sentence_result["match_relationships"]
-                    processed_sentence_count += 1
-                    matched_sentence_count += int(bool(match_relationships))
-                    collected_match_relationships.extend(match_relationships)
+                for (
+                    batch_number,
+                    starting_global_id,
+                    ending_global_id,
+                    sentence_jobs,
+                ) in sentence_job_batches:
+                    for sentence_job in sentence_jobs:
+                        sentence_result = sentence_job.result()
+                        if sentence_result is None:
+                            for unfinished_job in all_sentence_jobs:
+                                unfinished_job.cancel()
+                            return None
+
+                        match_relationships = sentence_result["match_relationships"]
+                        processed_sentence_count += 1
+                        matched_sentence_count += int(bool(match_relationships))
+                        collected_match_relationships.extend(match_relationships)
+                    self.logger.info(
+                        f"Completed source sentence thread batch {batch_number}; "
+                        f"starting_global_id={starting_global_id}, "
+                        f"ending_global_id={ending_global_id}."
+                    )
 
         self.logger.info(
             f"Starting titan_matches database writes for "
@@ -292,6 +335,28 @@ class SentenceSimilarityHandler:
                 source_sentence, eligible_target_occurrences
             ),
         }
+
+    def _process_source_sentence_with_error_logging(
+        self,
+        source_sentence: SentencesVector,
+        catalog_alias: str,
+        source_catalog_record: CatalogRecord,
+    ) -> SentenceResult | None:
+        """Process one thread job and identify its source row when it fails."""
+
+        try:
+            return self._process_source_sentence(
+                source_sentence,
+                catalog_alias,
+                source_catalog_record,
+            )
+        except Exception as error:
+            self.logger.error(
+                "Source sentence thread failed for "
+                f"global_id={source_sentence.global_id}: "
+                f"{safe_error_summary(error)}"
+            )
+            raise
 
     @staticmethod
     def _build_titan_match_relationships(

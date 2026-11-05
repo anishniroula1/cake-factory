@@ -21,6 +21,9 @@ For each SQS message, the service:
 5. Uses the document's `analysis_group` to select the Asylee or Refugee catalog.
 6. Loads every eligible source vector from that catalog by `sentenceKey`.
 7. Processes up to 30 eligible source sentences at the same time.
+   Progress logs group the submitted work into 30-sentence ranges and show the
+   starting and ending `global_id`. A failed worker logs its exact source
+   `global_id` without logging sentence content.
 8. Searches the sentence catalog for every exact and semantic key at or above
    76%. The catalog query also excludes short, tracer, non-matcher, and
    form-language target keys.
