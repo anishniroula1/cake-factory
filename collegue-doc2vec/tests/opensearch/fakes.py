@@ -91,11 +91,14 @@ class SessionSequence:
 
 
 class OpenSearchFake:
-    def __init__(self, existing=None, vector_dimension=2):
+    def __init__(self, existing=None, vector_dimension=2, tracer_hits=None):
         self.existing = existing or set()
         self.vector_dimension = vector_dimension
         self.existing_id_calls = []
         self.bulk_calls = []
+        self.catalog_documents = {}
+        self.classification_updates = []
+        self.tracer_hits = tracer_hits or []
         self.refresh_alias_calls = []
 
     def find_existing_document_ids(self, alias, document_ids):
@@ -104,7 +107,47 @@ class OpenSearchFake:
 
     def index_documents(self, alias, documents, needs_embedding):
         self.bulk_calls.append((alias, documents, needs_embedding))
+        for document in documents:
+            stored = {
+                key: value for key, value in document.items() if key != "_id"
+            }
+            stored.setdefault("sentenceContentVector", [0.1, 0.2])
+            self.catalog_documents[(alias, str(document["_id"]))] = stored
         return len(documents)
+
+    def load_documents_by_ids(self, alias, document_ids, source_fields):
+        documents = {}
+        for document_id in document_ids:
+            stored = self.catalog_documents.get((alias, str(document_id)))
+            if stored is None and document_id in self.existing:
+                stored = {
+                    "sentenceKey": document_id,
+                    "sentenceContentVector": [0.1, 0.2],
+                    "isNonMatcher": False,
+                    "isTracer": False,
+                    "isFormLanguage": False,
+                }
+            if stored is not None:
+                documents[str(document_id)] = {
+                    field: stored[field]
+                    for field in source_fields
+                    if field in stored
+                }
+        return documents
+
+    def update_documents(self, alias, documents):
+        self.classification_updates.extend(documents)
+        for document in documents:
+            stored = self.catalog_documents.setdefault(
+                (alias, str(document["_id"])), {}
+            )
+            stored.update(
+                {key: value for key, value in document.items() if key != "_id"}
+            )
+        return len(documents)
+
+    def search(self, alias, body):
+        return {"hits": {"hits": self.tracer_hits}}
 
     def validate_vector(self, vector):
         if len(vector) != self.vector_dimension:

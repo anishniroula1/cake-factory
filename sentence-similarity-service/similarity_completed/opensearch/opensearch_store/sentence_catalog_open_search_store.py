@@ -1,16 +1,11 @@
-from datetime import UTC, datetime
-
-from opensearchpy.exceptions import OpenSearchException
-
 from similarity_completed.opensearch import constants
-from similarity_completed.opensearch.contracts import CatalogRecord, Classification
-from similarity_completed.opensearch.utill.classification import saved_classification
+from similarity_completed.opensearch.contracts import CatalogRecord
 from similarity_completed.opensearch.utill.score import cosine_distance, minimum_opensearch_score
 from similarity_completed.opensearch.utill.vector import read_catalog_vector, validate_vector
 
 
 class SentenceCatalogOpenSearchStore:
-    """Read vectors, search semantic matches, and update sentence catalog classifications."""
+    """Read source vectors and search eligible sentence-catalog matches."""
 
     def __init__(self, client) -> None:
         self.client = client
@@ -18,13 +13,12 @@ class SentenceCatalogOpenSearchStore:
     def load_catalog_records_by_sentence_keys(
         self, catalog_alias: str, sentence_keys: list[str]
     ) -> dict[str, CatalogRecord]:
-        """Load vectors and classifications for unique sentence keys. The vector
-        is read as a numeric array from the catalog document source.
+        """Load numeric vectors for unique source sentence keys.
 
         Input: catalog_alias="sentence_semantic_catalog_asylee",
         sentence_keys=["abc123", "def456", "abc123"]
-        Output: {"abc123": {"sentence_key": "abc123", "word_count": 8,
-        "vector": [...], "classification": None}, "def456": {...}}
+        Output: {"abc123": {"sentence_key": "abc123", "vector": [...]},
+        "def456": {...}}
 
         Duplicate keys are loaded once. Documents without a source vector are
         omitted from the returned mapping.
@@ -49,10 +43,6 @@ class SentenceCatalogOpenSearchStore:
                     "track_total_hits": False,
                     "_source": [
                         "sentenceKey",
-                        "wordCount",
-                        "isNonMatcher",
-                        "isTracer",
-                        "isFormLanguage",
                         constants.VECTOR_FIELD,
                     ],
                     "query": {"ids": {"values": sentence_key_batch}},
@@ -66,9 +56,7 @@ class SentenceCatalogOpenSearchStore:
                 sentence_key = catalog_source["sentenceKey"]
                 catalog_records[sentence_key] = {
                     "sentence_key": sentence_key,
-                    "word_count": int(catalog_source["wordCount"]),
                     "vector": read_catalog_vector(vector_value, constants.VECTOR_DIMENSION),
-                    "classification": saved_classification(catalog_source),
                 }
         return catalog_records
 
@@ -95,38 +83,6 @@ class SentenceCatalogOpenSearchStore:
             sentence_key_distances.update(sentence_key_page)
             if after_key is None:
                 return sentence_key_distances
-
-    def update_catalog_classification_by_sentence_key(
-        self, catalog_alias: str, sentence_key: str, classification: Classification
-    ) -> None:
-        """Persist reusable classification flags with a one-item bulk update.
-        This prevents repeated tracer searches for the same sentence key.
-
-        Input: catalog_alias="sentence_semantic_catalog_asylee",
-        sentence_key="abc123", classification={"is_non_matcher": True,
-        "is_tracer": False, "is_form_language": False}
-        """
-
-        classification_document = {
-            "isNonMatcher": classification["is_non_matcher"],
-            "isTracer": classification["is_tracer"],
-            "isFormLanguage": classification["is_form_language"],
-            "updatedAt": datetime.now(UTC).isoformat(),
-        }
-
-        # The single-document update endpoint returned 403 in the environment.
-        # Keep the old call here for reference while the one-item bulk update is tested.
-        # self.client.update(
-        #     index=catalog_alias,
-        #     id=sentence_key,
-        #     body={"doc": document},
-        # )
-
-        bulk_response = self.client.bulk(
-            body=[{"update": {"_index": catalog_alias, "_id": sentence_key}}, {"doc": classification_document}]
-        )
-        if bulk_response.get("errors"):
-            raise OpenSearchException(f"catalog classification bulk update failed: {bulk_response.get('items', [])}")
 
     def _search_matching_sentence_key_page(
         self, catalog_alias: str, vector: list[float], after_key: dict | None
@@ -160,7 +116,24 @@ class SentenceCatalogOpenSearchStore:
                             "vector": vector,
                             "min_score": minimum_opensearch_score(constants.MATCH_THRESHOLD),
                             "method_parameters": {"nprobes": constants.IVF_NPROBES},
-                            "filter": {"range": {"wordCount": {"gte": constants.MINIMUM_MATCH_WORD_COUNT}}},
+                            "filter": {
+                                "bool": {
+                                    "filter": [
+                                        {
+                                            "range": {
+                                                "wordCount": {
+                                                    "gte": constants.MINIMUM_MATCH_WORD_COUNT
+                                                }
+                                            }
+                                        }
+                                    ],
+                                    "must_not": [
+                                        {"term": {"isNonMatcher": True}},
+                                        {"term": {"isTracer": True}},
+                                        {"term": {"isFormLanguage": True}},
+                                    ],
+                                }
+                            },
                         }
                     }
                 },

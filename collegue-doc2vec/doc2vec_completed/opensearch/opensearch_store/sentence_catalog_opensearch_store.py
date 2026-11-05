@@ -1,4 +1,14 @@
-from doc2vec_completed.opensearch.contracts import CatalogDocument
+import math
+from datetime import UTC, datetime
+
+from doc2vec_completed.opensearch import constants
+from doc2vec_completed.opensearch.contracts import (
+    CatalogClassificationDocument,
+    CatalogDocument,
+    CatalogRecord,
+    Classification,
+)
+from doc2vec_completed.opensearch.errors import PermanentDataError
 from doc2vec_completed.opensearch.opensearch_helper import OpenSearchHelper
 
 
@@ -62,5 +72,81 @@ class SentenceCatalogOpenSearchStore:
             documents,
             needs_embedding=True,
         )
+
+    def load_catalog_records_by_sentence_keys(
+        self,
+        alias: str,
+        sentence_keys: list[str],
+    ) -> dict[str, CatalogRecord]:
+        """Load vectors and any saved classification by unique sentence key.
+
+        Input: keys ["A", "B", "A"] after catalog indexing finishes.
+        Output: one record for A and one for B, including each numeric vector.
+        """
+
+        fields = ["sentenceKey", constants.VECTOR_FIELD, *constants.CLASSIFICATION_FIELDS]
+        sources = self.opensearch_helper.load_documents_by_ids(
+            alias,
+            sentence_keys,
+            fields,
+        )
+        records: dict[str, CatalogRecord] = {}
+        for document_id, source in sources.items():
+            vector = source.get(constants.VECTOR_FIELD)
+            if not isinstance(vector, list) or any(
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                for value in vector
+            ):
+                raise PermanentDataError(
+                    f"catalog vector is invalid for sentence key {document_id}"
+                )
+            numeric_vector = [float(value) for value in vector]
+            self.opensearch_helper.validate_vector(numeric_vector)
+            if any(not math.isfinite(value) for value in numeric_vector):
+                raise PermanentDataError(
+                    f"catalog vector is invalid for sentence key {document_id}"
+                )
+            records[document_id] = {
+                "sentence_key": str(source.get("sentenceKey") or document_id),
+                "vector": numeric_vector,
+                "classification": self._saved_classification(source),
+            }
+        return records
+
+    def update_catalog_classifications(
+        self,
+        alias: str,
+        classifications: dict[str, Classification],
+    ) -> int:
+        """Save tracer classifications without replacing catalog vectors.
+
+        Input: {"A": {"is_non_matcher": True, ...}}
+        Output: the number of unique catalog keys updated.
+        """
+
+        updated_at = datetime.now(UTC).isoformat()
+        documents: list[CatalogClassificationDocument] = [
+            {
+                "_id": sentence_key,
+                "updatedAt": updated_at,
+                "isNonMatcher": classification["is_non_matcher"],
+                "isTracer": classification["is_tracer"],
+                "isFormLanguage": classification["is_form_language"],
+            }
+            for sentence_key, classification in classifications.items()
+        ]
+        return self.opensearch_helper.update_documents(alias, documents)
+
+    @staticmethod
+    def _saved_classification(source: dict) -> Classification | None:
+        """Return a classification only when all three catalog flags exist."""
+
+        if not all(field in source for field in constants.CLASSIFICATION_FIELDS):
+            return None
+        return {
+            "is_non_matcher": bool(source["isNonMatcher"]),
+            "is_tracer": bool(source["isTracer"]),
+            "is_form_language": bool(source["isFormLanguage"]),
+        }
 
 

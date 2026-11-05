@@ -85,18 +85,24 @@ already completed.
 6. Remove empty sentence values and assign `sent_id_local` starting at 1.
 7. Generate a normalized SHA-256 `sentence_key` and a meaningful Unicode word
    count for every sentence.
-8. Add sentence records in database batches of 1000. Each batch is flushed so
-   PostgreSQL assigns `global_id`, but the complete document is committed only
-   once. Any database failure rolls back every uncommitted sentence.
-9. Process the saved records in 30-sentence jobs with up to 100 workers.
-10. Select the Asylee or Refugee catalog using the document's `analysis_group`.
-11. Use `mget` to skip sentence keys already in that catalog. Missing keys are
+8. Process the prepared records in 30-sentence catalog jobs with up to 100
+   workers before inserting them into `sentences_vector`.
+9. Select the Asylee or Refugee catalog using the document's `analysis_group`.
+10. Use `mget` to skip sentence keys already in that catalog. Missing keys are
     sent through the catalog's Bedrock embedding pipeline.
-12. Save an occurrence document for every sentence using `global_id` as its
+11. Read each catalog vector with real-time `mget`. Reuse a complete saved
+    classification or search the closest tracer references when classification
+    fields are missing.
+12. Save new classifications on their catalog keys.
+13. Insert the sentences into `sentences_vector` in database batches of 1000.
+    The insert already contains the sentence key, calculated word count, and
+    all three classification flags. Each batch is flushed for `global_id`, and
+    the complete document is committed once.
+14. Save an occurrence document for every sentence using its assigned `global_id` as its
     OpenSearch document ID.
-13. Refresh the selected catalog and occurrence aliases once after every worker
+15. Refresh the selected catalog and occurrence aliases once after every worker
     finishes.
-14. Send the existing state-machine result and delete the source SQS message.
+16. Send the existing state-machine result and delete the source SQS message.
 
 The completion message is:
 
@@ -124,17 +130,22 @@ document IDs.
 2. Count the document's `sentences_vector` records.
 3. Load up to 3000 records per page in `global_id` order.
 4. Split each page into 30-sentence jobs and run up to 100 jobs concurrently.
-5. Reuse saved sentence keys and update only records whose key is missing.
+5. Reuse saved sentence keys, generate missing keys, and recalculate
+   `sentences_vector.word_count` from the current sentence content.
 6. Load existing Titan vectors from `embeddings` using `embedding_type=2`.
 7. Check the selected catalog by sentence key. A missing catalog key reuses its
    saved vector when available; otherwise the Bedrock pipeline creates it.
-8. Save every sentence occurrence.
-9. After every document finishes, refresh each affected catalog and the
+8. Read each catalog vector and classify unfinished keys against the tracer
+   catalog. New classifications are cached on their catalog keys.
+9. Update each `sentences_vector` row once with its sentence key, recalculated
+   word count, and all three classification flags.
+10. Save every sentence occurrence.
+11. After every document finishes, refresh each affected catalog and the
    occurrence alias once.
-10. Use a separate outbound SQS client configured with the send-event queue.
+12. Use the configured outbound queue URL with the shared SQS client.
     Convert every downstream message to a JSON string and send at most ten
     messages in each SQS batch request.
-11. Delete the source message only after every downstream message is accepted.
+13. Delete the source message only after every downstream message is accepted.
 
 An individual document failure does not stop the remaining IDs in the source
 message. Successful documents are refreshed and sent downstream. Failed
@@ -187,6 +198,9 @@ The Asylee and Refugee catalogs contain one document per unique sentence key:
   "sentenceKey": "64-character-sha256-key",
   "sentenceContent": "The applicant returned home after the interview.",
   "wordCount": 8,
+  "isNonMatcher": false,
+  "isTracer": false,
+  "isFormLanguage": false,
   "sentenceContentVector": [0.01, 0.02],
   "createdAt": "2026-10-30T12:00:00+00:00",
   "updatedAt": "2026-10-30T12:00:00+00:00"
@@ -236,16 +250,18 @@ consecutive words count once. For example:
 | `La policía me detuvo durante tres días` | 7 |
 
 Short sentences are still stored in PostgreSQL, the occurrence index, and the
-selected catalog. Sentence Similarity uses the catalog word count to keep
-sentences under five words out of normal sentence matching. The training flow
-also excludes them from IVF training.
+selected catalog. Doc2Vec stores the recalculated count in both
+`sentences_vector` and the catalog. Sentence Similarity filters the database
+query to load only rows with at least five words. The training flow also
+excludes shorter sentences from IVF training.
 
 ## Transactions, retries, and errors
 
 - New document sentences use one PostgreSQL transaction. Flushes assign IDs;
   only the final commit makes all sentence records permanent.
-- Historical key updates use small independent worker transactions. A retry
-  reuses keys that were already committed.
+- Historical key and word-count updates use small independent worker
+  transactions. Classification updates use another small transaction after the
+  catalog vector is available.
 - Normal database calls, OpenSearch lookups and refreshes, and downstream SQS
   sends use up to three total attempts.
 - OpenSearch bulk writes use the first request plus 15 retries because the
@@ -316,6 +332,7 @@ doc2vec_completed/opensearch/
   opensearch_helper.py      Bulk writes, mget, cooldown, refresh, and validation
   rrf_filterer.py           Refugee referral section filtering before splitting
   sentence_batch_processor.py Shared catalog and occurrence batch preparation
+  tracer_filtering_service.py Reusable catalog classification orchestration
   sentence_splitter.py      Syntok splitting while preserving original text
   sqs_processor.py          Message validation, routing, and source deletion
   text.py                   Sentence normalization, keys, and word counting

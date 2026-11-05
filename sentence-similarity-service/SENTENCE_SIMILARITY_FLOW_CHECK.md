@@ -5,22 +5,20 @@
 | Step | Current behavior | Status |
 |---|---|---|
 | 1. Check whether OpenSearch is ready | The service checks whether at least one sentence occurrence exists for the received `tsp_id`. If none is found, it waits 30 seconds and checks one more time. | Implemented. This checks the occurrence index, not every OpenSearch index. |
-| 2. Load source sentences | The service counts and loads `sentences_vector` records for the `tsp_id` in ordered batches. Sentences are processed through a continuously replenished worker pool. | Implemented. |
-| 3. Load catalog vectors and classification flags | Source sentence keys are used to load their vectors, word counts, `isNonMatcher`, `isTracer`, and `isFormLanguage` from the correct Asylee or Refugee sentence catalog. Processing stops when a required source catalog record or vector is missing. | Implemented. |
-| 4. Search the tracer catalog when classification is unavailable | The vector is searched against the closest 100 tracer references. Every result at or above the 70% threshold contributes to the final non-matcher, tracer, and form-language flags. | Implemented. Any complete saved classification is reused. The tracer catalog is searched only when the classification fields are missing. |
-| 5. Save the classification | A newly calculated classification is written to the sentence catalog. The source `sentences_vector` row is also updated by `global_id`. | Implemented. Catalog is updated only when tracer search is performed; `sentences_vector` is updated for each processed source. |
-| 6. Decide whether the sentence may be matched | A sentence is excluded from the main catalog search when it is a non-matcher, tracer, form language, or contains fewer than five words. | Implemented. |
-| 7. Search the sentence catalog | A source sentence reaches this step only when its three classification flags are false and it contains at least five words. It uses its vector to search the correct analysis-group catalog and returns every sentence key meeting the configured similarity threshold and word-count rule. | Implemented. |
-| 8. Expand sentence keys through the occurrence index | Matching sentence keys are searched in the occurrence index to obtain target `global_id`, `tsp_id`, and `application_id`. Results stay in the same analysis group and exclude the source application. | Implemented. |
-| 9. Prepare bidirectional relationships | Eligible source and target data are collected as source global ID, source document and application IDs, target global ID, target document and application IDs, and distance. Duplicate A-to-B and B-to-A inputs are collapsed into one relationship before writing. | Implemented. |
-| 10. Save `titan_matches` | All relationships are saved after the search workers finish. They are grouped by source global ID and sent sequentially to `tsp.upsert_bidirectional_titan_matches`, with at most 3000 targets per call. Each call commits separately, and PostgreSQL creates both directions without removing existing JSONB keys. | Implemented without database-write threading. |
-| 11. Continue the workflow | The next SQS message is sent only after all source sentences finish and the Titan match writes succeed. | Implemented. |
+| 2. Load and filter source sentences | PostgreSQL loads every row for the `tsp_id` in pages of 1000 before workers start. The handler reports short and classified rows, then keeps only rows whose `word_count` is at least five and whose three classification flags are false. | Implemented. Doc2Vec owns word counting and classification. |
+| 3. Load catalog vectors | Source sentence keys load their vectors from the correct Asylee or Refugee catalog. Processing stops when a required source vector is missing. | Implemented. Sentence Similarity no longer writes classifications. |
+| 4. Search the sentence catalog | Each source vector returns every qualifying sentence key at or above the configured threshold. The catalog query also excludes target keys that are short, non-matchers, tracers, or form language. | Implemented. |
+| 5. Expand sentence keys through the occurrence index | Matching sentence keys are searched in the occurrence index to obtain target `global_id`, `tsp_id`, and `application_id`. Results stay in the same analysis group and exclude the source application. | Implemented. |
+| 6. Prepare bidirectional relationships | Source and target identifiers and distance are collected in memory. Repeated source-to-target results keep the smaller distance. | Implemented. |
+| 7. Save `titan_matches` | All relationships are saved after the search workers finish. They are grouped by source global ID and sent sequentially to `tsp.upsert_bidirectional_titan_matches`, with at most 3000 targets per call. Each call commits separately, and PostgreSQL creates both directions without removing existing JSONB keys. | Implemented without database-write threading. |
+| 8. Continue the workflow | The next SQS message is sent only after all eligible source sentences finish and the Titan match writes succeed. A document with zero eligible sentences also continues with zero matches. | Implemented. |
 
 ## Important result counts
 
 The sentence-catalog log reports the number of matching **sentence keys**, not the number of final occurrence relationships. The source sentence key is also included with distance `0.0`. A search can therefore report one key while producing zero target relationships when that key has no occurrence outside the source application.
 
-The final saved count is determined after source classification, sentence-catalog search, occurrence expansion, source-application exclusion, and duplicate removal.
+The final saved count is determined after sentence-catalog search, occurrence
+expansion, source-application exclusion, and duplicate removal.
 
 ## PostgreSQL activity query
 

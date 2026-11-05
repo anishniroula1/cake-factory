@@ -59,14 +59,10 @@ def test_main_runs_complete_unit_flow_with_mocked_service_boundaries(service_con
         logger=custom_logger,
         visibility_timeout=0,
     )
-    source_update = session_mock(rows=[100])
     match_write = session_mock(execute_value=1)
     sessions = SessionSequence(
         [
-            session_mock(scalar_value=1),
             session_mock(rows=[sentence_row]),
-            source_update,
-            session_mock(rows=[]),
             match_write,
         ]
     )

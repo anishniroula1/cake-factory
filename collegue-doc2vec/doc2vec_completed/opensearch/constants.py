@@ -16,6 +16,10 @@ TRACER_ALIAS = "tracer_form_language_catalog"
 OPENSEARCH_BATCH_SIZE = 1000
 OPENSEARCH_BULK_RETRY_COUNT = 30  # Retries after the first bulk request fails.
 VECTOR_DIMENSION = 512
+VECTOR_FIELD = "sentenceContentVector"
+CLASSIFICATION_FIELDS = ("isNonMatcher", "isTracer", "isFormLanguage")
+TRACER_THRESHOLD = 70  # Minimum tracer-catalog classification percentage.
+TRACER_TOP_K = 100  # Closest tracer references checked for classification.
 
 # Processing
 LIVE_DATABASE_BATCH_SIZE = 1000  # Sentence records flushed per database batch.

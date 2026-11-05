@@ -147,8 +147,8 @@ def test_historical_message_runs_the_complete_ingestion_flow(
         [
             SessionFake(scalar_value=len(rows)),
             load_session,
-            save_session,
             SessionFake(rows=[embedding, invalid_embedding]),
+            save_session,
             SessionFake(rows=[]),
         ]
     )
@@ -170,6 +170,7 @@ def test_historical_message_runs_the_complete_ingestion_flow(
         ("catalog-asylee", True),
         ("occurrence", False),
     ]
+    assert len(save_session.executed) == 1
 
 
 def test_temporary_worker_failure_retries_without_losing_the_message(
@@ -201,6 +202,7 @@ def test_temporary_worker_failure_retries_without_losing_the_message(
             SessionFake(rows=[]),
             SessionFake(rows=[]),
             SessionFake(rows=[]),
+            SessionFake(rows=[]),
         ]
     )
     opensearch = TemporaryFailureOpenSearch()
@@ -227,6 +229,7 @@ def test_refugee_document_uses_only_the_refugee_catalog(
             SessionFake(scalar_value=1),
             SessionFake(rows=[sentence_record]),
             SessionFake(),
+            SessionFake(rows=[]),
             SessionFake(rows=[]),
             SessionFake(rows=[]),
         ]
@@ -360,12 +363,12 @@ def test_failed_worker_logs_its_global_id_range(
         SqsFake(),
         custom_logger,
     )
-    handler.batch_processor.save_historical_sentence_batch = Mock(
+    handler.batch_processor.process_historical_sentence_batch = Mock(
         side_effect=PermanentDataError("invalid sentence batch")
     )
 
     with pytest.raises(PermanentDataError):
-        handler._save_historical_sentence_batch_in_opensearch([sentence_record])
+        handler._process_historical_sentence_batch([sentence_record])
 
 
 def test_unsupported_analysis_group_is_logged_for_manual_reprocessing(

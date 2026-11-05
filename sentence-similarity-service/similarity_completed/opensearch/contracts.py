@@ -1,4 +1,4 @@
-from typing import NotRequired, TypedDict
+from typing import TypedDict
 
 TspId = int | str
 
@@ -26,17 +26,9 @@ class NextQueueMessage(TypedDict):
     tsp_id: TspId
 
 
-class Classification(TypedDict):
-    is_non_matcher: bool
-    is_tracer: bool
-    is_form_language: bool
-
-
 class CatalogRecord(TypedDict):
     sentence_key: str
-    word_count: int
     vector: list[float]
-    classification: Classification | None
 
 
 class TargetOccurrence(TypedDict):
@@ -76,9 +68,6 @@ class TitanMatchRelationship(TypedDict):
 
 
 class SentenceResult(TypedDict):
-    is_non_matcher: bool
-    is_tracer: bool
-    is_form_language: bool
     match_relationships: list[TitanMatchRelationship]
 
 
@@ -86,14 +75,7 @@ class ProcessResult(TypedDict):
     tsp_id: TspId
     source_count: int
     processed_count: int
-    non_matcher_count: int
-    tracer_count: int
-    form_language_count: int
     matched_sentence_count: int
     saved_relationship_count: int
 
 
-class CatalogSearchHit(TypedDict):
-    sentence_key: str
-    distance: float
-    classification: NotRequired[Classification]

@@ -238,7 +238,7 @@ class HistoricalHandler:
                 )
                 page_indexed = sum(
                     executor.map(
-                        self._save_historical_sentence_batch_in_opensearch,
+                        self._process_historical_sentence_batch,
                         worker_batches,
                     )
                 )
@@ -270,11 +270,11 @@ class HistoricalHandler:
             catalog_alias,
         )
 
-    def _save_historical_sentence_batch_in_opensearch(
+    def _process_historical_sentence_batch(
         self,
         sentence_vector_records: list[SentencesVector],
     ) -> int:
-        """Prepare and save one historical sentence batch in OpenSearch.
+        """Process one historical batch through catalog, database, and occurrence writes.
 
         Input: SentencesVector records containing global IDs 3001 through 3030
         Output: 30 after catalog and occurrence documents are saved.
@@ -292,7 +292,7 @@ class HistoricalHandler:
             f"{label} started with {len(sentence_vector_records)} sentence(s)."
         )
         try:
-            indexed_count = self.batch_processor.save_historical_sentence_batch(
+            indexed_count = self.batch_processor.process_historical_sentence_batch(
                 sentence_vector_records,
                 label,
                 self.sentence_vector_db_store,

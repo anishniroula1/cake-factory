@@ -18,13 +18,8 @@ from similarity_completed.opensearch.contracts import (
 )
 from similarity_completed.opensearch.db_store import SentenceVectorDBStore, TitanMatchesDBStore
 from similarity_completed.opensearch.errors import QueueSendError
-from similarity_completed.opensearch.opensearch_store import (
-    OccurrenceOpenSearchStore,
-    SentenceCatalogOpenSearchStore,
-    TracerOpenSearchStore,
-)
+from similarity_completed.opensearch.opensearch_store import OccurrenceOpenSearchStore, SentenceCatalogOpenSearchStore
 from similarity_completed.opensearch.retry import retry_operation
-from similarity_completed.opensearch.tracer_filtering_service import TracerFilteringService
 from similarity_completed.opensearch.utill.catalog import select_catalog_alias
 from ta_db_connection.atatables import SentencesVector
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
@@ -32,7 +27,7 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 
 class SentenceSimilarityHandler:
-    """Coordinate sentence classification, similarity search, and match storage for one document."""
+    """Search eligible document sentences and save their semantic relationships."""
 
     def __init__(
         self,
@@ -50,24 +45,16 @@ class SentenceSimilarityHandler:
         self.titan_matches_db_store = TitanMatchesDBStore(session_factory, custom_logger)
         self.occurrence_open_search_store = OccurrenceOpenSearchStore(opensearch_client)
         self.sentence_catalog_open_search_store = SentenceCatalogOpenSearchStore(opensearch_client)
-        self.tracer_open_search_store = TracerOpenSearchStore(opensearch_client)
-        self.tracer_filtering_service = TracerFilteringService(
-            self.sentence_vector_db_store,
-            self.occurrence_open_search_store,
-            self.sentence_catalog_open_search_store,
-            self.tracer_open_search_store,
-            custom_logger,
-        )
 
     def process_document_sentences(self, tsp_id: TspId) -> ProcessResult | None:
-        """Process every source sentence associated with one document. The flow
-        waits for occurrences, loads catalog vectors, processes sentences in
-        parallel, and publishes the completed document to the next queue.
+        """Process every eligible source sentence associated with one document.
+        Doc2Vec has already calculated word counts and tracer classifications,
+        so this flow loads only rows that can create semantic relationships.
 
         Input: tsp_id=8205
-        Output: {"tsp_id": 8205, "source_count": 30, "processed_count": 30,
-        "non_matcher_count": 2, "tracer_count": 1, "form_language_count": 1,
-        "matched_sentence_count": 20, "saved_relationship_count": 125}
+        Output: {"tsp_id": 8205, "source_count": 40, "processed_count": 30,
+        "matched_sentence_count": 20, "saved_relationship_count": 125}. In
+        this example, 10 source rows were excluded before worker processing.
 
         The method returns None when occurrence or catalog data is not ready.
         """
@@ -76,84 +63,63 @@ class SentenceSimilarityHandler:
         self.logger.info("Sentence Similarity processing started.")
         if not self._wait_for_document_occurrences(tsp_id):
             return None
-        total_source_sentence_count = retry_operation(
-            "Count source sentences",
-            self.sentence_vector_db_store.count_document_sentences,
-            tsp_id,
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
+        source_sentence_records = self._load_all_document_sentences(tsp_id)
+        eligible_source_sentences = self._select_eligible_source_sentences(
+            source_sentence_records
         )
-        if total_source_sentence_count == 0:
-            self.logger.error("No sentences_vector rows are available for the document.")
-            return None
-        self.logger.info(f"Found {total_source_sentence_count} source sentence(s).")
+        total_source_sentence_count = len(source_sentence_records)
 
         processed_sentence_count = 0
-        non_matcher_count = 0
-        tracer_count = 0
-        form_language_count = 0
         matched_sentence_count = 0
         collected_match_relationships: list[TitanMatchRelationship] = []
-        after_global_id = 0
-        page_number = 0
 
-        with ThreadPoolExecutor(
-            max_workers=constants.THREAD_WORKER_COUNT, thread_name_prefix="sentence-similarity"
-        ) as executor:
-            while True:
-                page_number += 1
-                sentence_vector_records = retry_operation(
-                    f"Load source sentence page {page_number}",
-                    self.sentence_vector_db_store.load_document_sentence_batch,
-                    tsp_id,
-                    after_global_id,
-                    wait_seconds=constants.RETRY_SECONDS,
-                    custom_logger=self.logger,
+        if eligible_source_sentences:
+            catalog_alias = select_catalog_alias(
+                eligible_source_sentences[0].tsp.analysis_group
+            )
+            source_catalog_records = retry_operation(
+                "Load catalog vectors for eligible source sentences",
+                self.sentence_catalog_open_search_store.load_catalog_records_by_sentence_keys,
+                catalog_alias,
+                [record.sentence_key for record in eligible_source_sentences],
+                wait_seconds=constants.RETRY_SECONDS,
+                custom_logger=self.logger,
+            )
+            missing_catalog_records = [
+                record
+                for record in eligible_source_sentences
+                if record.sentence_key not in source_catalog_records
+            ]
+            if missing_catalog_records:
+                missing_details = ", ".join(
+                    f"global_id={record.global_id}"
+                    for record in missing_catalog_records
                 )
-                if not sentence_vector_records:
-                    break
-
-                catalog_alias = select_catalog_alias(sentence_vector_records[0].tsp.analysis_group)
-                source_catalog_records = retry_operation(
-                    f"Load catalog vectors for sentence page {page_number}",
-                    self.sentence_catalog_open_search_store.load_catalog_records_by_sentence_keys,
-                    catalog_alias,
-                    [record.sentence_key for record in sentence_vector_records],
-                    wait_seconds=constants.RETRY_SECONDS,
-                    custom_logger=self.logger,
+                self.logger.error(
+                    "Source catalog vectors are missing for these sentences: "
+                    f"{missing_details}."
                 )
-                missing_catalog_records = [
-                    record
-                    for record in sentence_vector_records
-                    if record.sentence_key not in source_catalog_records
-                ]
-                if missing_catalog_records:
-                    missing_details = ", ".join(
-                        f"global_id={record.global_id}" for record in missing_catalog_records
-                    )
-                    self.logger.error(
-                        "Source catalog vectors are missing for these sentences: "
-                        f"{missing_details}."
-                    )
-                    return None
+                return None
 
+            self.logger.info(
+                f"Processing {len(eligible_source_sentences)} eligible source "
+                "sentence(s); "
+                f"starting_global_id={eligible_source_sentences[0].global_id}, "
+                f"ending_global_id={eligible_source_sentences[-1].global_id}."
+            )
+            with ThreadPoolExecutor(
+                max_workers=constants.THREAD_WORKER_COUNT,
+                thread_name_prefix="sentence-similarity",
+            ) as executor:
                 sentence_jobs = [
                     executor.submit(
                         self._process_source_sentence,
-                        record,
+                        source_sentence,
                         catalog_alias,
-                        source_catalog_records[record.sentence_key],
+                        source_catalog_records[source_sentence.sentence_key],
                     )
-                    for record in sentence_vector_records
+                    for source_sentence in eligible_source_sentences
                 ]
-                after_global_id = sentence_vector_records[-1].global_id
-                self.logger.info(
-                    f"Processing source sentence page {page_number} with "
-                    f"{len(sentence_vector_records)} sentence(s); "
-                    f"starting_global_id={sentence_vector_records[0].global_id}, "
-                    f"ending_global_id={after_global_id}."
-                )
-
                 for sentence_job in sentence_jobs:
                     sentence_result = sentence_job.result()
                     if sentence_result is None:
@@ -163,9 +129,6 @@ class SentenceSimilarityHandler:
 
                     match_relationships = sentence_result["match_relationships"]
                     processed_sentence_count += 1
-                    non_matcher_count += int(sentence_result["is_non_matcher"])
-                    tracer_count += int(sentence_result["is_tracer"])
-                    form_language_count += int(sentence_result["is_form_language"])
                     matched_sentence_count += int(bool(match_relationships))
                     collected_match_relationships.extend(match_relationships)
 
@@ -193,70 +156,108 @@ class SentenceSimilarityHandler:
         self.logger.info(
             f"Sentence Similarity completed {processed_sentence_count} sentence(s): "
             f"{matched_sentence_count} sentence(s) had matches, "
-            f"{saved_relationship_count} relationship(s) were saved, {tracer_count} tracer classification(s), "
-            f"{form_language_count} form-language classification(s), and "
-            f"{non_matcher_count} non-matcher classification(s)."
+            f"and {saved_relationship_count} relationship(s) were saved."
         )
         self.logger.info(f"Sentence Similarity took {perf_counter() - started_at:.2f} seconds to complete.")
         return {
             "tsp_id": tsp_id,
             "source_count": total_source_sentence_count,
             "processed_count": processed_sentence_count,
-            "non_matcher_count": non_matcher_count,
-            "tracer_count": tracer_count,
-            "form_language_count": form_language_count,
             "matched_sentence_count": matched_sentence_count,
             "saved_relationship_count": saved_relationship_count,
         }
 
+    def _load_all_document_sentences(
+        self,
+        tsp_id: TspId,
+    ) -> list[SentencesVector]:
+        """Load every document sentence before starting worker threads.
+
+        Input: tsp_id=8205
+        Output: all sentence rows in global-ID order. PostgreSQL still returns
+        bounded pages so unusually large documents do not use one huge query.
+        """
+
+        source_sentence_records: list[SentencesVector] = []
+        after_global_id = 0
+        page_number = 0
+        while True:
+            page_number += 1
+            sentence_batch = retry_operation(
+                f"Load source sentence batch {page_number}",
+                self.sentence_vector_db_store.load_document_sentence_batch,
+                tsp_id,
+                after_global_id,
+                wait_seconds=constants.RETRY_SECONDS,
+                custom_logger=self.logger,
+            )
+            if not sentence_batch:
+                return source_sentence_records
+
+            source_sentence_records.extend(sentence_batch)
+            after_global_id = sentence_batch[-1].global_id
+            if len(sentence_batch) < constants.DATABASE_SENTENCE_LOAD_BATCH_SIZE:
+                return source_sentence_records
+
+    def _select_eligible_source_sentences(
+        self,
+        source_sentence_records: list[SentencesVector],
+    ) -> list[SentencesVector]:
+        """Select matchable rows and log why other rows are skipped.
+
+        A classification count is the number of unique rows having at least
+        one classification flag. Individual flag counts can overlap because a
+        sentence may be both non-matcher and form language.
+        """
+
+        short_sentence_count = sum(
+            (record.word_count or 0) < constants.MINIMUM_MATCH_WORD_COUNT
+            for record in source_sentence_records
+        )
+        non_matcher_count = sum(
+            bool(record.is_non_matcher) for record in source_sentence_records
+        )
+        tracer_count = sum(bool(record.is_tracer) for record in source_sentence_records)
+        form_language_count = sum(
+            bool(record.is_form_language) for record in source_sentence_records
+        )
+        classification_skip_count = sum(
+            bool(record.is_non_matcher or record.is_tracer or record.is_form_language)
+            for record in source_sentence_records
+        )
+        eligible_source_sentences = [
+            record
+            for record in source_sentence_records
+            if (record.word_count or 0) >= constants.MINIMUM_MATCH_WORD_COUNT
+            and not record.is_non_matcher
+            and not record.is_tracer
+            and not record.is_form_language
+        ]
+        skipped_sentence_count = len(source_sentence_records) - len(
+            eligible_source_sentences
+        )
+        self.logger.info(
+            f"Loaded {len(source_sentence_records)} source sentence(s). "
+            f"Eligible: {len(eligible_source_sentences)}. Skipped: "
+            f"{skipped_sentence_count}. Short sentences: "
+            f"{short_sentence_count}. Classification skips: "
+            f"{classification_skip_count} (non-matcher: {non_matcher_count}, "
+            f"tracer: {tracer_count}, form language: {form_language_count})."
+        )
+        return eligible_source_sentences
+
     def _process_source_sentence(
         self, source_sentence: SentencesVector, catalog_alias: str, source_catalog_record: CatalogRecord
     ) -> SentenceResult | None:
-        """Classify one source sentence and collect its eligible relationships.
-        Ineligible classifications stop immediately; eligible sentences continue
-        through catalog search, target filtering, and relationship preparation.
+        """Search one eligible source sentence and prepare its relationships.
 
         Input: source_sentence.global_id=39205,
         catalog_alias="sentence_semantic_catalog_asylee", and a source_catalog_record
         containing a 512-value vector.
-        Output: {"is_non_matcher": False, "is_tracer": False,
-        "is_form_language": False, "match_relationships": [{...}]}
+        Output: {"match_relationships": [{...}]}
 
         The method returns None when a required target catalog record is missing.
         """
-
-        sentence_classification = self.tracer_filtering_service.classify_and_update_source_sentence(
-            source_sentence, catalog_alias, source_catalog_record
-        )
-
-        if self.tracer_filtering_service.should_skip_sentence_catalog_search(sentence_classification):
-            self.logger.info(
-                f"Skipping sentence-catalog matching for global_id={source_sentence.global_id}; "
-                f"is_non_matcher={sentence_classification['is_non_matcher']}, "
-                f"is_tracer={sentence_classification['is_tracer']}, "
-                f"is_form_language={sentence_classification['is_form_language']}."
-            )
-            return {
-                "is_non_matcher": sentence_classification["is_non_matcher"],
-                "is_tracer": sentence_classification["is_tracer"],
-                "is_form_language": sentence_classification["is_form_language"],
-                "match_relationships": [],
-            }
-
-        # Short sentences are still checked against the tracer catalog, but
-        # they do not search the main catalog or create Titan relationships.
-        if source_catalog_record["word_count"] < constants.MINIMUM_MATCH_WORD_COUNT:
-            self.logger.info(
-                f"Skipping sentence-catalog matching for global_id={source_sentence.global_id}; "
-                f"word_count={source_catalog_record['word_count']} is below "
-                f"{constants.MINIMUM_MATCH_WORD_COUNT}."
-            )
-            return {
-                "is_non_matcher": sentence_classification["is_non_matcher"],
-                "is_tracer": sentence_classification["is_tracer"],
-                "is_form_language": sentence_classification["is_form_language"],
-                "match_relationships": [],
-            }
 
         sentence_key_distances = retry_operation(
             f"Search sentence catalog for source global_id={source_sentence.global_id}",
@@ -268,14 +269,25 @@ class SentenceSimilarityHandler:
             custom_logger=self.logger,
         )
 
-        eligible_target_occurrences = self.tracer_filtering_service.find_eligible_target_occurrences(
-            source_sentence, sentence_key_distances
+        target_occurrences = retry_operation(
+            f"Expand matching occurrences for source global_id={source_sentence.global_id}",
+            self.occurrence_open_search_store.search_target_occurrences_outside_source_application,
+            sentence_key_distances,
+            source_sentence.tsp.analysis_group,
+            source_sentence.tsp.application_id,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
         )
+        eligible_target_occurrences: dict[str, MatchTarget] = {
+            str(target["global_id"]): {
+                "tsp_id": target["tsp_id"],
+                "application_id": target["application_id"],
+                "distance": target["distance"],
+            }
+            for target in target_occurrences
+        }
 
         return {
-            "is_non_matcher": sentence_classification["is_non_matcher"],
-            "is_tracer": sentence_classification["is_tracer"],
-            "is_form_language": sentence_classification["is_form_language"],
             "match_relationships": self._build_titan_match_relationships(
                 source_sentence, eligible_target_occurrences
             ),

@@ -1,5 +1,5 @@
 from doc2vec_completed.opensearch import constants
-from doc2vec_completed.opensearch.contracts import CatalogDocument
+from doc2vec_completed.opensearch.contracts import CatalogDocument, Classification
 from doc2vec_completed.opensearch.db_store import (
     EmbeddingDBStore,
     SentenceVectorDBStore,
@@ -9,9 +9,13 @@ from doc2vec_completed.opensearch.opensearch_helper import OpenSearchHelper
 from doc2vec_completed.opensearch.opensearch_store import (
     SentenceCatalogOpenSearchStore,
     SentenceOccurrenceOpenSearchStore,
+    TracerOpenSearchStore,
 )
 from doc2vec_completed.opensearch.retry import retry_operation, safe_error_summary
 from doc2vec_completed.opensearch.text import sentence_word_count
+from doc2vec_completed.opensearch.tracer_filtering_service import (
+    TracerFilteringService,
+)
 from ta_db_connection.atatables import SentencesVector
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -31,9 +35,15 @@ class SentenceBatchProcessor:
         self.sentence_occurrence_opensearch_store = SentenceOccurrenceOpenSearchStore(
             opensearch_helper
         )
+        self.tracer_opensearch_store = TracerOpenSearchStore(opensearch_helper)
+        self.tracer_filtering_service = TracerFilteringService(
+            self.sentence_catalog_opensearch_store,
+            self.tracer_opensearch_store,
+            custom_logger,
+        )
         self.logger = custom_logger
 
-    def save_historical_sentence_batch(
+    def process_historical_sentence_batch(
         self,
         sentence_vector_records: list[SentencesVector],
         label: str,
@@ -46,16 +56,14 @@ class SentenceBatchProcessor:
         Output: 30 after all 30 occurrence documents and missing catalog
         documents are saved.
 
-        The method saves missing sentence keys, reuses Titan vectors stored in
-        PostgreSQL, and asks Bedrock to create only the vectors still missing.
+        The method prepares keys and word counts in memory, reuses saved Titan
+        vectors, classifies the keys, and writes every database field once.
         """
 
-        generated_count, reused_count = retry_operation(
-            f"Save sentence keys for {label}",
-            sentence_vector_db_store.save_missing_sentence_keys,
-            sentence_vector_records,
-            wait_seconds=constants.RETRY_SECONDS,
-            custom_logger=self.logger,
+        generated_count, reused_count = (
+            sentence_vector_db_store.prepare_sentence_metadata(
+                sentence_vector_records
+            )
         )
 
         document = sentence_vector_records[0].tsp
@@ -71,14 +79,27 @@ class SentenceBatchProcessor:
             wait_seconds=constants.RETRY_SECONDS,
             custom_logger=self.logger,
         )
-        existing_count, saved_vector_count, bedrock_count = self._save_catalog_documents(
+        existing_count, saved_vector_count, bedrock_count = self._ensure_catalog_documents(
             catalog_alias,
             sentence_vector_records,
             embeddings,
             label,
         )
+        classifications = self._classify_sentence_batch(
+            catalog_alias,
+            sentence_vector_records,
+            label,
+        )
+        retry_operation(
+            f"Save sentence metadata and classifications for {label}",
+            sentence_vector_db_store.save_sentence_metadata_and_classifications,
+            sentence_vector_records,
+            classifications,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
+        )
 
-        occurrence_count = self._save_occurrence_documents(
+        occurrence_count = self._index_occurrence_documents(
             sentence_vector_records,
             label,
         )
@@ -86,43 +107,110 @@ class SentenceBatchProcessor:
             f"{label} completed: {generated_count} new key(s), "
             f"{reused_count} reused key(s), {existing_count} existing catalog "
             f"key(s), {saved_vector_count} saved vector(s), {bedrock_count} "
-            f"Bedrock vector(s), and {occurrence_count} occurrence(s)."
+            f"Bedrock vector(s), {len(classifications)} classified key(s), and "
+            f"{occurrence_count} occurrence(s)."
         )
         return len(sentence_vector_records)
 
-    def save_document_sentence_batch(
+    def process_saved_document_sentence_batch(
         self,
         sentence_vector_records: list[SentencesVector],
         label: str,
+        sentence_vector_db_store: SentenceVectorDBStore,
     ) -> int:
         """Save one incoming document batch in catalog and occurrence indexes.
 
         Input: 30 SentencesVector records for global IDs 1 through 30.
         Output: 30 after catalog and occurrence writes complete.
 
-        These records already contain sentence keys. The method checks which
-        keys exist, uses Bedrock for missing catalog vectors, and saves an
-        occurrence document for every record.
+        This resume path prepares metadata, classifies every key, and updates
+        each existing database row once before saving occurrences.
         """
 
+        generated_count, reused_count = (
+            sentence_vector_db_store.prepare_sentence_metadata(
+                sentence_vector_records
+            )
+        )
         document = sentence_vector_records[0].tsp
         catalog_alias = self.select_catalog_alias(document.analysis_group)
-        existing_count, _, bedrock_count = self._save_catalog_documents(
+        existing_count, _, bedrock_count = self._ensure_catalog_documents(
             catalog_alias,
             sentence_vector_records,
             {},
             label,
         )
-        occurrence_count = self._save_occurrence_documents(
+        classifications = self._classify_sentence_batch(
+            catalog_alias,
+            sentence_vector_records,
+            label,
+        )
+        retry_operation(
+            f"Save sentence metadata and classifications for {label}",
+            sentence_vector_db_store.save_sentence_metadata_and_classifications,
+            sentence_vector_records,
+            classifications,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
+        )
+        occurrence_count = self._index_occurrence_documents(
             sentence_vector_records,
             label,
         )
         self.logger.info(
-            f"{label} completed: {existing_count} existing catalog key(s), "
-            f"{bedrock_count} Bedrock vector(s), and "
+            f"{label} completed: {generated_count} new key(s), "
+            f"{reused_count} reused key(s), {existing_count} existing catalog "
+            f"key(s), {bedrock_count} Bedrock vector(s), "
+            f"{len(classifications)} classified key(s), and "
             f"{occurrence_count} occurrence(s)."
         )
         return len(sentence_vector_records)
+
+    def create_catalog_and_classify_new_sentence_batch(
+        self,
+        sentence_vector_records: list[SentencesVector],
+        label: str,
+    ) -> dict[str, Classification]:
+        """Create catalog vectors and classify unsaved live sentences.
+
+        Input: 30 in-memory sentence records created after document splitting.
+        Output: classifications mapped by sentence key. No sentences_vector
+        record or occurrence document is written by this method.
+        """
+
+        document = sentence_vector_records[0].tsp
+        catalog_alias = self.select_catalog_alias(document.analysis_group)
+        existing_count, _, bedrock_count = self._ensure_catalog_documents(
+            catalog_alias,
+            sentence_vector_records,
+            {},
+            label,
+        )
+        classifications = self._classify_sentence_batch(
+            catalog_alias,
+            sentence_vector_records,
+            label,
+        )
+        self._apply_classifications(sentence_vector_records, classifications)
+        self.logger.info(
+            f"{label} prepared: {existing_count} existing catalog key(s), "
+            f"{bedrock_count} Bedrock vector(s), and {len(classifications)} "
+            "classified key(s)."
+        )
+        return classifications
+
+    def index_sentence_occurrence_batch(
+        self,
+        sentence_vector_records: list[SentencesVector],
+        label: str,
+    ) -> int:
+        """Save occurrences after live sentences receive global IDs.
+
+        Input: 30 saved sentence records with global IDs and classifications.
+        Output: 30 after their occurrence documents are indexed.
+        """
+
+        return self._index_occurrence_documents(sentence_vector_records, label)
 
     @staticmethod
     def select_catalog_alias(analysis_group: str) -> str:
@@ -142,7 +230,7 @@ class SentenceBatchProcessor:
             return constants.REFUGEE_CATALOG_ALIAS
         raise PermanentDataError(f"unsupported analysis_group {analysis_group!r}")
 
-    def _save_catalog_documents(
+    def _ensure_catalog_documents(
         self,
         catalog_alias: str,
         sentence_vector_records: list[SentencesVector],
@@ -206,6 +294,64 @@ class SentenceBatchProcessor:
             len(documents_needing_vectors),
         )
 
+    def _classify_sentence_batch(
+        self,
+        catalog_alias: str,
+        sentence_vector_records: list[SentencesVector],
+        label: str,
+    ) -> dict[str, Classification]:
+        """Return a classification for every unique sentence key.
+
+        Input: 30 sentence records containing 25 unique keys.
+        Output: 25 key classifications after missing values are found through
+        the tracer catalog and cached in the sentence catalog.
+        """
+
+        sentence_keys = list(
+            dict.fromkeys(
+                record.sentence_key for record in sentence_vector_records
+            )
+        )
+        catalog_records = retry_operation(
+            f"Load catalog vectors for {label}",
+            self.sentence_catalog_opensearch_store.load_catalog_records_by_sentence_keys,
+            catalog_alias,
+            sentence_keys,
+            wait_seconds=constants.RETRY_SECONDS,
+            custom_logger=self.logger,
+        )
+        missing_keys = [key for key in sentence_keys if key not in catalog_records]
+        if missing_keys:
+            raise PermanentDataError(
+                "catalog vector is missing for sentence key(s): "
+                + ", ".join(missing_keys)
+            )
+
+        analysis_group = sentence_vector_records[0].tsp.analysis_group
+        classifications = (
+            self.tracer_filtering_service.classify_with_tracer_and_save_to_sentence_catalog(
+                catalog_alias,
+                catalog_records,
+                analysis_group,
+            )
+        )
+        return classifications
+
+    @staticmethod
+    def _apply_classifications(
+        sentence_vector_records: list[SentencesVector],
+        classifications: dict[str, Classification],
+    ) -> None:
+        """Copy key classifications onto in-memory sentence records."""
+
+        for sentence_vector_record in sentence_vector_records:
+            classification = classifications[sentence_vector_record.sentence_key]
+            sentence_vector_record.is_non_matcher = classification["is_non_matcher"]
+            sentence_vector_record.is_tracer = classification["is_tracer"]
+            sentence_vector_record.is_form_language = classification[
+                "is_form_language"
+            ]
+
     def _prepare_catalog_documents(
         self,
         sentence_vector_records: list[SentencesVector],
@@ -268,7 +414,7 @@ class SentenceBatchProcessor:
 
         return documents_with_vectors, documents_needing_vectors
 
-    def _save_occurrence_documents(
+    def _index_occurrence_documents(
         self,
         sentence_vector_records: list[SentencesVector],
         label: str,

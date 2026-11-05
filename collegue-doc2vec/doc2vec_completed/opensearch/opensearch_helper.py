@@ -63,6 +63,131 @@ class OpenSearchHelper:
                     existing.add(str(document["_id"]))
         return existing
 
+    def load_documents_by_ids(
+        self,
+        alias: str,
+        document_ids: list[str],
+        source_fields: list[str],
+    ) -> dict[str, dict]:
+        """Load document sources by ID with real-time OpenSearch reads.
+
+        Input: alias="sentence_semantic_catalog_asylee", IDs ["A", "B"].
+        Output: a mapping containing the source for each document that exists.
+
+        A real-time mget can read a catalog document immediately after the
+        embedding pipeline finishes, without waiting for an index refresh.
+        """
+
+        documents: dict[str, dict] = {}
+        unique_ids = list(dict.fromkeys(document_ids))
+        for offset in range(0, len(unique_ids), constants.OPENSEARCH_BATCH_SIZE):
+            batch = unique_ids[offset : offset + constants.OPENSEARCH_BATCH_SIZE]
+            if not batch:
+                continue
+            try:
+                response = self.client.mget(
+                    index=alias,
+                    body={"ids": batch},
+                    params={"_source_includes": ",".join(source_fields)},
+                )
+            except TransportError as error:
+                if self._is_retryable(error):
+                    raise
+                raise PermanentDataError(
+                    f"OpenSearch lookup in alias {alias} was rejected: "
+                    f"{safe_error_summary(error)}"
+                ) from error
+
+            for document in response.get("docs", []):
+                if document.get("found") and isinstance(document.get("_source"), dict):
+                    documents[str(document["_id"])] = document["_source"]
+        return documents
+
+    def search(self, alias: str, body: dict) -> dict:
+        """Run one OpenSearch query and keep permanent errors concise.
+
+        Input: an alias and a tracer k-NN request body.
+        Output: the OpenSearch response returned by the selected alias.
+        """
+
+        try:
+            return self.client.search(index=alias, body=body)
+        except TransportError as error:
+            if self._is_retryable(error):
+                raise
+            raise PermanentDataError(
+                f"OpenSearch search in alias {alias} was rejected: "
+                f"{safe_error_summary(error)}"
+            ) from error
+
+    def update_documents(
+        self,
+        alias: str,
+        documents: list[OpenSearchDocument],
+    ) -> int:
+        """Bulk-update existing documents without replacing other fields.
+
+        Input: catalog documents containing IDs and classification fields.
+        Output: the number of updates accepted by OpenSearch.
+        """
+
+        if not documents:
+            return 0
+
+        pending_documents = documents
+        maximum_attempts = constants.OPENSEARCH_BULK_RETRY_COUNT + 1
+        for attempt in range(1, maximum_attempts + 1):
+            actions = [
+                {
+                    "_op_type": "update",
+                    "_index": alias,
+                    "_id": str(document["_id"]),
+                    "doc": {
+                        key: value
+                        for key, value in document.items()
+                        if key != "_id"
+                    },
+                }
+                for document in pending_documents
+            ]
+            try:
+                _, failures = helpers.bulk(
+                    self.client,
+                    actions,
+                    chunk_size=constants.OPENSEARCH_BATCH_SIZE,
+                    raise_on_error=False,
+                    raise_on_exception=True,
+                )
+            except TransportError as error:
+                if not self._is_retryable(error):
+                    raise PermanentDataError(
+                        f"OpenSearch bulk update to {alias} was rejected: "
+                        f"{safe_error_summary(error)}"
+                    ) from error
+                self._prepare_bulk_retry(
+                    alias,
+                    attempt,
+                    maximum_attempts,
+                    len(pending_documents),
+                    needs_embedding=False,
+                )
+                continue
+
+            if not failures:
+                return len(documents)
+            pending_documents = self._retryable_documents(failures, pending_documents)
+            self._prepare_bulk_retry(
+                alias,
+                attempt,
+                maximum_attempts,
+                len(pending_documents),
+                needs_embedding=False,
+            )
+
+        raise OpenSearchException(
+            f"OpenSearch bulk update to {alias} failed after {maximum_attempts} attempts"
+        )
+
     def index_documents(
         self,
         alias: str,

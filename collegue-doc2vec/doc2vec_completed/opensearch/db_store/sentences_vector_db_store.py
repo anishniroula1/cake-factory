@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload, load_only
 
 from doc2vec_completed.opensearch import constants
 from doc2vec_completed.opensearch.batching import batches
-from doc2vec_completed.opensearch.contracts import TspId
+from doc2vec_completed.opensearch.contracts import Classification, TspId
 from doc2vec_completed.opensearch.text import sentence_key, sentence_word_count
 from ta_db_connection.atatables import SentencesVector, TextSimilarityInput
 
@@ -80,74 +80,83 @@ class SentenceVectorDBStore:
             )
             return list(session.scalars(statement))
 
-    def _prepare_missing_sentence_keys(
-        self,
+    @staticmethod
+    def prepare_sentence_metadata(
         sentence_vector_records: list[SentencesVector],
-    ) -> tuple[list, int, list]:
-        """Generate missing keys and prepare their database updates.
+    ) -> tuple[int, int]:
+        """Prepare sentence keys and word counts without writing PostgreSQL.
 
         Input: 30 SentencesVector records where 10 already contain sentence_key.
-        Output: the 20 database updates, reused key count 10, and the original
-        values needed to restore changed records if the database save fails.
+        Output: (20, 10), meaning 20 keys were generated and 10 were reused.
+
+        The prepared values stay on the records while OpenSearch creates or
+        reuses their vectors and tracer classifications. One later database
+        call saves all prepared fields together.
         """
 
         current_time = datetime.now(UTC)
-        updates = []
-        prepared_records = []
+        generated_count = 0
         reused_count = 0
         for sentence_vector_record in sentence_vector_records:
             if sentence_vector_record.sentence_key:
                 reused_count += 1
-                continue
-
-            prepared_records.append(
-                (
-                    sentence_vector_record,
-                    sentence_vector_record.sentence_key,
-                    sentence_vector_record.last_modified,
+            else:
+                sentence_vector_record.sentence_key = sentence_key(
+                    sentence_vector_record.sentence_content
                 )
-            )
-            sentence_vector_record.sentence_key = sentence_key(
+                generated_count += 1
+            sentence_vector_record.word_count = sentence_word_count(
                 sentence_vector_record.sentence_content
             )
+            sentence_vector_record.last_modified = current_time
+        return generated_count, reused_count
+
+    def save_sentence_metadata_and_classifications(
+        self,
+        sentence_vector_records: list[SentencesVector],
+        classifications: dict[str, Classification],
+    ) -> int:
+        """Save all prepared sentence fields with one database update.
+
+        Input: two records sharing key A and classification data for key A.
+        Output: 2 after both rows receive their key, word count, and flags.
+
+        This is the only sentences_vector update used by historical records
+        and live records that were already stored by an earlier attempt.
+        """
+
+        current_time = datetime.now(UTC)
+        updates = []
+        for sentence_vector_record in sentence_vector_records:
+            classification = classifications[sentence_vector_record.sentence_key]
+            sentence_vector_record.is_non_matcher = classification["is_non_matcher"]
+            sentence_vector_record.is_tracer = classification["is_tracer"]
+            sentence_vector_record.is_form_language = classification["is_form_language"]
             sentence_vector_record.last_modified = current_time
             updates.append(
                 {
                     "record_global_id": sentence_vector_record.global_id,
                     "record_sentence_key": sentence_vector_record.sentence_key,
+                    "record_word_count": sentence_vector_record.word_count,
+                    "record_is_non_matcher": classification["is_non_matcher"],
+                    "record_is_tracer": classification["is_tracer"],
+                    "record_is_form_language": classification["is_form_language"],
                     "record_last_modified": current_time,
                 }
             )
 
-        return updates, reused_count, prepared_records
-
-    def save_missing_sentence_keys(
-        self,
-        sentence_vector_records: list[SentencesVector],
-    ) -> tuple[int, int]:
-        """Save generated sentence keys while counting keys already present.
-
-        Input: 30 SentencesVector records where 10 already contain sentence_key.
-        Output: (20, 10), meaning 20 generated keys and 10 reused keys.
-
-        The preparation step changes the in-memory records so OpenSearch can use
-        their new keys immediately. If the database save fails, those records
-        are restored before the caller retries this method.
-        """
-
-        updates, reused_count, prepared_records = (
-            self._prepare_missing_sentence_keys(sentence_vector_records)
-        )
-
         if not updates:
-            return 0, reused_count
-
+            return 0
         table = SentencesVector.__table__
         statement = (
             update(table)
             .where(table.c.global_id == bindparam("record_global_id"))
             .values(
                 sentence_key=bindparam("record_sentence_key"),
+                word_count=bindparam("record_word_count"),
+                is_non_matcher=bindparam("record_is_non_matcher"),
+                is_tracer=bindparam("record_is_tracer"),
+                is_form_language=bindparam("record_is_form_language"),
                 last_modified=bindparam("record_last_modified"),
             )
         )
@@ -157,33 +166,57 @@ class SentenceVectorDBStore:
                 session.commit()
             except SQLAlchemyError:
                 session.rollback()
-
-                # Restore in-memory records before retrying the database write.
-                for (
-                    sentence_vector_record,
-                    original_key,
-                    original_last_modified,
-                ) in prepared_records:
-                    sentence_vector_record.sentence_key = original_key
-                    sentence_vector_record.last_modified = original_last_modified
                 raise
-        return len(updates), reused_count
+        return len(updates)
 
-    def save_document_sentences(
-        self,
+    @staticmethod
+    def build_unsaved_document_sentence_records(
         document: TextSimilarityInput,
         sentences: list[tuple[int, str]],
     ) -> list[SentencesVector]:
-        """Generates sentenceKeys for sentences, and inserts sentences into SentencesVector table.
-        Returns a list of SentencesVector objects with the TSI document information attached
-        and a global_id generated by the database.
+        """Build unsaved live sentence records for catalog classification.
+
+        Input: document tsp_id=10 and two numbered sentence strings.
+        Output: two in-memory records containing keys and word counts but no
+        database-generated global IDs.
+        """
+
+        current_time = datetime.now(UTC)
+        sentence_vector_records = [
+            SentencesVector(
+                tsp_id=document.tsp_id,
+                a_number=document.a_number,
+                section_name=document.section_name,
+                sent_id_local=local_id,
+                sentence_content=content,
+                word_count=sentence_word_count(content),
+                source_type=document.source_type.strip().lower(),
+                analysis_group=document.analysis_group,
+                is_current=document.is_current,
+                last_modified=current_time,
+                sentence_key=sentence_key(content),
+            )
+            for local_id, content in sentences
+        ]
+        for sentence_vector_record in sentence_vector_records:
+            sentence_vector_record.tsp = document
+        return sentence_vector_records
+
+    def insert_classified_document_sentences(
+        self,
+        document: TextSimilarityInput,
+        sentences: list[tuple[int, str]],
+        classifications: dict[str, Classification],
+    ) -> list[SentencesVector]:
+        """Insert fully prepared live sentences in one transaction.
 
         Input: document={tsp_id=1,content="this is a real sentence. sentences exist",...}
-            sentences=[ (0, "this is a real sentence."), (1, "sentences exist.")]
+        and sentences=[(1, "this is a real sentence.")], plus classifications
+        mapped by sentence key.
 
-        Output: [{global_id=X,tsp_id=1,sent_id_local=0,sentence_content="this is a real sentence.",...},]
+        Output: saved SentencesVector records containing generated global IDs,
+        sentence keys, word counts, and tracer classification flags.
         """
-        
 
         if not sentences:
             return []
@@ -196,22 +229,30 @@ class SentenceVectorDBStore:
                     sentences,
                     constants.LIVE_DATABASE_BATCH_SIZE,
                 ):
-                    sentence_vector_records = [
-                        SentencesVector(
-                            tsp_id=document.tsp_id,
-                            a_number=document.a_number,
-                            section_name=document.section_name,
-                            sent_id_local=local_id,
-                            sentence_content=content,
-                            word_count=sentence_word_count(content),
-                            source_type=document.source_type.strip().lower(),
-                            analysis_group=document.analysis_group,
-                            is_current=document.is_current,
-                            last_modified=current_time,
-                            sentence_key=sentence_key(content),
+                    sentence_vector_records = []
+                    for local_id, content in sentence_batch:
+                        record_sentence_key = sentence_key(content)
+                        classification = classifications[record_sentence_key]
+                        sentence_vector_records.append(
+                            SentencesVector(
+                                tsp_id=document.tsp_id,
+                                a_number=document.a_number,
+                                section_name=document.section_name,
+                                sent_id_local=local_id,
+                                sentence_content=content,
+                                word_count=sentence_word_count(content),
+                                source_type=document.source_type.strip().lower(),
+                                analysis_group=document.analysis_group,
+                                is_current=document.is_current,
+                                is_non_matcher=classification["is_non_matcher"],
+                                is_tracer=classification["is_tracer"],
+                                is_form_language=classification[
+                                    "is_form_language"
+                                ],
+                                last_modified=current_time,
+                                sentence_key=record_sentence_key,
+                            )
                         )
-                        for local_id, content in sentence_batch
-                    ]
                     session.add_all(sentence_vector_records)
 
                     # Flush assigns global IDs, but these records are still not

@@ -1,8 +1,8 @@
 # Sentence Similarity Service
 
-Sentence Similarity is an SQS/OpenSearch worker that processes one document (`tsp_id`) at
-a time. It classifies every sentence, finds exact and semantic matches in
-OpenSearch, and saves the relationships in PostgreSQL (`tsp` schema) database.
+Sentence Similarity is an SQS/OpenSearch worker that processes one document
+(`tsp_id`) at a time. It finds exact and semantic matches for sentences already
+approved by Doc2Vec and saves the relationships in PostgreSQL.
 
 The same application supports real-time and historical processing. Each
 deployment can listen to a different SQS queue, but the processing logic stays
@@ -14,20 +14,21 @@ For each SQS message, the service:
 
 1. Reads `tsp_id` from the message.
 2. Confirms the document's sentence occurrences are searchable in OpenSearch.
-3. Loads source sentences from `sentences_vector` in pages of 30.
-4. Uses the document's `analysis_group` to select the Asylee or Refugee catalog.
-5. Loads each source vector from that catalog by `sentenceKey`.
-6. Processes up to 30 source sentences at the same time.
-7. Checks each vector against the tracer and form-language catalog.
-8. Updates the sentence classification in `sentences_vector` table and the sentence catalog.
-9. Skips normal matching when a sentence is a tracer, non-matcher, or form language.
-10. Searches the sentence catalog for every exact and semantic key at or above 76%.
-    Sentences containing fewer than five words do not run this search.
-11. Expands those keys through `sentence_occurrences` and excludes occurrences
+3. Loads every source sentence from `sentences_vector` in database pages of
+   1000 before starting worker threads.
+4. Reports the total, eligible, short-sentence, non-matcher, tracer, and
+   form-language counts. Only eligible rows continue.
+5. Uses the document's `analysis_group` to select the Asylee or Refugee catalog.
+6. Loads every eligible source vector from that catalog by `sentenceKey`.
+7. Processes up to 30 eligible source sentences at the same time.
+8. Searches the sentence catalog for every exact and semantic key at or above
+   76%. The catalog query also excludes short, tracer, non-matcher, and
+   form-language target keys.
+9. Expands those keys through `sentence_occurrences` and excludes occurrences
     from the source application.
-12. Saves the remaining relationships in both directions in `tsp.titan_matches`.
-13. Sends the completed `tsp_id` to the next SQS queue (Case Similarity Service).
-14. Deletes the source message only after all work completes successfully.
+10. Saves the remaining relationships in both directions in `tsp.titan_matches`.
+11. Sends the completed `tsp_id` to the next SQS queue (Case Similarity Service).
+12. Deletes the source message only after all work completes successfully.
 
 If processing fails, the source message is not deleted. The SQS retries three time and eventual delivery to the DLQ.
 
@@ -51,33 +52,16 @@ After processing, the next queue receives:
 }
 ```
 
-## Sentence classification
+## Doc2Vec prerequisite
 
-The tracer search reads the 100 closest references for the same analysis group.
-Only results with at least 70% cosine similarity affect the classification.
+Doc2Vec calculates `word_count` from sentence content and classifies every
+unique sentence key before sending the document here. It stores the three
+classification flags in the sentence catalog and copies them to each
+`sentences_vector` occurrence. Sentence Similarity therefore does not repeat
+tracer searches or classification writes.
 
-```text
-isNonMatcher=false and isFormLanguage=false -> tracer
-isNonMatcher=true                           -> non-matcher
-isFormLanguage=true                         -> form language
-no qualifying result                        -> eligible for sentence matching
-```
-
-### Non matcher logic
-```
-1. is_non_matcher and not is_form_lanaguage
-2. is_non_matcher and is_form_lanaguage
-3. non is_non_matcher and is_form_lanaguage
-```
-
-All three flags are independent. Different qualifying reference records can
-make more than one flag true. A sentence is excluded from normal sentence
-matching when any flag is true.
-
-The result is stored on the sentence catalog. Eligible classifications can be
-reused by another occurrence with the same `sentenceKey`; excluded results are
-checked again against the tracer catalog. Occurrence-level flags are stored in
-`sentences_vector`.
+A document with no eligible sentences is still completed and sent to the next
+queue with zero relationships. This is a valid result, not a retry condition.
 
 ## Sentence matching
 
@@ -87,7 +71,8 @@ Eligible sentences are searched in one of these catalogs alais:
 - `sentence_semantic_catalog_refugee`
 
 The semantic search uses the 512-dimension Titan vector, a 76% threshold, and
-`nprobes=64`. Every matching sentence key is expanded through
+`nprobes=64`. It searches only catalog targets whose word count is at least five
+and whose three classification flags are false. Every matching sentence key is expanded through
 `sentence_occurrences`. The occurrence search stays inside the analysis group
 and excludes the source `applicationId`.
 
@@ -125,10 +110,10 @@ The complete SQL and a runnable example are in
 
 ```text
 similarity_completed/opensearch/
-  db_store/              PostgreSQL reads, classification updates, and match writes
+  db_store/              Source sentence reads and Titan match writes
   handlers/              One-document processing flow
-  opensearch_store/      Occurrence, catalog, and tracer OpenSearch operations
-  utill/                 Score, vector, catalog, and classification helpers
+  opensearch_store/      Occurrence and sentence-catalog OpenSearch operations
+  utill/                 Score, vector, and catalog helpers
   config.py              Environment and Vault configuration
   constants.py           Fixed database, OpenSearch, processing, and SQS values
   dependencies.py        Database, OpenSearch, SQS, and handler construction

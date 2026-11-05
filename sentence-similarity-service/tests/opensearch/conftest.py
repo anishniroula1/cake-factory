@@ -17,7 +17,6 @@ def service_config(monkeypatch):
     monkeypatch.setattr(constants, "SENTENCE_OCCURRENCE_ALIAS", "occurrence")
     monkeypatch.setattr(constants, "ASYLEE_CATALOG_ALIAS", "catalog-asylee")
     monkeypatch.setattr(constants, "REFUGEE_CATALOG_ALIAS", "catalog-refugee")
-    monkeypatch.setattr(constants, "TRACER_ALIAS", "tracer")
     return Config(
         pg_db_user="user",
         pg_db_password="password",

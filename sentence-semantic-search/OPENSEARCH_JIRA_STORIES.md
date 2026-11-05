@@ -880,8 +880,7 @@ And its existing sentence rows are loaded in batches of 30
 And the original document text is not loaded or split again
 And duplicate sentence rows are not inserted
 And every row keeps its existing global_id
-And sentenceKey is generated for every row
-And sentences_vector is updated with sentenceKey using global_id
+And sentenceKey and wordCount are prepared in memory for every row
 ```
 
 ```gherkin
@@ -897,6 +896,9 @@ And wordCount is calculated directly from sentence_content and is not copied fro
 And numbers and standalone punctuation are not counted as words
 And every missing catalog document stores that calculated wordCount
 And only missing unique sentence keys are bulk-inserted into their selected group catalog
+And every unique sentence key is classified against tracer_form_language_catalog when its catalog classification is missing
+And isNonMatcher, isTracer, and isFormLanguage are saved on the selected catalog document
+And sentenceKey, wordCount, is_non_matcher, is_tracer, and is_form_language are saved to each sentences_vector row in one update
 And every sentence is bulk-inserted into sentence_occurrences
 And sentenceKey is the stable catalog document ID
 And globalId is the stable occurrence document ID
@@ -944,25 +946,26 @@ Harness supplies `OPENSEARCH_ASYLEE_CATALOG_ALIAS` and
 Given ENABLE_OPENSEARCH_SENTENCE_FLOW is true
 And DOC2Vec receives a live document tsp_id
 When the existing code loads and splits the document text
-Then sentenceKey is generated for every sentence
-And sentences are inserted into sentences_vector in batches of 100
+Then sentenceKey and wordCount are prepared for every sentence before the database insert
+And the selected catalog is checked and missing classifications are found through the tracer catalog
+And sentences are inserted into sentences_vector with their classification values
 And each successful database flush returns the globalId values
-And different workers process the available batches
+And different workers process the available OpenSearch batches
 ```
 
 ```gherkin
-Given a live sentence has a globalId, sentenceKey, and other data from sentences_vector
-When DOC2Vec prepares its OpenSearch documents
+Given a live document has been split into sentences
+When DOC2Vec prepares its sentence keys and OpenSearch catalog documents
 Then application_id, analysis_group, section_name, and is_current are read from text_similarity_input using tsp_id
 And the one analysis_group for that tsp_id selects sentence_semantic_catalog_asylee or sentence_semantic_catalog_refugee
 And the selected sentence catalog is checked using sentenceKey
 And no vector work is done when that key already exists
-And embeddings is checked by global_id and embedding_type 2 for a missing catalog key
-And an existing 512-dimension Titan embedding is reused
-And the Bedrock pipeline generates a vector only when the catalog key and saved embedding are both missing
+And the Bedrock pipeline generates a vector only when the catalog key is missing
 And wordCount is calculated directly from sentence_content and stored on every new catalog document
 And numbers and standalone punctuation are not counted as words
-And sentences_vector.word_count is not used as the catalog wordCount
+And every unique sentence key is classified against tracer_form_language_catalog when its catalog classification is missing
+And isNonMatcher, isTracer, and isFormLanguage are saved on the selected catalog document
+And each sentence is inserted into sentences_vector once with sentenceKey, wordCount, and all three classification flags
 And one occurrence document is written using globalId as its OpenSearch document ID
 ```
 
@@ -1481,65 +1484,68 @@ IS
 'Saves cross-application Titan matches in both directions using 16 buckets.';
 ```
 
-## 20. Sentence Similarity | Classify tsp_id sentences with tracer workers
+## 20. Doc2Vec | Classify sentence keys before Sentence Similarity
 
 ### Value
 
-Load the sentences for one `tsp_id`, classify them against the tracer and
-form-language catalog, and save the classification in the selected group
-catalog and PostgreSQL before normal similarity matching begins.
+Classify every unique sentence key while Doc2Vec already has its sentence and
+catalog vector. Save the reusable result in the selected group catalog and
+copy it to every `sentences_vector` occurrence before Sentence Similarity is
+notified.
 
 ### Acceptance Criteria
 
 ```gherkin
-Given Sentence Similarity receives an SQS message
-When the message is processed
-Then tsp_id is read from the message payload
-And sentences_vector is queried for the sentences belonging to that tsp_id
-And the sentences are loaded in batches of 30
-And a thread pool with 30 workers processes the batch
-And each worker processes one sentence
+Given Doc2Vec is processing a live or historical sentence batch
+When sentenceKey and wordCount have been calculated
+Then wordCount is saved in sentences_vector
+And each missing catalog document is written so its 512-value vector is available
+And each unique sentenceKey is classified only once per batch
 ```
 
 ```gherkin
-Given a worker receives one sentence
+Given Doc2Vec has a catalog vector for one sentenceKey
 When analysisGroup selects the Asylee or Refugee sentence catalog
-Then the worker first reads any saved isNonMatcher, isTracer, and isFormLanguage values from that group catalog
+Then Doc2Vec first reads any saved isNonMatcher, isTracer, and isFormLanguage values from that group catalog
 And when those values are missing it checks the sentence vector against tracer_form_language_catalog for the same analysisGroup
 And the tracer catalog returns isNonMatcher and isFormLanguage but does not contain isTracer
 And isTracer is true only when a tracer result is found and both returned flags are false
 And it saves the completed classification on the selected group catalog document
-And the sentence row in sentences_vector is updated using global_id with the flags, matching tracerId, and decimal similarity score
-And any sentence found in the tracer catalog is not sent to normal sentence similarity matching
-And a sentence with catalog wordCount less than 5 completes tracer classification but is not sent to normal sentence similarity matching
+And every sentences_vector row using that sentenceKey receives the same three flags
+And closest_non_matcher and closest_nm_score are not updated
 ```
 
 ```gherkin
 Given a group-catalog read or update, tracer lookup, or sentences_vector update fails temporarily
-When the worker retries the sentence
-Then the same sentence is processed again without creating a duplicate
+When Doc2Vec retries the batch
+Then the same sentence keys are processed again without creating a duplicate
 And the group catalog and sentences_vector row contain the same three classification flags after the retry succeeds
-And sentences_vector also contains the matching tracerId and decimal similarity score returned by the tracer search
+And the next SQS message is not sent until every sentence is classified
 ```
 
 ## 21. Sentence Similarity | Search eligible sentences and save Titan matches (Assign this to Anish, I already have the code for this.)
 
 ### Value
 
-Continue from the previous story by searching only eligible sentences, saving
-their Titan matches, and completing the SQS workflow.
+Load only sentences already approved by Doc2Vec, save their Titan matches, and
+complete the SQS workflow without repeating tracer classification.
 Harness supplies `OPENSEARCH_ASYLEE_CATALOG_ALIAS` and
 `OPENSEARCH_REFUGEE_CATALOG_ALIAS` to both real-time and backfill deployments.
 
 ### Acceptance Criteria
 
 ```gherkin
-Given the previous story has updated the sentences for a tsp_id
-When an eligible sentence requires matching
+Given Doc2Vec has saved wordCount and all three classification flags
+When Sentence Similarity loads sentences for a tsp_id
+Then PostgreSQL returns only rows with wordCount greater than or equal to 5
+And PostgreSQL excludes rows where isNonMatcher, isTracer, or isFormLanguage is true
+And Sentence Similarity does not search the tracer catalog or update classification fields
+And when an eligible sentence requires matching
 Then analysis_group selects sentence_semantic_catalog_asylee or sentence_semantic_catalog_refugee
 And its saved vector is used to search only that selected catalog
 And a source sentence with wordCount less than 5 does not run the sentence-catalog vector search
 And the OpenSearch vector query filters catalog targets to wordCount greater than or equal to 5
+And the OpenSearch vector query excludes catalog targets where isNonMatcher, isTracer, or isFormLanguage is true
 And exact and similar sentence results are collected
 And same-application, tracer, form-language, and other non-matcher results are excluded
 And the accepted occurrence matches are written to titan_matches using the bidirectional update logic

@@ -9,6 +9,7 @@ from doc2vec_completed.opensearch.db_store import SentenceVectorDBStore
 from doc2vec_completed.opensearch.handlers.live_handler import LiveHandler
 from doc2vec_completed.opensearch.sentence_splitter import split_document
 from doc2vec_completed.opensearch.sqs_processor import SqsProcessor
+from doc2vec_completed.opensearch.text import sentence_key
 from ta_db_connection.atatables import SentencesVector, TextSimilarityInput
 from tests.opensearch.fakes import OpenSearchFake, SessionFake, SessionSequence, SqsFake
 
@@ -36,23 +37,27 @@ class LiveSentenceStoreFake:
             if row.global_id > after_global_id
         ][:page_size]
 
-    def save_missing_sentence_keys(self, sentence_vector_records):
+    def prepare_sentence_metadata(self, sentence_vector_records):
         generated_key_count = 0
         reused_key_count = 0
         for sentence_vector_record in sentence_vector_records:
             if sentence_vector_record.sentence_key:
                 reused_key_count += 1
-                continue
-            sentence_vector_record.sentence_key = (
-                f"{sentence_vector_record.global_id:064x}"
-            )
-            generated_key_count += 1
+            else:
+                sentence_vector_record.sentence_key = (
+                    f"{sentence_vector_record.global_id:064x}"
+                )
+                generated_key_count += 1
+            sentence_vector_record.word_count = 5
         return generated_key_count, reused_key_count
 
-    def save_document_sentences(self, document, sentences):
+    def insert_classified_document_sentences(
+        self, document, sentences, classifications
+    ):
         self.calls.append(sentences)
         rows = []
         for local_id, content in sentences:
+            record_sentence_key = sentence_key(content)
             row = SentencesVector(
                 global_id=self.next_global_id,
                 tsp_id=document.tsp_id,
@@ -65,16 +70,28 @@ class LiveSentenceStoreFake:
                 analysis_group=document.analysis_group,
                 is_current=document.is_current,
                 embedding_list=[],
-                is_non_matcher=False,
-                is_form_language=False,
-                is_tracer=False,
-                sentence_key=str(self.next_global_id) * 64,
+                is_non_matcher=classifications[record_sentence_key]["is_non_matcher"],
+                is_form_language=classifications[record_sentence_key][
+                    "is_form_language"
+                ],
+                is_tracer=classifications[record_sentence_key]["is_tracer"],
+                sentence_key=record_sentence_key,
                 last_modified=datetime.now(UTC),
                 tsp=document,
             )
             rows.append(row)
             self.next_global_id += 1
         return rows
+
+    def save_sentence_metadata_and_classifications(
+        self, sentence_vector_records, classifications
+    ):
+        for sentence_vector_record in sentence_vector_records:
+            classification = classifications[sentence_vector_record.sentence_key]
+            sentence_vector_record.is_non_matcher = classification["is_non_matcher"]
+            sentence_vector_record.is_tracer = classification["is_tracer"]
+            sentence_vector_record.is_form_language = classification["is_form_language"]
+        return len(sentence_vector_records)
 
 
 class HandlerFake:
@@ -258,9 +275,21 @@ def test_live_sentence_store_flushes_batches_and_commits_once(monkeypatch):
     store = SentenceVectorDBStore(SessionSequence([session]))
     monkeypatch.setattr(constants, "LIVE_DATABASE_BATCH_SIZE", 1)
 
-    store.save_document_sentences(
+    store.insert_classified_document_sentences(
         document,
         [(1, "First sentence."), (2, "Second sentence.")],
+        {
+            sentence_key("First sentence."): {
+                "is_non_matcher": False,
+                "is_tracer": True,
+                "is_form_language": False,
+            },
+            sentence_key("Second sentence."): {
+                "is_non_matcher": False,
+                "is_tracer": False,
+                "is_form_language": True,
+            },
+        },
     )
 
     assert session.commits == 1
@@ -272,25 +301,53 @@ def test_live_sentence_store_rolls_back_every_batch_when_one_flush_fails(monkeyp
     monkeypatch.setattr(constants, "LIVE_DATABASE_BATCH_SIZE", 1)
 
     with pytest.raises(SQLAlchemyError, match="database flush failed"):
-        store.save_document_sentences(
+        store.insert_classified_document_sentences(
             live_document(),
             [(1, "First sentence."), (2, "Second sentence.")],
+            {
+                sentence_key("First sentence."): {
+                    "is_non_matcher": False,
+                    "is_tracer": False,
+                    "is_form_language": False,
+                },
+                sentence_key("Second sentence."): {
+                    "is_non_matcher": False,
+                    "is_tracer": False,
+                    "is_form_language": False,
+                },
+            },
         )
 
     assert session.rollbacks == 1
 
 
-def test_sentence_key_save_restores_records_when_the_database_write_fails(
+def test_combined_sentence_update_rolls_back_when_the_database_write_fails(
     sentence_record,
 ):
-    sentence_record.sentence_key = None
+    SentenceVectorDBStore.prepare_sentence_metadata([sentence_record])
     session = SessionFake(fail_execute=True)
     store = SentenceVectorDBStore(SessionSequence([session]))
 
     with pytest.raises(SQLAlchemyError, match="database execute failed"):
-        store.save_missing_sentence_keys([sentence_record])
+        store.save_sentence_metadata_and_classifications(
+            [sentence_record],
+            {
+                sentence_record.sentence_key: {
+                    "is_non_matcher": False,
+                    "is_tracer": False,
+                    "is_form_language": False,
+                }
+            },
+        )
 
-    assert sentence_record.sentence_key is None
+    assert session.rollbacks == 1
+
+
+def test_saved_sentence_metadata_recalculates_word_count(sentence_record):
+    sentence_record.word_count = 0
+    SentenceVectorDBStore.prepare_sentence_metadata([sentence_record])
+
+    assert sentence_record.word_count == 5
 
 
 def test_syntok_splitter_returns_original_text_and_handles_empty_content():

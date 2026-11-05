@@ -3,20 +3,28 @@ from opensearchpy import TransportError
 
 from doc2vec_completed.opensearch.errors import PermanentDataError
 from doc2vec_completed.opensearch.opensearch_helper import OpenSearchHelper
+from doc2vec_completed.opensearch.opensearch_store import TracerOpenSearchStore
+from tests.opensearch.fakes import OpenSearchFake
 
 BULK_PATH = "doc2vec_completed.opensearch.opensearch_helper.helpers.bulk"
 
 
 class ClientFake:
-    def __init__(self, found=None):
+    def __init__(self, found=None, sources=None):
         self.found = found or set()
+        self.sources = sources or {}
         self.refreshed_indices = []
         self.indices = self
 
     def mget(self, index, body, params):
         return {
             "docs": [
-                {"_id": value, "found": value in self.found} for value in body["ids"]
+                {
+                    "_id": value,
+                    "found": value in self.found,
+                    "_source": self.sources.get(value),
+                }
+                for value in body["ids"]
             ]
         }
 
@@ -45,8 +53,29 @@ def test_existing_ids_and_bulk_pipeline_selection(
     documents = [{"_id": "A", "value": 1}]
     store.index_documents("catalog", documents, needs_embedding=False)
     store.index_documents("catalog", documents, needs_embedding=True)
+    store.update_documents(
+        "catalog",
+        [{"_id": "A", "isTracer": False, "isNonMatcher": False, "isFormLanguage": False, "updatedAt": "now"}],
+    )
 
-    assert [call[1].get("pipeline") for call in calls] == ["_none", None]
+    assert [call[1].get("pipeline") for call in calls] == ["_none", None, None]
+    assert calls[-1][0][0]["_op_type"] == "update"
+
+
+def test_realtime_document_load_returns_requested_source_fields(custom_logger):
+    client = ClientFake(
+        {"A"},
+        {"A": {"sentenceKey": "A", "sentenceContentVector": [0.1, 0.2]}},
+    )
+    store = OpenSearchHelper(client, custom_logger)
+
+    result = store.load_documents_by_ids(
+        "catalog",
+        ["A"],
+        ["sentenceKey", "sentenceContentVector"],
+    )
+
+    assert result["A"]["sentenceContentVector"] == [0.1, 0.2]
 
 
 def test_empty_opensearch_operations_are_skipped(
@@ -186,4 +215,18 @@ def test_vector_validation_and_retryable_status(service_config, custom_logger):
         store.validate_vector([0.1])
     store._is_retryable(TransportError(424, "retry"))
     store._is_retryable(TransportError(400, "stop"))
+
+
+def test_tracer_search_combines_every_qualifying_classification(service_config):
+    opensearch = OpenSearchFake(
+        tracer_hits=[
+            {"_score": 0.95, "_source": {"isNonMatcher": True, "isFormLanguage": False}},
+            {"_score": 0.90, "_source": {"isNonMatcher": False, "isFormLanguage": True}},
+            {"_score": 0.88, "_source": {"isNonMatcher": False, "isFormLanguage": False}},
+        ]
+    )
+
+    result = TracerOpenSearchStore(opensearch).search_classification_by_vector([0.1, 0.2], "Asylee")
+
+    assert result == {"is_non_matcher": True, "is_tracer": True, "is_form_language": True}
 

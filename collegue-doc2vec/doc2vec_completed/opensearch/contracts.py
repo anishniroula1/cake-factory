@@ -106,7 +106,36 @@ class CatalogDocument(TypedDict):
     wordCount: int
     createdAt: str
     updatedAt: str
+    isNonMatcher: NotRequired[bool]
+    isTracer: NotRequired[bool]
+    isFormLanguage: NotRequired[bool]
     sentenceContentVector: NotRequired[list[float]]
+
+
+class Classification(TypedDict):
+    """Classification shared by a catalog key and its sentence occurrences."""
+
+    is_non_matcher: bool
+    is_tracer: bool
+    is_form_language: bool
+
+
+class CatalogRecord(TypedDict):
+    """Catalog data needed to classify one unique sentence key."""
+
+    sentence_key: str
+    vector: list[float]
+    classification: Classification | None
+
+
+class CatalogClassificationDocument(TypedDict):
+    """Partial catalog update containing only reusable classification fields."""
+
+    _id: str
+    isNonMatcher: bool
+    isTracer: bool
+    isFormLanguage: bool
+    updatedAt: str
 
 
 class OccurrenceDocument(TypedDict):
@@ -152,6 +181,10 @@ class TracerDocument(TypedDict):
 
 
 type OpenSearchDocument = (
-    CatalogDocument | OccurrenceDocument | TrainingDocument | TracerDocument
+    CatalogDocument
+    | CatalogClassificationDocument
+    | OccurrenceDocument
+    | TrainingDocument
+    | TracerDocument
 )
 

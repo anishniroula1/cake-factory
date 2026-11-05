@@ -18,17 +18,17 @@ Document message
        -> reuse an existing Titan embedding when available
        -> write every sentence to sentence_occurrences
        -> write each unique key to its analysis-group catalog
+       -> classify each unique key against the tracer catalog when needed
+       -> save classification in the catalog and sentences_vector
+       -> save the calculated word count in sentences_vector
        -> refresh the indexes once after all document writes
        -> send tsp_id to Sentence Similarity
 
     -> Sentence Similarity
-       -> load the document sentences in pages of 30
+       -> load only eligible document sentences in pages of 30
        -> process as many as 30 source sentences concurrently
-       -> classify each source against the tracer catalog
-       -> skip normal matching when any exclusion flag is true
        -> search the Asylee or Refugee catalog at 76% similarity
        -> expand matching keys through sentence_occurrences
-       -> classify candidate keys before saving a relationship
        -> save both directions in 16-bucket titan_matches rows
        -> send tsp_id to Case Similarity
 
@@ -309,9 +309,10 @@ The key serves two purposes:
    vector in the same analysis group.
 2. It prepares the system for a possible future key-level relationship model.
 
-DOC2Vec also calculates `wordCount` directly from `sentence_content` when it
-builds a catalog document. It does not copy `sentences_vector.word_count`
-because that saved value is not reliable for this matching rule. For example,
+DOC2Vec calculates `wordCount` directly from `sentence_content`, stores the
+result in the catalog document, and corrects `sentences_vector.word_count`.
+It does not trust the older saved count because that value is not reliable for
+this matching rule. For example,
 `"The applicant moved to New York."` is stored with `wordCount=6`, while
 `"Yes"` is stored with `wordCount=1`. The counter accepts alphabetic words,
 including normal contractions and hyphenated words, but does not count
@@ -341,10 +342,15 @@ Historical sentences are already split. The route:
 2. Loads up to 3000 rows at a time.
 3. Splits that page into worker batches of 30.
 4. Uses up to 100 workers.
-5. Reuses an existing `sentence_key`, or creates and saves it inside the
-   worker when missing.
-6. Calculates catalog `wordCount` from each row's `sentence_content`.
-7. Writes occurrences and missing catalog documents.
+5. Reuses an existing `sentence_key`, or creates it in memory when missing.
+6. Calculates `wordCount` from each row's `sentence_content`.
+7. Writes missing catalog documents and reads their generated vectors back
+   with real-time `mget`.
+8. Reuses a complete catalog classification or searches the tracer catalog.
+9. Saves new classification values to the catalog.
+10. Updates each `sentences_vector` row once with its key, word count, and all
+    three classification flags.
+11. Writes every occurrence document.
 
 ### Embedding reuse
 
@@ -362,6 +368,23 @@ No valid saved embedding exists
 
 If the catalog key already exists, no embedding lookup or Titan call is
 needed.
+
+### Tracer classification
+
+After a catalog vector is available, DOC2Vec reuses its classification when
+all three fields already exist. Otherwise it searches the 100 closest tracer
+references for the same analysis group and accepts every hit at or above 70%
+cosine similarity.
+
+| Qualifying reference | Result |
+|---|---|
+| `isNonMatcher=true` | `is_non_matcher=true` |
+| `isFormLanguage=true` | `is_form_language=true` |
+| Both fields false | `is_tracer=true` |
+
+Different qualifying hits can set all three flags. DOC2Vec writes the final
+flags to the analysis-group catalog and to every `sentences_vector` row that
+uses the key. It does not update `closest_non_matcher` or `closest_nm_score`.
 
 ### OpenSearch writes and retries
 
@@ -393,48 +416,14 @@ The extra check covers the small period between DOC2Vec publishing the message
 and OpenSearch exposing a refresh. If the second check is empty, processing
 stops and the SQS message is not deleted.
 
-The service reads 30 source rows from `sentences_vector` at a time and uses a
-30-worker thread pool. Each worker handles one source sentence.
+PostgreSQL excludes rows whose `word_count` is below five or whose
+`is_non_matcher`, `is_tracer`, or `is_form_language` flag is true. The service
+loads the remaining rows 30 at a time and uses a 30-worker thread pool.
 
 The source vectors are loaded from the analysis-group catalog by
 `sentenceKey`. Vector values are read as numeric arrays from
 `_source.sentenceContentVector`. IVF-SQ16 compresses the internal Faiss search
 representation but does not change the numeric vector stored in `_source`.
-
-### Tracer classification
-
-The tracer query:
-
-- uses the source's saved 512-value vector;
-- filters by `analysisGroup`;
-- retrieves the nearest 100 references;
-- accepts every returned hit at or above 70% cosine similarity.
-
-All accepted hits contribute to the final classification:
-
-| Qualifying reference | Result |
-|---|---|
-| `isNonMatcher=true` | `is_non_matcher=true` |
-| `isFormLanguage=true` | `is_form_language=true` |
-| Both fields false | `is_tracer=true` |
-
-Different qualifying hits may set different flags, so all three final flags
-can be true. If any final flag is true, the source does not search the normal
-sentence catalog and does not create a Titan relationship.
-
-The final flags are saved on the selected catalog key and copied to the
-matching `sentences_vector` occurrences. The current database update changes
-only:
-
-```text
-is_non_matcher, is_tracer, is_form_language, last_modified
-```
-
-It does not update `closest_non_matcher` or `closest_nm_score`.
-
-Current cache behavior reuses a saved classification only when all three
-flags are false. A saved excluded key is checked against the tracer catalog
-again. This is the implemented behavior and should remain explicit in testing.
 
 ### Semantic search
 
@@ -459,12 +448,12 @@ The service pages through every key meeting the radial threshold. It is not a
 fixed top-K sentence search. The source key is also included with distance
 `0.0`, allowing exact occurrences to use the same expansion path.
 
-Every sentence is still checked against the tracer catalog. After that
-classification finishes, a source with `wordCount < 5` stops and does not
-search the normal sentence catalog. For an eligible source, the vector query
-uses `wordCount >= 5` as a catalog filter. This prevents short sentences such
-as `"Yes"`, `"No"`, and `"36"` from creating either exact or similar Titan
-relationships as a source or a target.
+Sentence Similarity does not repeat tracer classification. Doc2Vec has already
+stored the decision, so the database query removes ineligible sources. The
+vector query requires `wordCount >= 5` and excludes targets with any true
+classification flag. This prevents short sentences such as `"Yes"`, `"No"`,
+and `"36"`, tracers, form language, and non-matchers from creating Titan
+relationships as either a source or target.
 
 Saved distance is:
 
@@ -494,10 +483,9 @@ service queries `sentence_occurrences` in pages using:
 The terms/page batch size is 1000. All matching occurrences are returned; the
 1000 value is a page size, not a total-result limit.
 
-Candidate keys are also classified through the tracer catalog before a
-relationship is saved. This protects bidirectional correctness: an eligible
-source cannot create a reverse relationship on a tracer, form-language, or
-non-matcher target.
+Target classification comes from the catalog filter. This protects
+bidirectional correctness: an eligible source cannot create a reverse
+relationship on a tracer, form-language, or non-matcher target.
 
 ### Sentence-level write behavior
 
@@ -509,7 +497,7 @@ For source global ID 100 matching global IDs 200 and 232:
 232 -> 100
 ```
 
-The service sends targets to PostgreSQL in batches of 500. One SQL function
+The service sends targets to PostgreSQL in batches of 3000. One SQL function
 call saves the forward and reverse sides in the same transaction. A deadlock
 or another transient database failure retries only that failed match batch,
 not the tracer and OpenSearch work already completed for the source.
