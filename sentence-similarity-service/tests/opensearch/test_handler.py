@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from similarity_completed.opensearch.handlers import sentence_similarity_handler as handler_module
 from similarity_completed.opensearch.handlers.sentence_similarity_handler import SentenceSimilarityHandler
 from tests.opensearch.fakes import LoggerFake, SessionSequence, SqsFake, opensearch_mock, session_mock
@@ -70,7 +72,6 @@ def test_sentence_query_loads_classification_fields_without_filtering_rows(
 
     assert records == [sentence_row]
     assert "word_count" in sql and "is_non_matcher" in sql
-from types import SimpleNamespace
 
 
 def test_source_sentences_are_filtered_once_before_worker_processing(service_config):

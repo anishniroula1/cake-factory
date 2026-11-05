@@ -20,6 +20,8 @@ For each SQS message, the service:
    form-language counts. Only eligible rows continue.
 5. Uses the document's `analysis_group` to select the Asylee or Refugee catalog.
 6. Loads every eligible source vector from that catalog by `sentenceKey`.
+   Missing vectors are checked up to three times with a 30-second readiness
+   wait. Later attempts request only the keys that are still unavailable.
 7. Processes up to 30 eligible source sentences at the same time.
    Progress logs group the submitted work into 30-sentence ranges and show the
    starting and ending `global_id`. A failed worker logs its exact source

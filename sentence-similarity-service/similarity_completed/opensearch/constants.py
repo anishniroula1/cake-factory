@@ -24,7 +24,9 @@ SOURCE_SENTENCE_PROGRESS_BATCH_SIZE = 30  # Source sentences grouped in worker p
 THREAD_WORKER_COUNT = 30  # Source sentences processed at the same time.
 RETRY_SECONDS = 5  # Seconds to wait before retrying a failed operation.
 OCCURRENCE_READINESS_WAIT_SECONDS = 30  # One-time wait for newly indexed occurrences.
+CATALOG_READINESS_WAIT_SECONDS = 30  # Wait before retrying catalog keys that are not visible.
+CATALOG_READINESS_MAX_ATTEMPTS = 3  # Catalog reads allowed before the message stops.
 
 # SQS
 SQS_WAIT_SECONDS = 10
-SQS_VISIBILITY_SECONDS = 7200  # Two-hour message visibility timeout.
+SQS_VISIBILITY_SECONDS = 1800  # Keep a received message hidden for 30 minutes.
