@@ -331,13 +331,11 @@ class HistoricalHandler:
                 f"{json.dumps(string_tsp_ids)}."
             )
             message_batch = [
-                json.dumps(
-                    {
-                        "source": "P2",
-                        "tsp_id": tsp_id,
-                        "sent_by": "doc2vec",
-                    }
-                )
+                {
+                    "source": "P2",
+                    "tsp_id": tsp_id,
+                    "sent_by": "doc2vec",
+                }
                 for tsp_id in string_tsp_ids
             ]
             result = self.aws_sqs.send_messages_in_batch(

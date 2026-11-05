@@ -344,7 +344,7 @@ def test_historical_send_uses_ten_string_messages_per_batch(
     assert [len(call["batch"]) for call in sqs.sent] == [10, 2]
     assert all(call["retries"] == 3 for call in sqs.sent)
     assert all(call["message_group_id"] is None for call in sqs.sent)
-    assert json.loads(sqs.sent[0]["batch"][0]) == {
+    assert sqs.sent[0]["batch"][0] == {
         "source": "P2",
         "tsp_id": "1",
         "sent_by": "doc2vec",
