@@ -315,6 +315,12 @@ class SentenceSimilarityHandler:
             }
             for target in target_occurrences
         }
+        relationship_count = len(eligible_target_occurrences)
+        if relationship_count > constants.RELATIONSHIP_LOG_THRESHOLD:
+            self.logger.warning(
+                f"Source global_id={source_sentence.global_id} has "
+                f"{relationship_count} eligible sentence relationship(s)."
+            )
 
         return {
             "match_relationships": self._build_titan_match_relationships(

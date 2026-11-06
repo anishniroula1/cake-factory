@@ -22,9 +22,10 @@ IVF_NPROBES = 64  # IVF clusters searched by each sentence-catalog query.
 DATABASE_SENTENCE_LOAD_BATCH_SIZE = 1000  # Sentence rows loaded in each PostgreSQL query.
 SOURCE_SENTENCE_PROGRESS_BATCH_SIZE = 100  # Source sentences grouped in worker progress logs.
 THREAD_WORKER_COUNT = 60  # Source sentences processed at the same time.
+RELATIONSHIP_LOG_THRESHOLD = 1000  # Log source sentences whose match count exceeds this value.
 RETRY_SECONDS = 5  # Seconds to wait before retrying a failed operation.
 OCCURRENCE_READINESS_WAIT_SECONDS = 30  # One-time wait for newly indexed occurrences.
 
 # SQS
 SQS_WAIT_SECONDS = 10
-SQS_VISIBILITY_SECONDS = 3600  # Keep a received message hidden for one hour.
+SQS_VISIBILITY_SECONDS = 7200  # Keep a received message hidden for two hours.

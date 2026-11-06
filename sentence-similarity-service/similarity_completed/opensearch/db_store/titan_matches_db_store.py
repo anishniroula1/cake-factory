@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from time import perf_counter
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -73,6 +74,8 @@ class TitanMatchesDBStore:
         saved_relationship_count = 0
         for source_global_id, source_group in grouped_matches.items():
             target_items = list(source_group["matches"].items())
+            relationship_count = len(target_items)
+            source_write_started_at = perf_counter()
             batch_count = (
                 len(target_items) + constants.TITAN_MATCH_WRITE_BATCH_SIZE - 1
             ) // constants.TITAN_MATCH_WRITE_BATCH_SIZE
@@ -98,6 +101,14 @@ class TitanMatchesDBStore:
                     custom_logger=self.logger,
                 )
                 saved_relationship_count += saved_count
+
+            if relationship_count > constants.RELATIONSHIP_LOG_THRESHOLD:
+                self.logger.info(
+                    f"titan_matches write for source global_id={source_global_id} "
+                    f"completed {relationship_count} relationship(s) in "
+                    f"{perf_counter() - source_write_started_at:.2f} seconds "
+                    f"across {batch_count} SQL-function batch(es)."
+                )
 
         return saved_relationship_count
 
