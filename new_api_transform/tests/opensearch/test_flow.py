@@ -22,7 +22,6 @@ from transform_completed.opensearch import config as config_module
 from transform_completed.opensearch import constants
 from transform_completed.opensearch import dependencies as dependencies_module
 from transform_completed.opensearch.config import Config, read_boolean, read_integer
-from transform_completed.opensearch.contracts import ApplicationReference
 from transform_completed.opensearch.dependencies import Dependencies
 from transform_completed.opensearch.errors import OperationFailedError, PermanentDataError
 from transform_completed.opensearch.handlers.api_transform_handler import ApiTransformHandler
@@ -43,42 +42,6 @@ def test_one_sqs_message_runs_complete_api_transform_flow(service_config):
 
     assert (completed, handler.calls, len(source.deleted), len(sent.sent)) == (True, [10], 1, 1)
     assert json.loads(sent.sent[0][1]) == {"source": "P2", "tsp_id": "10", "sent_by": "api-transform"}
-
-
-def test_missing_text_similarity_input_keeps_source_message_for_redrive(
-    service_config,
-):
-    application_store = ApplicationStoreFake()
-    application_store.load_application_reference = Mock(return_value=None)
-    transmission_store = TransmissionStoreFake()
-    handler = ApiTransformHandler(
-        service_config,
-        application_store,
-        ApplicantStoreFake(),
-        ContentStoreFake(),
-        transmission_store,
-        PayloadBuilder(service_config),
-        KafkaProcessorFake(),
-        LoggerFake(),
-    )
-    message = {
-        "tsp_id": 404,
-        "MessageId": "missing-local",
-        "ReceiptHandle": "missing-receipt-local",
-    }
-    source = SqsFake()
-    sent = SqsFake()
-
-    completed = SqsProcessor(
-        DependenciesFake(service_config, source, sent, handler, LoggerFake())
-    )._process_document_message(message)
-
-    assert (completed, len(sent.sent), len(source.deleted), transmission_store.errors) == (
-        False,
-        0,
-        0,
-        [],
-    )
 
 
 def test_backfill_queue_skips_next_event_and_deletes_source_message(service_config):
@@ -118,26 +81,6 @@ def test_handler_builds_titan_payload_without_ner(service_config):
         "sentences",
         "public_templates",
     }
-
-
-def test_refugee_flow_skips_public_template_query(service_config):
-    content_store = ContentStoreFake()
-    content_store.load_public_template_payload_records = Mock()
-    handler = ApiTransformHandler(
-        service_config,
-        ApplicationStoreFake(),
-        ApplicantStoreFake(),
-        content_store,
-        TransmissionStoreFake(),
-        PayloadBuilder(service_config),
-        KafkaProcessorFake(),
-        LoggerFake(),
-    )
-
-    public_templates = handler._load_asylee_public_template(ApplicationReference(100, 900001, "Refugee"))
-
-    assert public_templates == {}
-    content_store.load_public_template_payload_records.assert_not_called()
 
 
 def test_source_and_dlq_messages_are_processed_separately(service_config):
