@@ -269,8 +269,8 @@ project and the replacement SQL.
 The new flow keeps the API event structure but processes one source SQS message
 at a time:
 
-1. Read one message containing `tsp_id`. The DLQ can return several messages,
-   but each message is still transformed independently.
+1. Read one source message containing `tsp_id`. When the source queue is empty,
+   the worker can read several DLQ messages and processes each one separately.
 2. Use `tsp.text_similarity_input` to resolve the document to one application.
 3. Load application, confidence, applicant, OCR, document, template, and
    sentence data for that application.
@@ -289,6 +289,10 @@ at a time:
 11. Send the completed `tsp_id` to the next queue and delete the source message.
     A failed step leaves the source message available for the configured SQS
     retry and DLQ behavior.
+
+A missing `tsp_id`, or a `tsp_id` that has no current
+`tsp.text_similarity_input` row, is a failed step. The source message is not
+forwarded or deleted.
 
 Although the Python package is named `opensearch`, API Transform does not run a
 new vector search. Sentence Similarity and Case Similarity have already written

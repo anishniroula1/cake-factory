@@ -108,15 +108,15 @@ Each loop reads the available source or DLQ messages and passes them to the
 document processor. The queue that supplied each message is retained so the
 message can be deleted from the correct queue after success.
 
-### `_receive_messages()`
+### `_receive_source_or_dlq_messages()`
 
-Reads the main queue first. When the main queue is empty, it reads the DLQ if a
-DLQ client is configured.
+Reads the source queue first. When the source queue is empty, it reads the DLQ
+if a DLQ client is configured.
 
 #### Details
 
 The method returns the messages together with the SQS client that received
-them. This lets the same processing flow handle normal and DLQ messages without
+them. This lets the same processing flow handle source and DLQ messages without
 mixing their receipt handles.
 
 ### `_read_tsp_id()`
@@ -146,6 +146,11 @@ If processing fails, the message is not deleted.
 The method sets the logger context for the current document and clears that
 context when processing ends. It returns success only after transformation,
 the next SQS send, and source-message deletion all finish.
+
+When `tsp_id` is missing, or no current `tsp.text_similarity_input` record
+exists for it, processing returns failure and leaves the source message
+undeleted. The source queue's redrive policy can then move it to the DLQ after
+the configured receive attempts.
 
 ### `_send_next_message()`
 

@@ -39,7 +39,7 @@ class ApiTransformHandler:
         self.kafka_processor = kafka_processor
         self.logger = custom_logger
 
-    def process_document(self, tsp_id: TspId) -> TransformResult:
+    def process_document(self, tsp_id: TspId) -> TransformResult | None:
         """Rebuild and publish the application affected by one document.
 
         Input: tsp_id=10
@@ -57,19 +57,11 @@ class ApiTransformHandler:
                 custom_logger=self.logger,
             )
             if application_reference is None:
-                self.logger.info(
-                    "API Transform completed without a Kafka event because no "
-                    "current record was found in tsp.text_similarity_input."
+                self.logger.error(
+                    "API Transform stopped because no current record was found "
+                    "in tsp.text_similarity_input."
                 )
-                self.logger.info(
-                    f"API Transform took {perf_counter() - started_at:.2f} "
-                    "seconds to complete."
-                )
-                return {
-                    "source_message_count": 1,
-                    "application_count": 0,
-                    "kafka_event_count": 0,
-                }
+                return None
             application_id = application_reference.application_id
             analysis_group = application_reference.analysis_group
             self.logger.info(

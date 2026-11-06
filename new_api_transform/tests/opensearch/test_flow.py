@@ -45,7 +45,7 @@ def test_one_sqs_message_runs_complete_api_transform_flow(service_config):
     assert json.loads(sent.sent[0][1]) == {"source": "P2", "tsp_id": "10", "sent_by": "api-transform"}
 
 
-def test_missing_text_similarity_input_still_forwards_and_deletes_message(
+def test_missing_text_similarity_input_keeps_source_message_for_redrive(
     service_config,
 ):
     application_store = ApplicationStoreFake()
@@ -74,9 +74,9 @@ def test_missing_text_similarity_input_still_forwards_and_deletes_message(
     )._process_document_message(message)
 
     assert (completed, len(sent.sent), len(source.deleted), transmission_store.errors) == (
-        True,
-        1,
-        1,
+        False,
+        0,
+        0,
         [],
     )
 

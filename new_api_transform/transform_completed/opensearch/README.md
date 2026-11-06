@@ -35,6 +35,10 @@ For each SQS message, the service:
 If processing fails, the source message is not deleted. SQS can retry it and
 eventually move it to the configured DLQ.
 
+A missing `tsp_id`, or a `tsp_id` with no current row in
+`tsp.text_similarity_input`, is treated as a failed message and remains
+undeleted.
+
 ## Message format
 
 The source queue accepts one document message:

@@ -1,0 +1,132 @@
+<mxfile host="app.diagrams.net" modified="2026-11-05T12:00:00.000Z" agent="Codex" version="24.7.17">
+  <diagram id="titan-production-flow" name="Titan Sentence Flow">
+    <mxGraphModel dx="1900" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1920" pageHeight="1080" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title" value="Titan Sentence Matching — Production Architecture" style="text;html=1;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="20" width="1040" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="Live and historical sentence processing, application summaries, API publication, and document deletion" style="text;html=1;align=center;verticalAlign=middle;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="430" y="60" width="1040" height="30" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="sourceQueue" value="&lt;b&gt;Document SQS&lt;/b&gt;&lt;br&gt;live, HISTORICAL,&lt;br&gt;TRAIN_MODEL, TRACER" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="30" y="130" width="150" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="doc2vec" value="&lt;b&gt;Doc2Vec&lt;/b&gt;&lt;br&gt;split or reuse sentences&lt;br&gt;key + word count&lt;br&gt;Titan vector + tracer class" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="230" y="120" width="180" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="similarityQueue" value="&lt;b&gt;Sentence Similarity SQS&lt;/b&gt;&lt;br&gt;{source, tsp_id, sent_by}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="460" y="130" width="170" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="sentenceSimilarity" value="&lt;b&gt;Sentence Similarity&lt;/b&gt;&lt;br&gt;5+ words, eligible flags&lt;br&gt;76% radial IVF search&lt;br&gt;bidirectional sentence matches" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="680" y="120" width="190" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="caseQueue" value="&lt;b&gt;Case Similarity SQS&lt;/b&gt;&lt;br&gt;one tsp_id" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="920" y="130" width="150" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="caseSimilarity" value="&lt;b&gt;Case Similarity&lt;/b&gt;&lt;br&gt;1 = similar application&lt;br&gt;2 = similar case&lt;br&gt;3+ = TAH case" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="120" width="180" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="apiQueue" value="&lt;b&gt;API Transform SQS&lt;/b&gt;&lt;br&gt;one tsp_id" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="130" width="150" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="apiTransform" value="&lt;b&gt;API Transform&lt;/b&gt;&lt;br&gt;merge 16 match buckets&lt;br&gt;max 3,000 per sentence&lt;br&gt;embedding_model = TITAN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1550" y="120" width="190" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="nextQueue" value="&lt;b&gt;Next SQS Event&lt;/b&gt;&lt;br&gt;skipped for backfill input" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1790" y="130" width="150" height="80" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="openSearchZone" value="&lt;b&gt;Amazon OpenSearch&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="320" width="720" height="340" as="geometry"/>
+        </mxCell>
+        <mxCell id="occurrenceIndex" value="&lt;b&gt;sentence_occurrences&lt;/b&gt;&lt;br&gt;one record per globalId&lt;br&gt;document and sentence location" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="130" y="380" width="190" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="asyleeCatalog" value="&lt;b&gt;Asylee catalog&lt;/b&gt;&lt;br&gt;unique sentenceKey&lt;br&gt;512-d Titan IVF-SQ16&lt;br&gt;text, word count, class flags" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="350" y="370" width="200" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="refugeeCatalog" value="&lt;b&gt;Refugee catalog&lt;/b&gt;&lt;br&gt;unique sentenceKey&lt;br&gt;512-d Titan IVF-SQ16&lt;br&gt;text, word count, class flags" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="580" y="370" width="200" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="tracerCatalog" value="&lt;b&gt;tracer_form_language_catalog&lt;/b&gt;&lt;br&gt;~4K references&lt;br&gt;Lucene HNSW, top 100, 70%" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="180" y="520" width="230" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="trainingIndex" value="&lt;b&gt;sentence_semantic_training&lt;/b&gt;&lt;br&gt;representative vectors&lt;br&gt;shared IVF-SQ16 model&lt;br&gt;nlist 16,384" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="500" y="520" width="230" height="90" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="postgresZone" value="&lt;b&gt;PostgreSQL&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="870" y="320" width="650" height="340" as="geometry"/>
+        </mxCell>
+        <mxCell id="tsiTable" value="&lt;b&gt;tsp.text_similarity_input&lt;/b&gt;&lt;br&gt;document, application, group,&lt;br&gt;section, source, state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="370" width="190" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="sentenceTables" value="&lt;b&gt;tsp.sentences_vector&lt;/b&gt;&lt;br&gt;text, key, word count, class&lt;br&gt;&lt;b&gt;tsp.embeddings&lt;/b&gt; (type 2)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="370" width="190" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="titanMatches" value="&lt;b&gt;tsp.titan_matches&lt;/b&gt;&lt;br&gt;16 JSONB buckets per owner&lt;br&gt;bidirectional globalId: distance&lt;br&gt;generated count + verbatim" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="900" y="500" width="220" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="similarCases" value="&lt;b&gt;tsp.titan_similar_cases&lt;/b&gt;&lt;br&gt;bidirectional application lists&lt;br&gt;generated counts + is_tah" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1150" y="500" width="200" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="auditTables" value="&lt;b&gt;Lookups and audit&lt;/b&gt;&lt;br&gt;application / receipt&lt;br&gt;kafka_ta_hit_lookup&lt;br&gt;api.kafka_events / status" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1380" y="370" width="110" height="230" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="kafkaZone" value="&lt;b&gt;Kafka&lt;/b&gt;" style="swimlane;html=1;rounded=1;startSize=32;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1570" y="320" width="340" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="tahTopic" value="&lt;b&gt;rfs.ata.text_analytics.hit&lt;/b&gt;&lt;br&gt;new or changed is_tah&lt;br&gt;live toggle only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="380" width="280" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="apiTopic" value="&lt;b&gt;rfs.ata.data_migration.api.events&lt;/b&gt;&lt;br&gt;Titan application payload&lt;br&gt;Kafka acknowledgement required" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="480" width="280" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="deleteJob" value="&lt;b&gt;Document Delete Job&lt;/b&gt;&lt;br&gt;scheduled tsp_id batch&lt;br&gt;keep shared catalog vectors&lt;br&gt;remove reverse Titan matches" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="260" y="760" width="220" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="caseBackfillQueue" value="&lt;b&gt;Case Similarity Backfill SQS&lt;/b&gt;&lt;br&gt;refresh after deletion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="650" y="775" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="reliabilityNote" value="&lt;b&gt;Reliability&lt;/b&gt;&lt;br&gt;Stable IDs + idempotent upserts • bounded external retries • database commit/rollback • delete source SQS only after success • DLQ + alert after redrive" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;align=left;spacingLeft=12;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="760" width="730" height="95" as="geometry"/>
+        </mxCell>
+        <mxCell id="limitsNote" value="&lt;b&gt;Key runtime limits&lt;/b&gt;&lt;br&gt;Doc2Vec: 30-sentence jobs / 100 workers / 30 bulk retries / 1-hour SQS visibility&lt;br&gt;Sentence Similarity: 100-sentence progress batches / 60 workers / 5 catalog-read attempts × 5 seconds / 1-hour visibility&lt;br&gt;Case Similarity + API Transform: 5-minute visibility" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;align=left;spacingLeft=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="920" width="1040" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" value="receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="sourceQueue" target="doc2vec"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" value="completed tsp_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="doc2vec" target="similarityQueue"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" value="receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="similarityQueue" target="sentenceSimilarity"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" value="completed tsp_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="sentenceSimilarity" target="caseQueue"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" value="receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="caseQueue" target="caseSimilarity"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" value="completed tsp_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="caseSimilarity" target="apiQueue"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" value="receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="apiQueue" target="apiTransform"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" value="completion event" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="apiTransform" target="nextQueue"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="e9" value="selected group catalog" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#82b366;endArrow=block;" edge="1" parent="1" source="doc2vec" target="openSearchZone"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" value="occurrences" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#82b366;endArrow=block;" edge="1" parent="1" source="doc2vec" target="occurrenceIndex"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" value="classify" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#82b366;endArrow=block;" edge="1" parent="1" source="doc2vec" target="tracerCatalog"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e12" value="sentences + metadata" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#d79b00;endArrow=block;" edge="1" parent="1" source="doc2vec" target="sentenceTables"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e13" value="selected group vector search" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#82b366;endArrow=block;" edge="1" parent="1" source="sentenceSimilarity" target="openSearchZone"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e14" value="expand occurrences" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#82b366;endArrow=block;" edge="1" parent="1" source="sentenceSimilarity" target="occurrenceIndex"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e15" value="save both directions" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#d79b00;endArrow=block;" edge="1" parent="1" source="sentenceSimilarity" target="titanMatches"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e16" value="refresh summaries" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#d79b00;endArrow=block;" edge="1" parent="1" source="caseSimilarity" target="similarCases"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e17" value="changed TAH" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#9673a6;endArrow=block;" edge="1" parent="1" source="caseSimilarity" target="tahTopic"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e18" value="read application result" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#d79b00;endArrow=block;" edge="1" parent="1" source="apiTransform" target="auditTables"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e19" value="publish + audit" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#9673a6;endArrow=block;" edge="1" parent="1" source="apiTransform" target="apiTopic"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="e20" value="delete occurrences + orphan vectors" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b85450;endArrow=block;" edge="1" parent="1" source="deleteJob" target="openSearchZone"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e21" value="delete bidirectional matches + optional sentence data" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b85450;endArrow=block;" edge="1" parent="1" source="deleteJob" target="postgresZone"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e22" value="deleted tsp_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b85450;endArrow=block;" edge="1" parent="1" source="deleteJob" target="caseBackfillQueue"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e23" value="rebuild application summary" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b85450;endArrow=block;" edge="1" parent="1" source="caseBackfillQueue" target="caseSimilarity"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
