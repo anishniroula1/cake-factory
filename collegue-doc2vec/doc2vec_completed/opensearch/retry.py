@@ -3,7 +3,7 @@ from collections.abc import Callable
 from typing import Any
 
 from botocore.exceptions import BotoCoreError
-from opensearchpy.exceptions import OpenSearchException
+from opensearchpy.exceptions import OpenSearchException, TransportError
 from sqlalchemy.exc import SQLAlchemyError
 
 from doc2vec_completed.opensearch.errors import (
@@ -23,12 +23,22 @@ RETRYABLE_ERRORS = (
 )
 
 
+def _single_line(value: object, limit: int) -> str:
+    """Return a short one-line value that is safe for application logs."""
+
+    return " ".join(str(value).split())[:limit]
+
+
 def safe_error_summary(error: object) -> str:
     """Return useful error details without SQL, parameters, or response bodies."""
 
     error_name = type(error).__name__
     if getattr(error, "safe_for_logging", False):
         return f"{error_name}: {str(error)[:500]}"
+    if isinstance(error, TransportError):
+        status_code = _single_line(error.status_code, limit=50)
+        reason = _single_line(error.error, limit=200)
+        return f"{error_name} (status_code={status_code}, reason={reason})"
     original_error = getattr(error, "orig", None)
     if original_error is not None:
         return f"{error_name} (database_error={type(original_error).__name__})"

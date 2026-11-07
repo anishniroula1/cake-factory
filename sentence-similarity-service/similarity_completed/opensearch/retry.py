@@ -3,7 +3,7 @@ from collections.abc import Callable
 from typing import Any
 
 from botocore.exceptions import BotoCoreError
-from opensearchpy.exceptions import OpenSearchException
+from opensearchpy.exceptions import OpenSearchException, TransportError
 from sqlalchemy.exc import SQLAlchemyError
 
 from similarity_completed.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
@@ -30,6 +30,10 @@ def safe_error_summary(error: object) -> str:
     error_name = type(error).__name__
     if getattr(error, "safe_for_logging", False):
         return f"{error_name}: {str(error)[:500]}"
+    if isinstance(error, TransportError):
+        status_code = _single_line(error.status_code, limit=50)
+        reason = _single_line(error.error, limit=200)
+        return f"{error_name} (status_code={status_code}, reason={reason})"
     original_error = getattr(error, "orig", None)
     if original_error is not None:
         summary = f"{error_name} (database_error={type(original_error).__name__})"

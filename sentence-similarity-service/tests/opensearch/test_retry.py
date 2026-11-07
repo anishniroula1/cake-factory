@@ -1,4 +1,5 @@
 import pytest
+from opensearchpy.exceptions import TransportError
 from sqlalchemy.exc import IntegrityError
 
 from similarity_completed.opensearch.errors import OperationFailedError, PermanentDataError
@@ -68,3 +69,11 @@ def test_database_error_summary_keeps_cause_without_sql_or_parameters():
     assert "Key (global_id)=(999) is not present" in summary
     assert "SELECT" not in summary
     assert "large-input" not in summary
+
+
+def test_transport_error_summary_includes_status_and_reason_only():
+    error = TransportError(429, "too_many_requests", {"private": "response-body"})
+
+    summary = safe_error_summary(error)
+
+    assert summary == "TransportError (status_code=429, reason=too_many_requests)"
