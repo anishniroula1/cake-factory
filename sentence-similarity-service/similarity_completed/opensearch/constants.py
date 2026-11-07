@@ -20,7 +20,7 @@ IVF_NPROBES = 64  # IVF clusters searched by each sentence-catalog query.
 
 # Processing
 DATABASE_SENTENCE_LOAD_BATCH_SIZE = 1000  # Sentence rows loaded in each PostgreSQL query.
-SOURCE_SENTENCE_PROGRESS_BATCH_SIZE = 100  # Source sentences grouped in worker progress logs.
+SOURCE_SENTENCE_PROGRESS_BATCH_SIZE = 30  # Source sentences grouped in worker progress logs.
 THREAD_WORKER_COUNT = 60  # Source sentences processed at the same time.
 RELATIONSHIP_LOG_THRESHOLD = 1000  # Log source sentences whose match count exceeds this value.
 RETRY_SECONDS = 5  # Seconds to wait before retrying a failed operation.

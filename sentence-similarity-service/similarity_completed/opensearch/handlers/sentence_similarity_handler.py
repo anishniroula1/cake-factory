@@ -144,6 +144,7 @@ class SentenceSimilarityHandler:
                     ending_global_id,
                     sentence_jobs,
                 ) in sentence_job_batches:
+                    batch_relationship_count = 0
                     for sentence_job in sentence_jobs:
                         sentence_result = sentence_job.result()
                         if sentence_result is None:
@@ -154,11 +155,13 @@ class SentenceSimilarityHandler:
                         match_relationships = sentence_result["match_relationships"]
                         processed_sentence_count += 1
                         matched_sentence_count += int(bool(match_relationships))
+                        batch_relationship_count += len(match_relationships)
                         collected_match_relationships.extend(match_relationships)
                     self.logger.info(
                         f"Completed source sentence thread batch {batch_number}; "
                         f"starting_global_id={starting_global_id}, "
-                        f"ending_global_id={ending_global_id}."
+                        f"ending_global_id={ending_global_id}, "
+                        f"batch_relationship_count={batch_relationship_count}."
                     )
 
         self.logger.info(
