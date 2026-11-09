@@ -77,8 +77,6 @@ bucket rows are deleted when their `matches` object becomes empty.
 
 The function returns:
 
-- affected application IDs;
-- affected `tsp_id` values;
 - whether the requested document existed in `tsp.titan_matches`;
 - the number of source bucket rows deleted.
 

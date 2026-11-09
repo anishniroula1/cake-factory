@@ -23,14 +23,9 @@ from doc_delete_job.opensearch.contracts import TitanMatchDeletionResult, TspId
 #      removed.
 #   4. Deletes every Titan bucket row owned by tsp_id 10.
 #
-# The function returns one row with affected IDs, a found flag, and counts:
-#   affected_application_ids:    source and target application IDs.
-#   affected_tsp_ids:            source and target document IDs.
-#   has_deleted_document:        true when the requested tsp_id was present.
-#   source_global_id_count:       source global IDs found for the tsp_id.
-#   deleted_match_bucket_count:   bucket rows owned by the deleted document.
-#   updated_reverse_bucket_count: other bucket rows with reverse keys removed.
-#   deleted_empty_bucket_count:   reverse bucket rows deleted after becoming {}.
+# The function returns only the values used by this service:
+#   has_deleted_document:       true when the requested tsp_id was present.
+#   deleted_match_bucket_count: bucket rows owned by the deleted document.
 #
 # It does not delete embeddings, or sentences_vector.
 # Their cleanup is intentionally handled by their own stores.
@@ -47,20 +42,14 @@ class TitanMatchesDBStore:
         """Delete source buckets and reverse references for one document.
 
         Input: tsp_id=8205
-        Output: affected IDs, a found flag, and deletion counts returned by
-        tsp.delete_titan_matches_for_tsp.
+        Output: whether the document existed in titan_matches and how many
+        source bucket rows were deleted.
         """
 
         with self.session_factory() as session:
             deletion_counts_record = session.execute(DELETE_TITAN_MATCHES, {"tsp_id": tsp_id}).one()
             session.commit()
             return TitanMatchDeletionResult(
-                affected_application_ids=[
-                    int(application_id) for application_id in (deletion_counts_record.affected_application_ids or [])
-                ],
-                affected_tsp_ids=[
-                    int(affected_tsp_id) for affected_tsp_id in (deletion_counts_record.affected_tsp_ids or [])
-                ],
                 has_deleted_document=bool(deletion_counts_record.has_deleted_document),
                 deleted_match_bucket_count=int(deletion_counts_record.deleted_match_bucket_count),
             )

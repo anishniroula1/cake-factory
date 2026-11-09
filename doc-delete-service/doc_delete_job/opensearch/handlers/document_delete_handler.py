@@ -89,8 +89,6 @@ class DocumentDeleteHandler:
             )
             legacy_deletion_result = self._delete_legacy_document_data(tsp_id)
             database_deletion_result = DatabaseDeletionResult(
-                affected_application_ids=titan_match_deletion_result.affected_application_ids,
-                affected_tsp_ids=titan_match_deletion_result.affected_tsp_ids,
                 has_deleted_document=titan_match_deletion_result.has_deleted_document,
                 deleted_match_bucket_count=titan_match_deletion_result.deleted_match_bucket_count,
                 deleted_embedding_count=legacy_deletion_result.deleted_embedding_count,
@@ -122,8 +120,6 @@ class DocumentDeleteHandler:
         self.logger.info(f"Document deletion took {perf_counter() - started_at:.2f} seconds to complete.")
         return {
             "tsp_id": tsp_id,
-            "affected_application_ids": database_deletion_result.affected_application_ids,
-            "affected_tsp_ids": database_deletion_result.affected_tsp_ids,
             "has_deleted_document": database_deletion_result.has_deleted_document,
             "occurrence_count": opensearch_deletion_result.occurrence_count,
             "catalog_count": opensearch_deletion_result.catalog_count,
@@ -267,8 +263,8 @@ class DocumentDeleteHandler:
         """Delete source and reverse Titan relationships for one document.
 
         Input: tsp_id=8205
-        Output: affected application/document IDs, a found flag, and the
-        deleted source-bucket count.
+        Output: whether the document had Titan matches and the number of source
+        bucket rows deleted.
 
         This cleanup always runs because titan_matches belongs to the new
         OpenSearch flow and is not controlled by the legacy database toggle.
@@ -287,14 +283,11 @@ class DocumentDeleteHandler:
         )
         self.logger.info(
             "PostgreSQL function tsp.delete_titan_matches_for_tsp completed. "
-            f"Affected application count: {len(deletion_result.affected_application_ids)}. "
-            f"Affected tsp_id count: {len(deletion_result.affected_tsp_ids)}."
+            f"Deleted source bucket count: {deletion_result.deleted_match_bucket_count}."
         )
         if not deletion_result.has_deleted_document:
             self.logger.info("No titan_matches rows were found for this document.")
         return DatabaseDeletionResult(
-            affected_application_ids=deletion_result.affected_application_ids,
-            affected_tsp_ids=deletion_result.affected_tsp_ids,
             has_deleted_document=deletion_result.has_deleted_document,
             deleted_match_bucket_count=deletion_result.deleted_match_bucket_count,
         )

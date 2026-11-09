@@ -93,8 +93,6 @@ class TitanMatchesDBStoreFake:
             self.events.append("delete Titan matches")
         self.deleted.append(tsp_id)
         return SimpleNamespace(
-            affected_application_ids=[100, 200],
-            affected_tsp_ids=[10, 20],
             has_deleted_document=True,
             deleted_match_bucket_count=3,
         )
@@ -134,8 +132,6 @@ class HandlerFake:
             raise self.failure
         return {
             "tsp_id": tsp_id,
-            "affected_application_ids": [],
-            "affected_tsp_ids": [],
             "has_deleted_document": False,
             "occurrence_count": 0,
             "catalog_count": 0,

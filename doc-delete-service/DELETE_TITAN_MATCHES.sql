@@ -11,37 +11,27 @@
  * This function does not delete text_similarity_input, sentences_vector, or
  * embeddings. After this function commits, Python deletes embeddings and
  * sentence rows through their own database stores. text_similarity_input is
- * kept so Case Similarity can refresh the affected application afterward.
+ * kept so Case Similarity can identify and refresh the source application.
  */
 CREATE FUNCTION tsp.delete_titan_matches_for_tsp(
     p_tsp_id BIGINT
 )
 RETURNS TABLE (
-    affected_application_ids BIGINT[],
-    affected_tsp_ids BIGINT[],
     has_deleted_document BOOLEAN,
-    source_global_id_count INTEGER,
-    deleted_match_bucket_count INTEGER,
-    updated_reverse_bucket_count INTEGER,
-    deleted_empty_bucket_count INTEGER
+    deleted_match_bucket_count INTEGER
 )
 LANGUAGE PLPGSQL
 AS $$
 DECLARE
     deleted_global_ids INTEGER[];
     locked_row_id BIGINT;
-    source_id_count INTEGER := 0;
     deleted_bucket_count INTEGER := 0;
-    updated_reverse_count INTEGER := 0;
-    deleted_empty_count INTEGER := 0;
-    affected_applications BIGINT[] := ARRAY[]::BIGINT[];
-    affected_documents BIGINT[] := ARRAY[]::BIGINT[];
 BEGIN
     /*
      * Stop immediately when this document has no Titan matches.
      *
      * Example: tsp_id 99 is not present in titan_matches. There are no source
-     * rows or reverse relationships to remove, so return empty lists and false.
+     * rows or reverse relationships to remove, so return false and zero.
      */
     IF NOT EXISTS (
         SELECT 1
@@ -50,12 +40,7 @@ BEGIN
     ) THEN
         RETURN QUERY
         SELECT
-            ARRAY[]::BIGINT[],
-            ARRAY[]::BIGINT[],
             FALSE,
-            0,
-            0,
-            0,
             0;
         RETURN;
     END IF;
@@ -77,47 +62,6 @@ BEGIN
         FROM tsp.titan_matches AS match_row
         WHERE match_row.tsp_id = p_tsp_id
     ) AS source_id;
-
-    source_id_count := cardinality(deleted_global_ids);
-    /*
-     * Save every application and document affected by this deletion before
-     * changing the match rows.
-     *
-     * Example: the deleted document belongs to application 10 and matches
-     * documents from applications 20 and 30. The returned application list is
-     * [10, 20, 30], and affected_tsp_ids contains the source and target tsp IDs.
-     * These lists can be used to refresh case-level summaries afterward.
-     */
-    WITH source_rows AS (
-        SELECT global_id, tsp_id, application_id, matches
-        FROM tsp.titan_matches
-        WHERE tsp_id = p_tsp_id
-    ),
-    affected_owners AS (
-        SELECT source_row.application_id, source_row.tsp_id
-        FROM source_rows AS source_row
-
-        UNION
-
-        SELECT target_owner.application_id, target_owner.tsp_id
-        FROM source_rows AS source_row
-        CROSS JOIN LATERAL jsonb_object_keys(source_row.matches)
-            AS target(target_global_id)
-        JOIN tsp.titan_matches AS target_owner
-            ON target_owner.global_id = target.target_global_id::INTEGER
-    )
-    SELECT
-        ARRAY(
-            SELECT DISTINCT owner.application_id::BIGINT
-            FROM affected_owners AS owner
-            ORDER BY owner.application_id::BIGINT
-        ),
-        ARRAY(
-            SELECT DISTINCT owner.tsp_id::BIGINT
-            FROM affected_owners AS owner
-            ORDER BY owner.tsp_id::BIGINT
-        )
-    INTO affected_applications, affected_documents;
 
     /*
      * Use the same advisory-lock identity as the bidirectional upsert function.
@@ -208,8 +152,6 @@ BEGIN
     WHERE reverse_match.global_id = reverse_removals.owner_global_id
       AND reverse_match.match_bucket_number = reverse_removals.bucket_number;
 
-    GET DIAGNOSTICS updated_reverse_count = ROW_COUNT;
-
     /* Delete only reverse rows touched above when their JSONB object is empty. */
     WITH reverse_rows AS (
         SELECT DISTINCT
@@ -227,8 +169,6 @@ BEGIN
       AND empty_match.match_bucket_number = reverse_rows.bucket_number
       AND empty_match.matches = '{}'::JSONB;
 
-    GET DIAGNOSTICS deleted_empty_count = ROW_COUNT;
-
     /* Remove every bucket owned by the deleted document. */
     DELETE FROM tsp.titan_matches AS source_match
     WHERE source_match.global_id = ANY(deleted_global_ids)
@@ -238,17 +178,12 @@ BEGIN
 
     RETURN QUERY
     SELECT
-        affected_applications,
-        affected_documents,
         TRUE,
-        source_id_count,
-        deleted_bucket_count,
-        updated_reverse_count,
-        deleted_empty_count;
+        deleted_bucket_count;
 END;
 $$;
 
 
 COMMENT ON FUNCTION tsp.delete_titan_matches_for_tsp(BIGINT)
 IS
-'Returns affected application/document IDs and removes one document from bidirectional Titan match buckets.';
+'Removes one document from bidirectional Titan match buckets and returns whether it existed and how many source buckets were deleted.';
