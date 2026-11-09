@@ -29,7 +29,7 @@ class Dependencies:
             queue_url=self.config.receive_sqs_endpoint,
             aws_region=self.config.aws_region,
             aws_endpoint_url=self.config.aws_local_endpoint_url or None,
-            max_number_of_messages=1,
+            max_number_of_messages=constants.SQS_RECEIVE_BATCH_SIZE,
             wait_time=constants.SQS_WAIT_SECONDS,
             logger=self.logger,
             visibility_timeout=constants.SQS_VISIBILITY_SECONDS,

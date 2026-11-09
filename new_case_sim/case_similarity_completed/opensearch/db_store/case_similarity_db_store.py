@@ -1,6 +1,6 @@
 from collections.abc import Callable
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from case_similarity_completed.opensearch import constants
@@ -10,13 +10,13 @@ from ta_utils.logger.CustomLogger import CustomLogger
 
 # Load the case information connected to the tsp_id from the SQS message.
 # Example: tsp_id 10 can return application_id 100, a_number 900001, and analysis_group Asylee.
-LOAD_DOCUMENT = text(
+LOAD_DOCUMENTS = text(
     """
     SELECT tsp_id, application_id, a_number, analysis_group
     FROM tsp.text_similarity_input
-    WHERE tsp_id = :tsp_id
+    WHERE tsp_id IN :tsp_ids
     """
-)
+).bindparams(bindparam("tsp_ids", expanding=True))
 
 # Rebuild one source application's case summary and update the reverse
 # relationship on every affected target application.
@@ -94,20 +94,43 @@ class CaseSimilarityDBStore:
         which application owns the document.
         """
 
-        with self.session_factory() as session:
-            # one_or_none() makes an unexpected duplicate fail instead of silently
-            # selecting the wrong application.
-            document_record = session.execute(LOAD_DOCUMENT, {"tsp_id": tsp_id}).mappings().one_or_none()
-        if document_record is None:
+        document_contexts = self.load_case_similarity_document_contexts([tsp_id])
+        if not document_contexts:
             raise PermanentDataError(f"No text_similarity_input row exists for tsp_id={tsp_id}")
+        return document_contexts[0]
 
-        # Convert database values into the small object used by the handler.
-        return DocumentContext(
-            tsp_id=document_record["tsp_id"],
-            application_id=int(document_record["application_id"]),
-            a_number=int(document_record["a_number"]),
-            analysis_group=str(document_record["analysis_group"]),
-        )
+    def load_case_similarity_document_contexts(self, tsp_ids: list[TspId]) -> list[DocumentContext]:
+        """Load document ownership for an SQS message batch in one query.
+
+        Input: tsp_ids=[100, 101, 200]
+        Output: three DocumentContext objects. Documents 100 and 101 may point
+        to the same application, allowing that application to be refreshed once.
+
+        Missing tsp_ids are not returned. Their source messages remain on SQS
+        so the configured retry and DLQ policy can handle them.
+        """
+
+        if not tsp_ids:
+            return []
+
+        database_tsp_ids = [
+            int(tsp_id) if isinstance(tsp_id, str) and tsp_id.strip().isdigit() else tsp_id
+            for tsp_id in tsp_ids
+        ]
+        with self.session_factory() as session:
+            document_records = (
+                session.execute(LOAD_DOCUMENTS, {"tsp_ids": database_tsp_ids}).mappings().all()
+            )
+
+        return [
+            DocumentContext(
+                tsp_id=document_record["tsp_id"],
+                application_id=int(document_record["application_id"]),
+                a_number=int(document_record["a_number"]),
+                analysis_group=str(document_record["analysis_group"]),
+            )
+            for document_record in document_records
+        ]
 
     def refresh_bidirectional_case_summaries(
         self, source_application_id: int, analysis_group: str

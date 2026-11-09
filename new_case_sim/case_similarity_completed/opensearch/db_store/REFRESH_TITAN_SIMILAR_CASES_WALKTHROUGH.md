@@ -4,6 +4,12 @@ This guide shows what `tsp.refresh_titan_similar_cases` does without requiring
 someone to understand the full function at once. Run each query separately in
 the same pgAdmin Query Tool window.
 
+This walkthrough follows the optimized function. It expands the source match
+buckets once, checks the target analysis group without multiplying rows, and
+updates only reverse applications whose 1/2/3 relationship level changed. The
+function output therefore contains the source application plus changed reverse
+applications, not every application that was checked.
+
 ## Start with a useful application
 
 First, find an existing row that has values in all three relationship lists.
@@ -140,26 +146,26 @@ WITH source_sentence_pairs AS (
     CROSS JOIN LATERAL jsonb_object_keys(source_match.matches)
         AS target(target_global_id)
     WHERE source_match.application_id = 10
-),
-target_owners AS (
-    SELECT DISTINCT
-        target_match.global_id,
-        target_match.application_id
-    FROM source_sentence_pairs AS sentence_pair
-    JOIN tsp.titan_matches AS target_match
-        ON target_match.global_id = sentence_pair.target_global_id
-    JOIN tsp.text_similarity_input AS target_input
-        ON target_input.application_id = target_match.application_id
-       AND target_input.analysis_group = 'Asylee'
-    WHERE target_match.application_id <> 10
 )
 SELECT
     sentence_pair.source_global_id,
     sentence_pair.target_global_id,
-    target_owners.application_id AS target_application_id
+    target_owner.application_id AS target_application_id
 FROM source_sentence_pairs AS sentence_pair
-JOIN target_owners
-    ON target_owners.global_id = sentence_pair.target_global_id
+JOIN LATERAL (
+    SELECT target_match.application_id
+    FROM tsp.titan_matches AS target_match
+    WHERE target_match.global_id = sentence_pair.target_global_id
+    ORDER BY target_match.match_bucket_number
+    LIMIT 1
+) AS target_owner ON TRUE
+WHERE target_owner.application_id <> 10
+  AND EXISTS (
+      SELECT 1
+      FROM tsp.text_similarity_input AS target_input
+      WHERE target_input.application_id = target_owner.application_id
+        AND target_input.analysis_group = 'Asylee'
+  )
 ORDER BY target_application_id, source_global_id, target_global_id;
 ```
 
@@ -175,6 +181,9 @@ Example output:
 | 1003 | 5006 | 40 |
 
 The source application is excluded because an application must not match itself.
+Only one target bucket row is read because every bucket owned by a global ID has
+the same `application_id`. `EXISTS` checks the analysis group without repeating
+the sentence pair for every document owned by the target application.
 
 ## 4. Count sentence pairs for each target application
 
@@ -189,26 +198,26 @@ WITH source_sentence_pairs AS (
     CROSS JOIN LATERAL jsonb_object_keys(source_match.matches)
         AS target(target_global_id)
     WHERE source_match.application_id = 10
-),
-target_owners AS (
-    SELECT DISTINCT
-        target_match.global_id,
-        target_match.application_id
-    FROM source_sentence_pairs AS sentence_pair
-    JOIN tsp.titan_matches AS target_match
-        ON target_match.global_id = sentence_pair.target_global_id
-    JOIN tsp.text_similarity_input AS target_input
-        ON target_input.application_id = target_match.application_id
-       AND target_input.analysis_group = 'Asylee'
-    WHERE target_match.application_id <> 10
 )
 SELECT
-    target_owners.application_id AS target_application_id,
+    target_owner.application_id AS target_application_id,
     COUNT(*)::INTEGER AS sentence_match_count
 FROM source_sentence_pairs AS sentence_pair
-JOIN target_owners
-    ON target_owners.global_id = sentence_pair.target_global_id
-GROUP BY target_owners.application_id
+JOIN LATERAL (
+    SELECT target_match.application_id
+    FROM tsp.titan_matches AS target_match
+    WHERE target_match.global_id = sentence_pair.target_global_id
+    ORDER BY target_match.match_bucket_number
+    LIMIT 1
+) AS target_owner ON TRUE
+WHERE target_owner.application_id <> 10
+  AND EXISTS (
+      SELECT 1
+      FROM tsp.text_similarity_input AS target_input
+      WHERE target_input.application_id = target_owner.application_id
+        AND target_input.analysis_group = 'Asylee'
+  )
+GROUP BY target_owner.application_id
 ORDER BY sentence_match_count DESC, target_application_id;
 ```
 
@@ -236,26 +245,26 @@ WITH source_sentence_pairs AS (
         AS target(target_global_id)
     WHERE source_match.application_id = 10
 ),
-target_owners AS (
-    SELECT DISTINCT
-        target_match.global_id,
-        target_match.application_id
-    FROM source_sentence_pairs AS sentence_pair
-    JOIN tsp.titan_matches AS target_match
-        ON target_match.global_id = sentence_pair.target_global_id
-    JOIN tsp.text_similarity_input AS target_input
-        ON target_input.application_id = target_match.application_id
-       AND target_input.analysis_group = 'Asylee'
-    WHERE target_match.application_id <> 10
-),
 source_match_counts AS (
     SELECT
-        target_owners.application_id AS target_application_id,
+        target_owner.application_id AS target_application_id,
         COUNT(*)::INTEGER AS sentence_match_count
     FROM source_sentence_pairs AS sentence_pair
-    JOIN target_owners
-        ON target_owners.global_id = sentence_pair.target_global_id
-    GROUP BY target_owners.application_id
+    JOIN LATERAL (
+        SELECT target_match.application_id
+        FROM tsp.titan_matches AS target_match
+        WHERE target_match.global_id = sentence_pair.target_global_id
+        ORDER BY target_match.match_bucket_number
+        LIMIT 1
+    ) AS target_owner ON TRUE
+    WHERE target_owner.application_id <> 10
+      AND EXISTS (
+          SELECT 1
+          FROM tsp.text_similarity_input AS target_input
+          WHERE target_input.application_id = target_owner.application_id
+            AND target_input.analysis_group = 'Asylee'
+      )
+    GROUP BY target_owner.application_id
 )
 SELECT
     COALESCE(
@@ -329,19 +338,45 @@ WITH current_target_applications AS (
     FROM tsp.titan_matches AS source_match
     CROSS JOIN LATERAL jsonb_object_keys(source_match.matches)
         AS target(target_global_id)
-    JOIN tsp.titan_matches AS target_owner
-        ON target_owner.global_id = target.target_global_id::INTEGER
-    JOIN tsp.text_similarity_input AS target_input
-        ON target_input.application_id = target_owner.application_id
-       AND target_input.analysis_group = 'Asylee'
+    JOIN LATERAL (
+        SELECT target_match.application_id
+        FROM tsp.titan_matches AS target_match
+        WHERE target_match.global_id = target.target_global_id::INTEGER
+        ORDER BY target_match.match_bucket_number
+        LIMIT 1
+    ) AS target_owner ON TRUE
     WHERE source_match.application_id = 10
       AND target_owner.application_id <> 10
+      AND EXISTS (
+          SELECT 1
+          FROM tsp.text_similarity_input AS target_input
+          WHERE target_input.application_id = target_owner.application_id
+            AND target_input.analysis_group = 'Asylee'
+      )
 ),
 previous_target_applications AS (
     SELECT saved.application_id::INTEGER AS application_id
     FROM tsp.titan_similar_cases AS summary
     CROSS JOIN LATERAL jsonb_array_elements_text(
         summary.similar_application_ids
+    ) AS saved(application_id)
+    WHERE summary.application_id = 10
+
+    UNION
+
+    SELECT saved.application_id::INTEGER
+    FROM tsp.titan_similar_cases AS summary
+    CROSS JOIN LATERAL jsonb_array_elements_text(
+        summary.similar_case_ids
+    ) AS saved(application_id)
+    WHERE summary.application_id = 10
+
+    UNION
+
+    SELECT saved.application_id::INTEGER
+    FROM tsp.titan_similar_cases AS summary
+    CROSS JOIN LATERAL jsonb_array_elements_text(
+        summary.tah_case_ids
     ) AS saved(application_id)
     WHERE summary.application_id = 10
 )
@@ -362,7 +397,8 @@ Example output:
 Application 50 is returned because it was previously saved but has no current
 sentence match with application 10. The refresh removes 50 from application 10
 and removes 10 from application 50. Application 50's relationships with 60 and
-70 remain unchanged.
+70 remain unchanged. All three previous lists are checked so an inconsistent
+older row can also be repaired.
 
 ## 8. Safely run the complete function
 
@@ -403,13 +439,16 @@ Example function output before `ROLLBACK`:
 | refreshed_application_id | refreshed_similar_application_ids | refreshed_similar_case_ids | refreshed_similar_case_count | refreshed_tah_case_ids | refreshed_tah_case_count | refreshed_is_tah |
 |---:|---|---|---:|---|---:|---|
 | 10 | `[20, 30, 40]` | `[30, 40]` | 2 | `[40]` | 1 | true |
-| 20 | `[10, 60]` | `[60]` | 1 | `[]` | 0 | false |
-| 30 | `[10]` | `[10]` | 1 | `[]` | 0 | false |
-| 40 | `[10]` | `[10]` | 1 | `[10]` | 1 | true |
 | 50 | `[60, 70]` | `[60]` | 1 | `[]` | 0 | false |
 
-The first result is what the Python service receives. The second result shows
-what the table would contain if the transaction were committed.
+The function returns application 10 because it is always the source. It returns
+application 50 because its reverse relationship changed. Applications 20, 30,
+and 40 are not returned because they already stored application 10 in the
+correct lists; they were neither locked nor rewritten.
+
+The first result is what the Python service receives. The second `SELECT` still
+shows all five rows, including unchanged applications, so the final table state
+can be verified before the transaction is rolled back.
 
 ## 9. Save the result when the output is correct
 
@@ -429,8 +468,9 @@ FROM tsp.refresh_titan_similar_cases(
 COMMIT;
 ```
 
-The saved rows should match the example function output from the previous 
-section. Unlike `ROLLBACK`, `COMMIT` keeps those changes in the database.
+The source and changed reverse rows should match the example function output
+from the previous section. Unchanged target rows keep their existing values and
+`last_modified` timestamp. Unlike `ROLLBACK`, `COMMIT` keeps the changes.
 
 Do not run `COMMIT` while experimenting with sample IDs. Use it only after 
 the source application and analysis group have been verified.

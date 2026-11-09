@@ -1,6 +1,9 @@
+import time
+
+from case_similarity_completed.opensearch import constants
 from case_similarity_completed.opensearch.contracts import SqsMessage, TspId
 from case_similarity_completed.opensearch.dependencies import Dependencies
-from case_similarity_completed.opensearch.errors import OperationFailedError, PermanentDataError, QueueSendError
+from case_similarity_completed.opensearch.errors import CaseSimilarityError
 from case_similarity_completed.opensearch.retry import safe_error_summary
 
 
@@ -11,40 +14,98 @@ class SqsProcessor:
         self.dependencies = dependencies
 
     def run(self) -> None:
-        """Continuously receive and process one SQS document message at a time."""
+        """Continuously collect and process up to 100 SQS messages together."""
 
         while True:
-            for message in self.dependencies.aws_sqs.listen_sqs_message():
-                self._process_case_similarity_message(message)
+            first_messages = self.dependencies.aws_sqs.listen_sqs_message()
+            if not first_messages:
+                continue
+            message_batch = self._collect_message_batch(first_messages)
+            self._process_case_similarity_messages(message_batch)
 
-    def _process_case_similarity_message(self, message: SqsMessage) -> None:
-        """Process one document and delete its message only after completion.
-        Failures remain available for the configured SQS retry and DLQ policy.
+    def _collect_message_batch(self, first_messages: list[SqsMessage]) -> list[SqsMessage]:
+        """Collect visible messages for 15 seconds, up to the 100-message limit.
 
-        Input: message={"tsp_id": 100, "ReceiptHandle": "receipt-value"}
+        Input: the first SQS receive returns 10 messages.
+        Output: up to 100 messages. A backlog of at least 100 is collected
+        immediately; a smaller backlog gets 15 seconds to receive more work.
         """
 
-        try:
+        message_batch = list(first_messages)
+        visible_message_count = self.dependencies.aws_sqs.get_approximate_message_count()
+        if len(message_batch) + visible_message_count < constants.SQS_MESSAGE_BATCH_SIZE:
+            time.sleep(constants.SQS_BATCH_WAIT_SECONDS)
+            visible_message_count = self.dependencies.aws_sqs.get_approximate_message_count()
+
+        # The shared SQS client receives at most ten messages per call. Stop
+        # before a call could take this batch above 100; remaining messages stay
+        # visible and will be collected by the next batch.
+        while (
+            visible_message_count > 0
+            and len(message_batch) <= constants.SQS_MESSAGE_BATCH_SIZE - constants.SQS_RECEIVE_BATCH_SIZE
+        ):
+            received_messages = self.dependencies.aws_sqs.listen_sqs_message()
+            if not received_messages:
+                break
+            message_batch.extend(received_messages)
+            visible_message_count = max(0, visible_message_count - len(received_messages))
+
+        self.dependencies.logger.info(
+            f"Collected {len(message_batch)} Case Similarity SQS message(s) for processing."
+        )
+        return message_batch
+
+    def _process_case_similarity_message(self, message: SqsMessage) -> None:
+        """Process one message through the same path used by a collected batch."""
+
+        self._process_case_similarity_messages([message])
+
+    def _process_case_similarity_messages(self, messages: list[SqsMessage]) -> None:
+        """Process a message batch and delete only individually successful work.
+
+        Input: two messages for application 10 and one for application 20.
+        Output: application 10 is refreshed once, application 20 is refreshed
+        once, and each successful source message is deleted separately.
+        """
+
+        valid_messages: list[SqsMessage] = []
+        tsp_ids: list[TspId] = []
+        for message in messages:
             tsp_id = self._read_tsp_id_from_message(message)
             if tsp_id is None:
-                self._leave_case_similarity_message_for_sqs("The SQS message is missing the required tsp_id.")
-                return
-            self.dependencies.logger.set_generic_message(f"tsp_id={tsp_id}")
-            self.dependencies.logger.info("Starting a Case Similarity document message.")
-            case_similarity_result = self.dependencies.case_similarity_handler.process_case_similarity(tsp_id)
-            if case_similarity_result is None:
-                self._leave_case_similarity_message_for_sqs("Case Similarity did not complete the message.")
-                return
+                self._leave_case_similarity_message_for_sqs(
+                    "The SQS message is missing the required tsp_id."
+                )
+                continue
+            valid_messages.append(message)
+            tsp_ids.append(tsp_id)
 
-            if not self.dependencies.aws_sqs.delete_messages(message):
-                self.dependencies.logger.error("Processing completed, but source message deletion failed.")
-                return
-            self.dependencies.logger.info("Case Similarity completed and deleted the source SQS message.")
-        except (OperationFailedError, PermanentDataError, QueueSendError) as error:
-            self.dependencies.logger.error(
-                f"Case Similarity stopped because of {safe_error_summary(error)}"
-            )
+        if not valid_messages:
             return
+
+        try:
+            self.dependencies.logger.set_generic_message(
+                f"message_count={len(valid_messages)}: "
+            )
+            processing_results = self.dependencies.case_similarity_handler.process_case_similarity_batch(tsp_ids)
+            deleted_message_count = 0
+            for message, processing_succeeded in zip(valid_messages, processing_results, strict=True):
+                if not processing_succeeded:
+                    continue
+                if self.dependencies.aws_sqs.delete_messages(message):
+                    deleted_message_count += 1
+                else:
+                    self.dependencies.logger.error(
+                        "Processing completed, but one source message deletion failed."
+                    )
+            self.dependencies.logger.info(
+                f"Deleted {deleted_message_count} of {len(valid_messages)} source SQS message(s)."
+            )
+        except CaseSimilarityError as error:
+            self.dependencies.logger.error(
+                "Case Similarity batch stopped because of "
+                f"{safe_error_summary(error)}"
+            )
         finally:
             self.dependencies.logger.set_generic_message(None)
 

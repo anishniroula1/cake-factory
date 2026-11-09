@@ -4,8 +4,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from case_similarity_completed.opensearch.contracts import SkippedKafkaEvent
-from case_similarity_completed.opensearch.errors import KafkaPublishError, QueueSendError
+from case_similarity_completed.opensearch import sqs_processor as sqs_processor_module
+from case_similarity_completed.opensearch.contracts import CaseSummary, DocumentContext, SkippedKafkaEvent
+from case_similarity_completed.opensearch.errors import KafkaPublishError, OperationFailedError
 from case_similarity_completed.opensearch.handlers.case_similarity_handler import CaseSimilarityHandler
 from case_similarity_completed.opensearch.kafka_processor import KafkaProcessor
 from case_similarity_completed.opensearch.sqs_processor import SqsProcessor
@@ -36,7 +37,7 @@ def test_one_live_message_runs_the_complete_case_similarity_flow(service_config)
 
     assert {
         "refreshed_applications": database_store.refreshed,
-        "next_message": aws_sqs.sent[0]["message_body"],
+        "next_message": aws_sqs.sent[0]["batch"][0],
         "deleted_messages": aws_sqs.deleted,
         "kafka_key": kafka_producer.published[0][1],
         "kafka_payload": kafka_payload,
@@ -54,6 +55,66 @@ def test_one_live_message_runs_the_complete_case_similarity_flow(service_config)
         },
         "saved_delivery_count": 1,
     }
+
+
+def test_message_batch_refreshes_unique_applications_and_forwards_every_document(service_config):
+    messages = [
+        {"tsp_id": 10, "ReceiptHandle": "receipt-10"},
+        {"tsp_id": 11, "ReceiptHandle": "receipt-11"},
+        {"tsp_id": 20, "ReceiptHandle": "receipt-20"},
+    ]
+    database_store = CaseSimilarityDBStoreFake()
+    database_store.contexts_by_tsp_id = {
+        "10": DocumentContext(10, 100, 900001, "Asylee"),
+        "11": DocumentContext(11, 100, 900001, "Asylee"),
+        "20": DocumentContext(20, 200, 900002, "Asylee"),
+    }
+    aws_sqs = AwsSqsFake(messages)
+    logger = LoggerFake()
+    handler = CaseSimilarityHandler(
+        service_config,
+        database_store,
+        KafkaProcessor(service_config, KafkaProducerFake(), KafkaEventDBStoreFake(), logger),
+        aws_sqs,
+        logger,
+    )
+    processor = SqsProcessor(DependenciesFake(aws_sqs, handler, logger))
+
+    processor._process_case_similarity_messages(messages)
+
+    assert database_store.refreshed == [(100, "Asylee"), (200, "Asylee")]
+    assert [message["tsp_id"] for message in aws_sqs.sent[0]["batch"]] == ["10", "11", "20"]
+    assert aws_sqs.deleted == messages
+    assert any("2 unique application_id(s)" in message for level, message in logger.messages if level == "info")
+
+
+def test_batch_keeps_missing_and_failed_application_messages(service_config):
+    database_store = CaseSimilarityDBStoreFake()
+    database_store.contexts_by_tsp_id = {"20": None}
+    database_store.refresh_error = OperationFailedError("database unavailable")
+    aws_sqs = AwsSqsFake()
+    handler = CaseSimilarityHandler(
+        service_config,
+        database_store,
+        KafkaProcessor(service_config, KafkaProducerFake(), KafkaEventDBStoreFake(), LoggerFake()),
+        aws_sqs,
+        LoggerFake(),
+    )
+
+    assert handler.process_case_similarity_batch([]) == []
+    assert handler.process_case_similarity_batch([10, 20]) == [False, False]
+    assert CaseSummary(100, "Asylee", [], [], [200]).is_tah is True
+
+
+def test_sqs_collection_waits_and_collects_an_available_message(monkeypatch):
+    first_message = {"tsp_id": 10, "ReceiptHandle": "receipt-10"}
+    second_message = {"tsp_id": 11, "ReceiptHandle": "receipt-11"}
+    aws_sqs = AwsSqsFake(approximate_message_count=1)
+    aws_sqs.listen_sqs_message = Mock(return_value=[second_message])
+    processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(), LoggerFake()))
+    monkeypatch.setattr(sqs_processor_module.time, "sleep", lambda seconds: None)
+
+    assert processor._collect_message_batch([first_message]) == [first_message, second_message]
 
 
 def test_failed_message_is_not_deleted():
@@ -127,7 +188,7 @@ def test_kafka_uses_current_time_when_broker_timestamp_is_missing():
     assert timestamp.endswith("+00:00")
 
 
-def test_handler_reports_when_next_queue_send_fails(service_config):
+def test_handler_keeps_source_message_when_next_queue_send_fails(service_config):
     handler = CaseSimilarityHandler(
         service_config,
         CaseSimilarityDBStoreFake(),
@@ -136,8 +197,7 @@ def test_handler_reports_when_next_queue_send_fails(service_config):
         LoggerFake(),
     )
 
-    with pytest.raises(QueueSendError):
-        handler._send_case_similarity_result_to_next_queue(10)
+    assert handler._send_case_similarity_results_to_next_queue([10], [0]) == [False]
 
 
 def test_sqs_processor_reports_missing_id_and_delete_failure():
@@ -165,11 +225,12 @@ def test_sqs_processor_reports_missing_id_and_delete_failure():
     }
 
 
-def test_sqs_run_keeps_listening():
+def test_sqs_run_keeps_listening(monkeypatch):
     message = {"tsp_id": 10, "MessageId": "case-local", "ReceiptHandle": "receipt-local"}
     aws_sqs = AwsSqsFake()
     aws_sqs.listen_sqs_message = Mock(side_effect=[[message], KeyboardInterrupt])
     processor = SqsProcessor(DependenciesFake(aws_sqs, HandlerFake(completed=False), LoggerFake()))
+    monkeypatch.setattr(sqs_processor_module.time, "sleep", lambda seconds: None)
 
     with pytest.raises(KeyboardInterrupt):
         processor.run()

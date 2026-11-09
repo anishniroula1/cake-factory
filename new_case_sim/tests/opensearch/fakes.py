@@ -31,11 +31,17 @@ class LoggerFake:
 
 class AwsSqsFake:
     def __init__(
-        self, messages: list[dict] | None = None, send_result: bool = True, delete_result: bool = True, **init_values
+        self,
+        messages: list[dict] | None = None,
+        send_result: bool = True,
+        delete_result: bool = True,
+        approximate_message_count: int = 0,
+        **init_values,
     ) -> None:
         self.messages = messages or []
         self.send_result = send_result
         self.delete_result = delete_result
+        self.approximate_message_count = approximate_message_count
         self.init_values = init_values
         self.sent = []
         self.deleted = []
@@ -43,9 +49,19 @@ class AwsSqsFake:
     def listen_sqs_message(self) -> list[dict]:
         return self.messages
 
+    def get_approximate_message_count(self) -> int:
+        return self.approximate_message_count
+
     def send_sqs_message(self, **values) -> bool:
         self.sent.append(values)
         return self.send_result
+
+    def send_messages_in_batch(self, queue_url, batch, **values):
+        self.sent.append({"queue_url": queue_url, "batch": batch, **values})
+        return {
+            "status": "SUCCEEDED" if self.send_result else "FAILED",
+            "data": [] if self.send_result else batch,
+        }
 
     def delete_messages(self, message: dict) -> bool:
         self.deleted.append(message)
@@ -55,6 +71,7 @@ class AwsSqsFake:
 class CaseSimilarityDBStoreFake:
     def __init__(self) -> None:
         self.context = DocumentContext(10, 100, 900001, "Asylee")
+        self.contexts_by_tsp_id = {}
         self.summaries = [
             # Application 100 has one sentence pair with 200, two with 300,
             # and three with 400. This represents all three case-match levels.
@@ -64,13 +81,28 @@ class CaseSimilarityDBStoreFake:
             CaseSummary(400, "Asylee", [100], [100], [100]),
         ]
         self.refreshed = []
+        self.refresh_error = None
 
     def load_case_similarity_document_context(self, tsp_id):
         return self.context
 
+    def load_case_similarity_document_contexts(self, tsp_ids):
+        return [
+            self.contexts_by_tsp_id.get(
+                str(tsp_id),
+                DocumentContext(tsp_id, self.context.application_id, self.context.a_number, self.context.analysis_group),
+            )
+            for tsp_id in tsp_ids
+            if str(tsp_id) not in self.contexts_by_tsp_id or self.contexts_by_tsp_id[str(tsp_id)] is not None
+        ]
+
     def refresh_bidirectional_case_summaries(self, source_application_id, analysis_group):
+        if self.refresh_error:
+            raise self.refresh_error
         self.refreshed.append((source_application_id, analysis_group))
-        return self.summaries
+        if any(summary.application_id == source_application_id for summary in self.summaries):
+            return self.summaries
+        return [CaseSummary(source_application_id, analysis_group, [], [], [])]
 
 
 class HandlerFake:
@@ -79,13 +111,13 @@ class HandlerFake:
         self.failure = failure
         self.completed = completed
 
-    def process_case_similarity(self, tsp_id):
-        self.calls.append(tsp_id)
+    def process_case_similarity_batch(self, tsp_ids):
+        self.calls.extend(tsp_ids)
         if self.failure:
             raise OperationFailedError("temporary database failure")
         if not self.completed:
-            return None
-        return {"tsp_id": tsp_id}
+            return [False] * len(tsp_ids)
+        return [True] * len(tsp_ids)
 
 
 class DependenciesFake:
