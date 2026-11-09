@@ -75,10 +75,10 @@ class CaseSimilarityDBStoreFake:
         self.summaries = [
             # Application 100 has one sentence pair with 200, two with 300,
             # and three with 400. This represents all three case-match levels.
-            CaseSummary(100, "Asylee", [200, 300, 400], [300, 400], [400]),
-            CaseSummary(200, "Asylee", [100], [], []),
-            CaseSummary(300, "Asylee", [100], [100], []),
-            CaseSummary(400, "Asylee", [100], [100], [100]),
+            CaseSummary(100, "Asylee", 2, 1),
+            CaseSummary(200, "Asylee", 0, 0),
+            CaseSummary(300, "Asylee", 1, 0),
+            CaseSummary(400, "Asylee", 1, 1),
         ]
         self.refreshed = []
         self.refresh_error = None
@@ -102,7 +102,7 @@ class CaseSimilarityDBStoreFake:
         self.refreshed.append((source_application_id, analysis_group))
         if any(summary.application_id == source_application_id for summary in self.summaries):
             return self.summaries
-        return [CaseSummary(source_application_id, analysis_group, [], [], [])]
+        return [CaseSummary(source_application_id, analysis_group, 0, 0)]
 
 
 class HandlerFake:

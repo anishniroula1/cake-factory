@@ -436,19 +436,20 @@ ROLLBACK;
 
 Example function output before `ROLLBACK`:
 
-| refreshed_application_id | refreshed_similar_application_ids | refreshed_similar_case_ids | refreshed_similar_case_count | refreshed_tah_case_ids | refreshed_tah_case_count | refreshed_is_tah |
-|---:|---|---|---:|---|---:|---|
-| 10 | `[20, 30, 40]` | `[30, 40]` | 2 | `[40]` | 1 | true |
-| 50 | `[60, 70]` | `[60]` | 1 | `[]` | 0 | false |
+| refreshed_application_id | refreshed_similar_case_count | refreshed_tah_case_count |
+|---:|---:|---:|
+| 10 | 2 | 1 |
+| 50 | 1 | 0 |
 
 The function returns application 10 because it is always the source. It returns
 application 50 because its reverse relationship changed. Applications 20, 30,
 and 40 are not returned because they already stored application 10 in the
 correct lists; they were neither locked nor rewritten.
 
-The first result is what the Python service receives. The second `SELECT` still
-shows all five rows, including unchanged applications, so the final table state
-can be verified before the transaction is rolled back.
+The function returns only the ID and counts used by the Python service. The
+second `SELECT` shows the full saved lists for all five rows, including
+unchanged applications, so the final table state can be checked before the
+transaction is rolled back.
 
 ## 9. Save the result when the output is correct
 

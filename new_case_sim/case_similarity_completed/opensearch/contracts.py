@@ -32,40 +32,12 @@ class DocumentContext:
 
 @dataclass(frozen=True)
 class CaseSummary:
-    """Complete Case Similarity result for one application."""
+    """Counts returned after one application summary is refreshed."""
 
     application_id: int
     analysis_group: str
-    similar_application_ids: list[int]
-    similar_case_ids: list[int]
-    tah_case_ids: list[int]
-
-    @property
-    def similar_case_count(self) -> int:
-        """Return the number of applications that pass the similar-case rule.
-
-        Output: 2 when similar_case_ids=[200, 300].
-        """
-
-        return len(self.similar_case_ids)
-
-    @property
-    def tah_case_count(self) -> int:
-        """Return the number of applications that pass the TAH rule.
-
-        Output: 1 when tah_case_ids=[200].
-        """
-
-        return len(self.tah_case_ids)
-
-    @property
-    def is_tah(self) -> bool:
-        """Return whether at least one target application passes the TAH rule.
-
-        Output: True when tah_case_ids=[200], or False when the list is empty.
-        """
-
-        return bool(self.tah_case_ids)
+    similar_case_count: int
+    tah_case_count: int
 
 
 @dataclass(frozen=True)

@@ -103,7 +103,7 @@ def test_batch_keeps_missing_and_failed_application_messages(service_config):
 
     assert handler.process_case_similarity_batch([]) == []
     assert handler.process_case_similarity_batch([10, 20]) == [False, False]
-    assert CaseSummary(100, "Asylee", [], [], [200]).is_tah is True
+    assert CaseSummary(100, "Asylee", 0, 1).tah_case_count == 1
 
 
 def test_sqs_collection_waits_and_collects_an_available_message(monkeypatch):

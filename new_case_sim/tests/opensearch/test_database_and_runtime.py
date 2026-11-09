@@ -51,12 +51,8 @@ def test_database_store_loads_document_and_refreshes_case_summaries(service_conf
             [
                 {
                     "application_id": 100,
-                    "similar_application_ids": [200, 300],
-                    "similar_case_ids": [300],
                     "similar_case_count": 1,
-                    "tah_case_ids": [],
                     "tah_case_count": 0,
-                    "is_tah": False,
                 }
             ]
         )
@@ -68,13 +64,13 @@ def test_database_store_loads_document_and_refreshes_case_summaries(service_conf
 
     assert {
         "context": (context.tsp_id, context.application_id, context.a_number, context.analysis_group),
-        "similar_application_ids": summaries[0].similar_application_ids,
-        "similar_case_ids": summaries[0].similar_case_ids,
+        "similar_case_count": summaries[0].similar_case_count,
+        "tah_case_count": summaries[0].tah_case_count,
         "summary_commits": summary_session.commits,
     } == {
         "context": (10, 100, 900001, "Asylee"),
-        "similar_application_ids": [200, 300],
-        "similar_case_ids": [300],
+        "similar_case_count": 1,
+        "tah_case_count": 0,
         "summary_commits": 1,
     }
 

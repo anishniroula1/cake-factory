@@ -39,33 +39,23 @@ LOAD_DOCUMENTS = text(
 #   Application 100 has 1 matching sentence with application 200, 2 with
 #   application 300, and 3 with application 400.
 #
-# Output for the source application:
+# Output used by Python for the source application:
 #   {
 #       "application_id": 100,
-#       "similar_application_ids": [200, 300, 400],
-#       "similar_case_ids": [300, 400],
 #       "similar_case_count": 2,
-#       "tah_case_ids": [400],
-#       "tah_case_count": 1,
-#       "is_tah": true
+#       "tah_case_count": 1
 #   }
 #
-# The function also returns reverse rows. Application 200 receives 100 only in
-# similar_application_ids. Application 300 receives 100 in both
-# similar_application_ids and similar_case_ids. Application 400 receives 100
-# in all three lists. Existing relationships to other applications remain.
-# When application 100 has no matches, its stored summary is removed and it is
-# returned with empty lists, zero counts, and is_tah=false.
+# The function also returns the ID and counts for reverse rows that changed.
+# Their full JSONB lists remain stored in titan_similar_cases and are not sent
+# back to Python. When application 100 has no matches, its stored summary is
+# removed and both returned counts are zero.
 REFRESH_CASE_SUMMARIES = text(
     """
     SELECT
         refreshed_application_id AS application_id,
-        refreshed_similar_application_ids AS similar_application_ids,
-        refreshed_similar_case_ids AS similar_case_ids,
         refreshed_similar_case_count AS similar_case_count,
-        refreshed_tah_case_ids AS tah_case_ids,
-        refreshed_tah_case_count AS tah_case_count,
-        refreshed_is_tah AS is_tah
+        refreshed_tah_case_count AS tah_case_count
     FROM tsp.refresh_titan_similar_cases(
         :source_application_id,
         :analysis_group,
@@ -142,16 +132,15 @@ class CaseSimilarityDBStore:
         Output: CaseSummary rows for application 100 and each connected
         application whose relationship to 100 changed.
 
-        With thresholds 2 and 3, one matching sentence adds the target only to
-        similar_application_ids, two also add it to similar_case_ids, and three
-        also add it to tah_case_ids. A source with no matches is returned with
-        empty lists but is not stored in titan_similar_cases.
+        With thresholds 2 and 3, two matching sentence pairs make a similar
+        case and three make a TAH case. A source with no matches is returned
+        with zero counts but is not stored in titan_similar_cases.
         """
 
         with self.session_factory() as session:
-            # PostgreSQL counts the source relationships, locks rows in order,
-            # and updates both directions. It returns the final rows after the
-            # generated columns calculate their counts and TAH values.
+            # PostgreSQL counts the relationships, locks rows in order, and
+            # updates both directions. It returns only the IDs and counts used
+            # by this service.
             refreshed_summary_records = (
                 session.execute(
                     REFRESH_CASE_SUMMARIES,
@@ -167,15 +156,12 @@ class CaseSimilarityDBStore:
             )
             session.commit()
 
-        # JSONB arrays come back as normal Python lists. Convert every ID to int
-        # so callers always receive the same type.
         return [
             CaseSummary(
                 application_id=int(summary_record["application_id"]),
                 analysis_group=analysis_group,
-                similar_application_ids=[int(value) for value in summary_record["similar_application_ids"]],
-                similar_case_ids=[int(value) for value in summary_record["similar_case_ids"]],
-                tah_case_ids=[int(value) for value in summary_record["tah_case_ids"]],
+                similar_case_count=int(summary_record["similar_case_count"]),
+                tah_case_count=int(summary_record["tah_case_count"]),
             )
             for summary_record in refreshed_summary_records
         ]
