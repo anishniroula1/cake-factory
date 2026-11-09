@@ -1,264 +1,258 @@
-# Delete and compare Titan matches by application
+# Delete and compare Titan case summaries by application
 
-These are normal SQL queries that can be copied into pgAdmin. They do not
-create a stored function.
+These are normal SQL queries for pgAdmin. They do not create a stored
+function, and they do not change `tsp.titan_matches`.
 
-The first query shows every application matched to one source application. The
-second query deletes that application's `tsp.titan_matches` rows and removes
-the reverse relationships from the other applications.
+The first query shows every application saved in one source application's
+summary. The second query deletes that source row from
+`tsp.titan_similar_cases` and removes its reverse references from the other
+application summaries.
 
-## 1. Show every application matched to the source application
+## 1. Show all saved matches for one application
 
-Change `10` to the source `application_id`. Save this result before deleting
-anything. After rebuilding the matches, run the same query and compare the new
-result with the saved result.
+Change `10` to the source `application_id`. Save this output before deleting
+the summary. After Case Similarity rebuilds it, run the query again and compare
+the two results.
 
 ```sql
 WITH parameters AS (
     SELECT 10::INTEGER AS source_application_id
 ),
-sentence_relationships AS (
-    SELECT DISTINCT
-        source_match.application_id AS source_application_id,
-        source_match.global_id AS source_global_id,
-        source_match.tsp_id AS source_tsp_id,
-        target_owner.application_id AS target_application_id,
-        target.target_global_id::INTEGER AS target_global_id,
-        target_owner.tsp_id AS target_tsp_id,
-        target.distance::DOUBLE PRECISION AS distance
-    FROM parameters
-    JOIN tsp.titan_matches AS source_match
-        ON source_match.application_id = parameters.source_application_id
-    CROSS JOIN LATERAL JSONB_EACH_TEXT(source_match.matches)
-        AS target(target_global_id, distance)
-    CROSS JOIN LATERAL (
-        /* One sentence can own several buckets. One row is enough here. */
-        SELECT candidate.application_id, candidate.tsp_id
-        FROM tsp.titan_matches AS candidate
-        WHERE candidate.global_id = target.target_global_id::INTEGER
-        ORDER BY candidate.match_bucket_number
-        LIMIT 1
-    ) AS target_owner
-    WHERE target_owner.application_id <> source_match.application_id
+source_summary AS (
+    SELECT summary.*
+    FROM tsp.titan_similar_cases AS summary
+    JOIN parameters
+        ON parameters.source_application_id = summary.application_id
+),
+target_application_ids AS (
+    /* Read all three lists in case an older row has inconsistent subsets. */
+    SELECT saved.application_id::INTEGER AS target_application_id
+    FROM source_summary
+    CROSS JOIN LATERAL JSONB_ARRAY_ELEMENTS_TEXT(
+        source_summary.similar_application_ids
+    ) AS saved(application_id)
+
+    UNION
+
+    SELECT saved.application_id::INTEGER
+    FROM source_summary
+    CROSS JOIN LATERAL JSONB_ARRAY_ELEMENTS_TEXT(
+        source_summary.similar_case_ids
+    ) AS saved(application_id)
+
+    UNION
+
+    SELECT saved.application_id::INTEGER
+    FROM source_summary
+    CROSS JOIN LATERAL JSONB_ARRAY_ELEMENTS_TEXT(
+        source_summary.tah_case_ids
+    ) AS saved(application_id)
 )
 SELECT
-    relationship.source_application_id,
-    relationship.target_application_id,
-    COUNT(*)::INTEGER AS relationship_count,
-    COUNT(DISTINCT relationship.source_global_id)::INTEGER
-        AS source_sentence_count,
-    COUNT(DISTINCT relationship.target_global_id)::INTEGER
-        AS target_sentence_count,
-    COUNT(*) FILTER (WHERE relationship.distance = 0.0)::INTEGER
-        AS exact_relationship_count,
-    COUNT(*) FILTER (WHERE relationship.distance <> 0.0)::INTEGER
-        AS similar_relationship_count,
-    ARRAY_AGG(
-        DISTINCT relationship.source_tsp_id
-        ORDER BY relationship.source_tsp_id
-    ) AS source_tsp_ids,
-    ARRAY_AGG(
-        DISTINCT relationship.target_tsp_id
-        ORDER BY relationship.target_tsp_id
-    ) AS target_tsp_ids,
-    TRUE AS is_similar_application,
-    COUNT(*) >= 2 AS is_similar_case,
-    COUNT(*) >= 3 AS is_tah_case
-FROM sentence_relationships AS relationship
-GROUP BY
-    relationship.source_application_id,
-    relationship.target_application_id
-ORDER BY
-    relationship_count DESC,
-    relationship.target_application_id;
+    parameters.source_application_id,
+    target.target_application_id,
+    source_summary.similar_application_ids
+        @> JSONB_BUILD_ARRAY(target.target_application_id)
+        AS is_similar_application,
+    source_summary.similar_case_ids
+        @> JSONB_BUILD_ARRAY(target.target_application_id)
+        AS is_similar_case,
+    source_summary.tah_case_ids
+        @> JSONB_BUILD_ARRAY(target.target_application_id)
+        AS is_tah_case,
+    COALESCE(
+        reverse_summary.similar_application_ids
+            @> JSONB_BUILD_ARRAY(parameters.source_application_id),
+        FALSE
+    ) AS reverse_similar_application_saved,
+    COALESCE(
+        reverse_summary.similar_case_ids
+            @> JSONB_BUILD_ARRAY(parameters.source_application_id),
+        FALSE
+    ) AS reverse_similar_case_saved,
+    COALESCE(
+        reverse_summary.tah_case_ids
+            @> JSONB_BUILD_ARRAY(parameters.source_application_id),
+        FALSE
+    ) AS reverse_tah_case_saved
+FROM parameters
+JOIN source_summary ON TRUE
+JOIN target_application_ids AS target ON TRUE
+LEFT JOIN tsp.titan_similar_cases AS reverse_summary
+    ON reverse_summary.application_id = target.target_application_id
+ORDER BY target.target_application_id;
 ```
 
 Example output:
 
-| source_application_id | target_application_id | relationship_count | source_sentence_count | target_sentence_count | is_similar_application | is_similar_case | is_tah_case |
-|---:|---:|---:|---:|---:|:---:|:---:|:---:|
-| 10 | 20 | 5 | 3 | 4 | true | true | true |
-| 10 | 30 | 2 | 2 | 2 | true | true | false |
-| 10 | 40 | 1 | 1 | 1 | true | false | false |
+| source_application_id | target_application_id | is_similar_application | is_similar_case | is_tah_case | reverse_similar_application_saved | reverse_similar_case_saved | reverse_tah_case_saved |
+|---:|---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 10 | 20 | true | false | false | true | false | false |
+| 10 | 30 | true | true | false | true | true | false |
+| 10 | 40 | true | true | true | true | true | true |
 
-The Case Similarity rules are:
+The first three booleans show the source lists. The last three show whether the
+same category was saved in the reverse direction.
 
-- One or more sentence relationships: similar application.
-- Two or more sentence relationships: similar case.
-- Three or more sentence relationships: TAH case.
-
-## 2. Delete all relationships for one application
+## 2. Delete the source summary and its reverse references
 
 Change `10` to the `application_id`, then run the complete script in pgAdmin.
-
-This script:
-
-1. Finds every source `global_id` owned by the application.
-2. Finds the reverse bucket and JSONB key stored by each target sentence.
-3. Locks the affected buckets in a consistent order.
-4. Removes the source keys from the target applications.
-5. Deletes reverse buckets that became empty.
-6. Deletes every source bucket owned by the application.
-7. Confirms that both directions are gone.
+This script changes only `tsp.titan_similar_cases`.
 
 ```sql
 BEGIN;
 
-/*
- * Keep the application ID in one temporary row so it is changed in one place.
- * Replace 10 with the application being tested.
- */
-CREATE TEMP TABLE delete_application_parameter
+/* Replace 10 with the application being tested. */
+CREATE TEMP TABLE delete_case_summary_parameter
 ON COMMIT DROP
 AS
 SELECT 10::INTEGER AS application_id;
 
-/*
- * Save the source global IDs before deleting anything.
- *
- * Example: application 10 owns global IDs 100 and 101, so this temporary
- * table contains two rows: 100 and 101.
- */
-CREATE TEMP TABLE delete_application_source_ids
+/* Save only the reverse rows that contain this application ID. */
+CREATE TEMP TABLE delete_case_summary_reverse_ids
 ON COMMIT DROP
 AS
-SELECT DISTINCT source_match.global_id
-FROM tsp.titan_matches AS source_match
-JOIN delete_application_parameter AS parameter
-    ON parameter.application_id = source_match.application_id;
+SELECT summary.application_id
+FROM tsp.titan_similar_cases AS summary
+CROSS JOIN delete_case_summary_parameter AS parameter
+WHERE summary.application_id <> parameter.application_id
+  AND (
+      summary.similar_application_ids
+          @> JSONB_BUILD_ARRAY(parameter.application_id)
+      OR summary.similar_case_ids
+          @> JSONB_BUILD_ARRAY(parameter.application_id)
+      OR summary.tah_case_ids
+          @> JSONB_BUILD_ARRAY(parameter.application_id)
+  );
 
 /*
- * Prepare the keys that must be removed from the reverse rows.
+ * Lock the source row and every row containing its reverse relationship.
+ * Sorting by application_id gives concurrent transactions a consistent order.
+ */
+SELECT summary.application_id
+FROM tsp.titan_similar_cases AS summary
+CROSS JOIN delete_case_summary_parameter AS parameter
+WHERE summary.application_id = parameter.application_id
+   OR summary.application_id IN (
+       SELECT reverse_id.application_id
+       FROM delete_case_summary_reverse_ids AS reverse_id
+   )
+ORDER BY summary.application_id
+FOR UPDATE OF summary;
+
+/*
+ * Remove the source application ID from all reverse lists.
  *
- * Example: global ID 100 matches global ID 200. The reverse relationship is
- * stored under owner 200 in bucket titan_match_bucket(100). The value
- * removed_keys contains {"100"}.
- */
-CREATE TEMP TABLE delete_application_reverse_keys
-ON COMMIT DROP
-AS
-SELECT
-    target.target_global_id::INTEGER AS owner_global_id,
-    tsp.titan_match_bucket(source_match.global_id) AS match_bucket_number,
-    ARRAY_AGG(
-        DISTINCT source_match.global_id::TEXT
-        ORDER BY source_match.global_id::TEXT
-    ) AS removed_keys
-FROM tsp.titan_matches AS source_match
-JOIN delete_application_parameter AS parameter
-    ON parameter.application_id = source_match.application_id
-CROSS JOIN LATERAL JSONB_OBJECT_KEYS(source_match.matches)
-    AS target(target_global_id)
-WHERE NOT EXISTS (
-    /* Same-application rows will be deleted completely in the final delete. */
-    SELECT 1
-    FROM delete_application_source_ids AS source_id
-    WHERE source_id.global_id = target.target_global_id::INTEGER
-)
-GROUP BY
-    target.target_global_id::INTEGER,
-    tsp.titan_match_bucket(source_match.global_id);
-
-/*
- * Take the same advisory bucket locks used by the bidirectional upsert.
- * PostgreSQL releases these locks when this transaction commits or rolls back.
- */
-SELECT PG_ADVISORY_XACT_LOCK(affected.lock_id)
-FROM (
-    SELECT DISTINCT
-        HASHTEXTEXTENDED(
-            CONCAT_WS(
-                ':',
-                'titan_matches',
-                bucket_identity.owner_global_id,
-                bucket_identity.match_bucket_number
-            ),
-            0
-        ) AS lock_id
-    FROM (
-        /* Lock all 16 possible buckets owned by each source sentence. */
-        SELECT
-            source_id.global_id AS owner_global_id,
-            bucket_number::SMALLINT AS match_bucket_number
-        FROM delete_application_source_ids AS source_id
-        CROSS JOIN GENERATE_SERIES(0, 15) AS bucket(bucket_number)
-
-        UNION
-
-        /* Lock every reverse bucket that will be changed. */
-        SELECT owner_global_id, match_bucket_number
-        FROM delete_application_reverse_keys
-    ) AS bucket_identity
-) AS affected
-ORDER BY affected.lock_id;
-
-/*
- * Remove the application global IDs from the other applications' JSONB.
+ * Example before deleting application 10:
+ *   application 20 has similar_application_ids = [10, 30]
  *
- * Before: owner 200 has {"100": 0.0, "300": 0.12}
- * Delete: application 10 owns global ID 100
- * After:  owner 200 has {"300": 0.12}
+ * Example afterward:
+ *   application 20 has similar_application_ids = [30]
+ *
+ * Application 20's unrelated relationship with application 30 stays saved.
  */
-UPDATE tsp.titan_matches AS reverse_match
+UPDATE tsp.titan_similar_cases AS reverse_summary
 SET
-    matches = reverse_match.matches - reverse_key.removed_keys,
+    similar_application_ids = (
+        SELECT COALESCE(
+            JSONB_AGG(
+                item.application_id
+                ORDER BY (item.application_id #>> '{}')::INTEGER
+            ),
+            '[]'::JSONB
+        )
+        FROM JSONB_ARRAY_ELEMENTS(reverse_summary.similar_application_ids)
+            AS item(application_id)
+        WHERE item.application_id
+            <> TO_JSONB(parameter.application_id)
+    ),
+    similar_case_ids = (
+        SELECT COALESCE(
+            JSONB_AGG(
+                item.application_id
+                ORDER BY (item.application_id #>> '{}')::INTEGER
+            ),
+            '[]'::JSONB
+        )
+        FROM JSONB_ARRAY_ELEMENTS(reverse_summary.similar_case_ids)
+            AS item(application_id)
+        WHERE item.application_id
+            <> TO_JSONB(parameter.application_id)
+    ),
+    tah_case_ids = (
+        SELECT COALESCE(
+            JSONB_AGG(
+                item.application_id
+                ORDER BY (item.application_id #>> '{}')::INTEGER
+            ),
+            '[]'::JSONB
+        )
+        FROM JSONB_ARRAY_ELEMENTS(reverse_summary.tah_case_ids)
+            AS item(application_id)
+        WHERE item.application_id
+            <> TO_JSONB(parameter.application_id)
+    ),
     last_modified = NOW()
-FROM delete_application_reverse_keys AS reverse_key
-WHERE reverse_match.global_id = reverse_key.owner_global_id
-  AND reverse_match.match_bucket_number = reverse_key.match_bucket_number;
-
-/* Remove only affected reverse bucket rows that are now empty. */
-DELETE FROM tsp.titan_matches AS empty_reverse_match
-USING delete_application_reverse_keys AS reverse_key
-WHERE empty_reverse_match.global_id = reverse_key.owner_global_id
-  AND empty_reverse_match.match_bucket_number = reverse_key.match_bucket_number
-  AND empty_reverse_match.matches = '{}'::JSONB;
-
-/* Delete all bucket rows owned by the source application. */
-DELETE FROM tsp.titan_matches AS source_match
-USING delete_application_parameter AS parameter
-WHERE source_match.application_id = parameter.application_id;
+FROM
+    delete_case_summary_parameter AS parameter,
+    delete_case_summary_reverse_ids AS reverse_id
+WHERE reverse_summary.application_id = reverse_id.application_id;
 
 /*
- * Both values must be zero. This check uses the saved source global IDs, so it
- * can still find an incorrect reverse reference after source rows are deleted.
+ * A summary with no remaining relationships is no longer needed.
+ * Keep rows that still match any unrelated application.
  */
+DELETE FROM tsp.titan_similar_cases AS empty_reverse_summary
+USING delete_case_summary_reverse_ids AS reverse_id
+WHERE empty_reverse_summary.application_id = reverse_id.application_id
+  AND empty_reverse_summary.similar_application_ids = '[]'::JSONB
+  AND empty_reverse_summary.similar_case_ids = '[]'::JSONB
+  AND empty_reverse_summary.tah_case_ids = '[]'::JSONB;
+
+/* Delete the source application's own summary row. */
+DELETE FROM tsp.titan_similar_cases AS source_summary
+USING delete_case_summary_parameter AS parameter
+WHERE source_summary.application_id = parameter.application_id;
+
+/* Both values must be zero before the transaction is committed. */
 SELECT
     (
         SELECT COUNT(*)
-        FROM tsp.titan_matches AS source_match
-        JOIN delete_application_parameter AS parameter
-            ON parameter.application_id = source_match.application_id
-    ) AS remaining_source_bucket_count,
+        FROM tsp.titan_similar_cases AS source_summary
+        JOIN delete_case_summary_parameter AS parameter
+            ON parameter.application_id = source_summary.application_id
+    ) AS remaining_source_summary_count,
     (
         SELECT COUNT(*)
-        FROM tsp.titan_matches AS reverse_match
-        CROSS JOIN LATERAL JSONB_OBJECT_KEYS(reverse_match.matches)
-            AS target(target_global_id)
-        JOIN delete_application_source_ids AS source_id
-            ON source_id.global_id = target.target_global_id::INTEGER
-    ) AS remaining_reverse_relationship_count;
+        FROM tsp.titan_similar_cases AS reverse_summary
+        CROSS JOIN delete_case_summary_parameter AS parameter
+        WHERE reverse_summary.similar_application_ids
+                  @> JSONB_BUILD_ARRAY(parameter.application_id)
+           OR reverse_summary.similar_case_ids
+                  @> JSONB_BUILD_ARRAY(parameter.application_id)
+           OR reverse_summary.tah_case_ids
+                  @> JSONB_BUILD_ARRAY(parameter.application_id)
+    ) AS remaining_reverse_reference_count;
 
 COMMIT;
 ```
 
 Expected verification output:
 
-| remaining_source_bucket_count | remaining_reverse_relationship_count |
+| remaining_source_summary_count | remaining_reverse_reference_count |
 |---:|---:|
 | 0 | 0 |
 
-This deletes only `tsp.titan_matches`. It does not delete rows from
-`sentences_vector`, `text_similarity_input`, or `titan_similar_cases`.
+The generated `similar_case_count`, `tah_case_count`, and `is_tah` columns are
+automatically recalculated when their JSONB lists change.
 
-## 3. Rebuild and compare the result
+## 3. Rebuild and compare
 
-1. Reprocess every `tsp_id` belonging to the application through Sentence
-   Similarity. This rebuilds its source and reverse `titan_matches` rows.
-2. Reprocess the application through Case Similarity if its
-   `titan_similar_cases` summary also needs to be refreshed.
-3. Run the query from section 1 again.
-4. Compare the new output with the result saved before deletion.
+1. Keep `tsp.titan_matches` unchanged.
+2. Send one of the application's `tsp_id` values to Case Similarity.
+3. Case Similarity reads the existing Titan sentence matches and rebuilds the
+   source and reverse rows in `tsp.titan_similar_cases`.
+4. Run the query from section 1 again and compare it with the saved result.
 
-The results should be the same when the sentences, OpenSearch indexes,
-thresholds, and classification values have not changed.
+The results should be the same because the underlying `tsp.titan_matches`
+relationships were not deleted or changed.
