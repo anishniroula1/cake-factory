@@ -33,8 +33,8 @@ from transform_completed.opensearch import constants
 #       ]
 #   }
 #
-# Every stored match is returned. No relationship is removed by a
-# per-sentence match limit.
+# Each sentence returns at most 3,000 matches. The smallest distance is the
+# closest match, so PostgreSQL sorts by distance before applying the limit.
 LOAD_SENTENCES = text(
     """
     WITH source_sentences AS (
@@ -74,15 +74,25 @@ LOAD_SENTENCES = text(
             COUNT(*) AS matches_count,
             JSONB_AGG(
                 JSONB_BUILD_OBJECT(
-                    'global_id', match_item.key::INTEGER,
-                    'distance', (match_item.value #>> '{}')::DOUBLE PRECISION
+                    'global_id', closest_match.target_global_id,
+                    'distance', closest_match.distance
                 )
-                ORDER BY bucket.match_bucket_number, match_item.key::INTEGER
+                ORDER BY closest_match.distance, closest_match.target_global_id
             ) AS matches,
-            MAX(bucket.last_modified) AS matches_last_modified
-        FROM tsp.titan_matches AS bucket
-        CROSS JOIN LATERAL JSONB_EACH(bucket.matches) AS match_item(key, value)
-        WHERE bucket.global_id = source.global_id
+            MAX(closest_match.matches_last_modified) AS matches_last_modified
+        FROM (
+            SELECT
+                match_item.key::INTEGER AS target_global_id,
+                (match_item.value #>> '{}')::DOUBLE PRECISION AS distance,
+                bucket.last_modified AS matches_last_modified
+            FROM tsp.titan_matches AS bucket
+            CROSS JOIN LATERAL JSONB_EACH(bucket.matches) AS match_item(key, value)
+            WHERE bucket.global_id = source.global_id
+            ORDER BY
+                (match_item.value #>> '{}')::DOUBLE PRECISION,
+                match_item.key::INTEGER
+            LIMIT :sentence_match_limit
+        ) AS closest_match
     ) AS matches ON TRUE
     ORDER BY source.application_id, source.tsp_id, source.sent_id_local
     """
@@ -168,7 +178,7 @@ class ContentDBStore:
     def load_sentence_payload_records(
         self, application_ids: list[int], reduce_kafka_size: bool
     ) -> dict[int, list[dict]]:
-        """Build the existing sentence response from all 16 Titan match buckets.
+        """Build each sentence response with its closest 3,000 Titan matches.
 
         Input: application_ids=[50], reduce_kafka_size=False, with bucket values
         {"20": 0.0} and {"30": 0.12}
@@ -179,11 +189,13 @@ class ContentDBStore:
         if not application_ids:
             return {}
         with self.session_factory() as session:
-            sentence_records = (
-                session.execute(LOAD_SENTENCES, {"application_ids": application_ids})
-                .mappings()
-                .all()
-            )
+            sentence_records = session.execute(
+                LOAD_SENTENCES,
+                {
+                    "application_ids": application_ids,
+                    "sentence_match_limit": constants.SENTENCE_MATCH_LIMIT,
+                },
+            ).mappings().all()
         sentence_payloads_by_application: dict[int, list[dict]] = {}
         for sentence_record in sentence_records:
             sentence_payload = dict(sentence_record)

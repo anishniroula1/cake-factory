@@ -108,6 +108,7 @@ def test_application_and_applicant_stores_build_payload_data():
 
 def test_content_store_builds_payload_and_handles_empty_input():
     now = datetime.now(UTC)
+    sentence_session = SessionFake()
     sentence_record = {
         "application_id": 100,
         "global_id": 1,
@@ -116,10 +117,11 @@ def test_content_store_builds_payload_and_handles_empty_input():
         "matches_last_modified": now,
         "sentences_last_modified": now - timedelta(hours=1),
     }
+    sentence_session.rows = [sentence_record]
     content_store = ContentDBStore(
         SessionFactoryFake(
             [
-                SessionFake([sentence_record]),
+                sentence_session,
                 SessionFake([{"application_id": 100, "tsp_id": 10, "match_count": 1}]),
                 SessionFake([{"application_id": 100, "a_number": 900001, "url": "one"}]),
             ]
@@ -132,6 +134,7 @@ def test_content_store_builds_payload_and_handles_empty_input():
     empty_store = ContentDBStore(SessionFactoryFake([]))
 
     assert sentences[100][0] == {"global_id": 1, "matches": [{"global_id": 20, "distance": 0.1234}], "op": "u"}
+    assert sentence_session.executions[0][1]["sentence_match_limit"] == 3000
     assert (documents[100][0]["match_count"], templates[100]["url"]) == (1, "one")
     assert (
         empty_store.load_sentence_payload_records([], False),

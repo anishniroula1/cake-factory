@@ -328,15 +328,15 @@ directly in the correct application payload.
 
 #### `load_sentences()`
 
-Loads current sentences and combines all `tsp.titan_matches` bucket rows into
-the API sentence-match list. Every stored sentence relationship is returned.
+Loads current sentences, combines all `tsp.titan_matches` bucket rows, and
+returns the 3,000 closest relationships for each sentence.
 
 ##### Details
 
-The query joins each source sentence to its document and expands every JSONB
-match bucket into target global IDs and distances. When only match data has
-changed, the method can return a smaller update instead of repeating unchanged
-sentence content.
+The query joins each source sentence to its document, expands every JSONB match
+bucket, orders the relationships from the smallest distance to the largest,
+and keeps the first 3,000. When only match data has changed, the method can
+return a smaller update instead of repeating unchanged sentence content.
 
 #### `_small_match()`
 

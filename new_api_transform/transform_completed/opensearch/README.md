@@ -19,8 +19,8 @@ For each SQS message, the service:
 3. Loads the application record, confidence values, applicant details,
    addresses, and OCR flags.
 4. Loads every current document and sentence owned by the application.
-5. Combines all 16 `tsp.titan_matches` bucket rows into each sentence's match
-   list.
+5. Combines all 16 `tsp.titan_matches` bucket rows and keeps the 3,000 closest
+   matches for each sentence.
 6. Loads similar-application, similar-case, and TAH results from
    `tsp.titan_similar_cases`.
 7. Loads the newest public template for an Asylee application.
@@ -102,10 +102,11 @@ format:
 }
 ```
 
-Every Titan relationship stored for a source sentence is included; there is no
-per-sentence match limit. The existing payload-size handling can divide the
-application's sentence list across a create event and update events. Distance
-`0.0` is an exact vector match, and smaller distances are better.
+API Transform orders each sentence's relationships by distance and includes
+the closest 3,000. Distance `0.0` is an exact vector match, and smaller
+distances are better. When distances are equal, target `global_id` provides a
+stable order. The existing payload-size handling can still divide the
+application's sentence list across a create event and update events.
 
 ## Similar-case mapping
 

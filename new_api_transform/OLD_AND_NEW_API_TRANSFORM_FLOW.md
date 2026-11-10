@@ -274,8 +274,9 @@ at a time:
 2. Use `tsp.text_similarity_input` to resolve the document to one application.
 3. Load application, confidence, applicant, OCR, document, template, and
    sentence data for that application.
-4. Read sentence relationships from all 16 rows in `tsp.titan_matches` and
-   convert the JSONB key/value objects back into the existing API match list.
+4. Read sentence relationships from all 16 rows in `tsp.titan_matches`, order
+   them by distance, and add the closest 3,000 matches per sentence to the API
+   match list.
 5. Read case-level results from `tsp.titan_similar_cases`.
 6. Map Titan `similar_case_ids` from application IDs to A-numbers through
    `landing.application_id_lookup`, because the existing API field still expects
@@ -311,7 +312,7 @@ the OpenSearch/Titan results to `tsp.titan_matches` and
 | `biodata.address` | Read | Adds current residence/mailing addresses and OCR source values. |
 | `tsp.titan_similar_cases` | Read | Supplies similar applications, similar cases, counts, and TAH status. |
 | `tsp.sentences_vector` | Read | Supplies current application sentences. |
-| `tsp.titan_matches` | Read | Supplies all bucketed Titan matches and distances for each source sentence. |
+| `tsp.titan_matches` | Read | Supplies bucketed Titan matches so the closest 3,000 can be selected for each source sentence. |
 | `tsp.api_section_map` | Read | Converts internal sections to API section names. |
 | `landing.global_document_registry` | Read | Supplies document file names. |
 | `landing.template_registry` | Read | Supplies Asylee public-template information. |
@@ -327,7 +328,7 @@ The new flow does not read `tsp.matches`, `tsp.sentence_matches`,
 | Area | Old API Transform | New API Transform |
 |---|---|---|
 | Work size | Collects up to 50 document messages before transforming. | Processes one document message at a time. |
-| Matching source | Reads `matches` or optional `sentence_matches`. | Reads all 16 `titan_matches` buckets. |
+| Matching source | Reads `matches` or optional `sentence_matches`. | Reads all 16 `titan_matches` buckets and keeps the closest 3,000 matches per sentence. |
 | Case summary | Reads `micro_service_similar_cases`. | Reads `titan_similar_cases`. |
 | Similar-case storage | Similar-case IDs are A-numbers. | Stored IDs are application IDs and are mapped to A-numbers for the existing API field. |
 | NER | Reads and sends NER. | Does not include NER in this flow. |
