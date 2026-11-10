@@ -151,8 +151,8 @@ storage designs:
    enabled through `USE_SENTENCE_MATCHES`.
 
 For each source sentence, the event contains the sentence ID, local line number,
-document ID, section, sentence text, match count, and up to 3,000 matches. Each
-match is reduced to:
+document ID, section, sentence text, match count, and every match stored in the
+`tsp.matches` JSON list. Each match is reduced to:
 
 ```json
 {"global_id": 5001, "distance": 0.1}

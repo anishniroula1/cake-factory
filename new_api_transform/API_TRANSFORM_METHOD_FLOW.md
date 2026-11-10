@@ -329,13 +329,12 @@ directly in the correct application payload.
 #### `load_sentences()`
 
 Loads current sentences and combines all `tsp.titan_matches` bucket rows into
-the API sentence-match list. The configured limit applies to each source
-sentence.
+the API sentence-match list. Every stored sentence relationship is returned.
 
 ##### Details
 
-The query joins each source sentence to its document and expands the JSONB
-match buckets into target global IDs and distances. When only match data has
+The query joins each source sentence to its document and expands every JSONB
+match bucket into target global IDs and distances. When only match data has
 changed, the method can return a smaller update instead of repeating unchanged
 sentence content.
 

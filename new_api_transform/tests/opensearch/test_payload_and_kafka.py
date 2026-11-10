@@ -123,14 +123,13 @@ def test_content_store_builds_payload_and_handles_empty_input():
                 SessionFake([{"application_id": 100, "tsp_id": 10, "match_count": 1}]),
                 SessionFake([{"application_id": 100, "a_number": 900001, "url": "one"}]),
             ]
-        ),
-        3000,
+        )
     )
 
     sentences = content_store.load_sentence_payload_records([100], True)
     documents = content_store.load_document_payload_records([100])
     templates = content_store.load_public_template_payload_records([100])
-    empty_store = ContentDBStore(SessionFactoryFake([]), 3000)
+    empty_store = ContentDBStore(SessionFactoryFake([]))
 
     assert sentences[100][0] == {"global_id": 1, "matches": [{"global_id": 20, "distance": 0.1234}], "op": "u"}
     assert (documents[100][0]["match_count"], templates[100]["url"]) == (1, "one")

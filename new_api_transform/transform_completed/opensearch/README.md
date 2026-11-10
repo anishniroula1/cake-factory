@@ -102,9 +102,10 @@ format:
 }
 ```
 
-The configured sentence-match limit applies separately to each source
-sentence. Distance `0.0` is an exact vector match, and smaller distances are
-better.
+Every Titan relationship stored for a source sentence is included; there is no
+per-sentence match limit. The existing payload-size handling can divide the
+application's sentence list across a create event and update events. Distance
+`0.0` is an exact vector match, and smaller distances are better.
 
 ## Similar-case mapping
 

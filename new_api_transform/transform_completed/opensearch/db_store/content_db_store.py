@@ -10,8 +10,7 @@ from transform_completed.opensearch import constants
 # Load current sentences and rebuild each sentence's existing API match list
 # from all of its Titan JSONB buckets.
 #
-# Input:
-#   {"application_ids": [50], "sentence_match_limit": 3000}
+# Input: {"application_ids": [50]}
 #
 # Tables used:
 #   tsp.sentences_vector supplies sentence text and IDs.
@@ -34,8 +33,8 @@ from transform_completed.opensearch import constants
 #       ]
 #   }
 #
-# The per-sentence limit keeps one unusually common sentence from making the
-# Kafka event too large.
+# Every stored match is returned. No relationship is removed by a
+# per-sentence match limit.
 LOAD_SENTENCES = text(
     """
     WITH source_sentences AS (
@@ -75,23 +74,15 @@ LOAD_SENTENCES = text(
             COUNT(*) AS matches_count,
             JSONB_AGG(
                 JSONB_BUILD_OBJECT(
-                    'global_id', limited.target_global_id,
-                    'distance', limited.distance
+                    'global_id', match_item.key::INTEGER,
+                    'distance', (match_item.value #>> '{}')::DOUBLE PRECISION
                 )
-                ORDER BY limited.target_global_id
+                ORDER BY bucket.match_bucket_number, match_item.key::INTEGER
             ) AS matches,
-            MAX(limited.last_modified) AS matches_last_modified
-        FROM (
-            SELECT
-                match_item.key::INTEGER AS target_global_id,
-                (match_item.value #>> '{}')::DOUBLE PRECISION AS distance,
-                bucket.last_modified
-            FROM tsp.titan_matches AS bucket
-            CROSS JOIN LATERAL JSONB_EACH(bucket.matches) AS match_item(key, value)
-            WHERE bucket.global_id = source.global_id
-            ORDER BY bucket.match_bucket_number, match_item.key::INTEGER
-            LIMIT :sentence_match_limit
-        ) AS limited
+            MAX(bucket.last_modified) AS matches_last_modified
+        FROM tsp.titan_matches AS bucket
+        CROSS JOIN LATERAL JSONB_EACH(bucket.matches) AS match_item(key, value)
+        WHERE bucket.global_id = source.global_id
     ) AS matches ON TRUE
     ORDER BY source.application_id, source.tsp_id, source.sent_id_local
     """
@@ -171,9 +162,8 @@ LOAD_PUBLIC_TEMPLATES = text(
 class ContentDBStore:
     """Load documents, templates, sentences, and Titan-backed sentence matches."""
 
-    def __init__(self, session_factory: Callable[[], Session], sentence_match_limit: int) -> None:
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
-        self.sentence_match_limit = sentence_match_limit
 
     def load_sentence_payload_records(
         self, application_ids: list[int], reduce_kafka_size: bool
@@ -190,10 +180,7 @@ class ContentDBStore:
             return {}
         with self.session_factory() as session:
             sentence_records = (
-                session.execute(
-                    LOAD_SENTENCES,
-                    {"application_ids": application_ids, "sentence_match_limit": self.sentence_match_limit},
-                )
+                session.execute(LOAD_SENTENCES, {"application_ids": application_ids})
                 .mappings()
                 .all()
             )

@@ -40,7 +40,7 @@ class Dependencies:
         self.sent_sqs = self._create_sqs_client(self.config.sent_sqs_endpoint)
         application_db_store = ApplicationDBStore(self.session_factory)
         applicant_db_store = ApplicantDBStore(self.session_factory)
-        content_db_store = ContentDBStore(self.session_factory, self.config.sentence_match_limit)
+        content_db_store = ContentDBStore(self.session_factory)
         transmission_db_store = TransmissionDBStore(self.session_factory, self.config.kafka_environment)
         payload_builder = PayloadBuilder(self.config)
         kafka_processor = KafkaProcessor(

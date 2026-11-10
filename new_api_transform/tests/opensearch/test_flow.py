@@ -21,7 +21,7 @@ from tests.opensearch.fakes import (
 from transform_completed.opensearch import config as config_module
 from transform_completed.opensearch import constants
 from transform_completed.opensearch import dependencies as dependencies_module
-from transform_completed.opensearch.config import Config, read_boolean, read_integer
+from transform_completed.opensearch.config import Config, read_boolean
 from transform_completed.opensearch.dependencies import Dependencies
 from transform_completed.opensearch.errors import OperationFailedError, PermanentDataError
 from transform_completed.opensearch.handlers.api_transform_handler import ApiTransformHandler
@@ -164,9 +164,6 @@ def test_config_reads_vault_and_rejects_invalid_values(monkeypatch, service_conf
     monkeypatch.setenv("BAD_TOGGLE", "maybe")
     with pytest.raises(ValueError, match="true or false"):
         read_boolean("BAD_TOGGLE", False)
-    monkeypatch.setenv("BAD_INTEGER", "not-a-number")
-    with pytest.raises(ValueError, match="whole number"):
-        read_integer("BAD_INTEGER", 3000)
     with pytest.raises(ValueError, match="Missing required"):
         replace(service_config, receive_sqs_endpoint="").validate()
     with pytest.raises(ValueError, match="VAULT_YAML_PATH"):
