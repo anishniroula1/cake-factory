@@ -125,7 +125,6 @@ def test_database_stores_return_empty_results_and_report_missing_documents(servi
         case_store.load_case_similarity_document_context(999)
 
     selection = kafka_store.load_tah_event_candidates([], "local")
-    assert case_store.load_case_similarity_document_contexts([]) == []
     assert (selection.events, selection.skipped_events) == ([], [])
 
 

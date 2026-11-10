@@ -4,9 +4,9 @@ from case_similarity_completed.opensearch import constants
 from case_similarity_completed.opensearch.config import Config
 from case_similarity_completed.opensearch.contracts import DocumentContext, ProcessResult, TspId
 from case_similarity_completed.opensearch.db_store.case_similarity_db_store import CaseSimilarityDBStore
-from case_similarity_completed.opensearch.errors import CaseSimilarityError
+from case_similarity_completed.opensearch.errors import QueueSendError
 from case_similarity_completed.opensearch.kafka_processor import KafkaProcessor
-from case_similarity_completed.opensearch.retry import retry_operation, safe_error_summary
+from case_similarity_completed.opensearch.retry import retry_operation
 from ta_utils.aws.sqs.AwsSQS import AwsSQS
 from ta_utils.logger.CustomLogger import CustomLogger
 
@@ -28,78 +28,30 @@ class CaseSimilarityHandler:
         self.aws_sqs = aws_sqs
         self.logger = custom_logger
 
-    def process_case_similarity_batch(self, tsp_ids: list[TspId]) -> list[bool]:
-        """Refresh unique applications and forward every successful document.
+    def process_case_similarity(self, tsp_id: TspId) -> ProcessResult:
+        """Process one document through Case Similarity.
 
-        Input: tsp_ids=[100, 101, 200], where 100 and 101 belong to application
-        10 and 200 belongs to application 20.
-        Output: [True, True, True] when both applications were refreshed and all
-        three document messages were accepted by the next SQS queue.
+        Input: tsp_id=100
+        Output: the source application's similar-case, TAH, and Kafka counts.
 
-        The output position matches the input position. A False value leaves
-        only that source SQS message available for retry.
+        The next SQS message is sent only after the database and optional Kafka
+        work completes.
         """
 
-        if not tsp_ids:
-            return []
-
-        document_contexts = retry_operation(
+        document_context = retry_operation(
             "Load Case Similarity document values",
-            self.case_similarity_db_store.load_case_similarity_document_contexts,
-            tsp_ids,
+            self.case_similarity_db_store.load_case_similarity_document_context,
+            tsp_id,
             wait_seconds=constants.RETRY_SECONDS,
             max_attempts=constants.MAX_ATTEMPTS,
             custom_logger=self.logger,
         )
-        context_by_tsp_id = {str(context.tsp_id): context for context in document_contexts}
-        positions_by_application: dict[tuple[int, str], list[int]] = {}
-        context_by_application: dict[tuple[int, str], DocumentContext] = {}
-
-        for position, tsp_id in enumerate(tsp_ids):
-            document_context = context_by_tsp_id.get(str(tsp_id))
-            if document_context is None:
-                self.logger.error(
-                    f"No text_similarity_input row exists for tsp_id={tsp_id}."
-                )
-                continue
-            application_key = (
-                document_context.application_id,
-                document_context.analysis_group,
-            )
-            positions_by_application.setdefault(application_key, []).append(position)
-            context_by_application[application_key] = document_context
-
-        unique_application_count = len({application_id for application_id, _ in positions_by_application})
-        self.logger.info(
-            f"Collected {len(tsp_ids)} SQS message(s) representing "
-            f"{unique_application_count} unique application_id(s)."
-        )
-
-        positions_ready_for_next_queue: list[int] = []
-        for application_key, message_positions in positions_by_application.items():
-            document_context = context_by_application[application_key]
-            try:
-                self._refresh_case_similarity_application(document_context)
-                positions_ready_for_next_queue.extend(message_positions)
-            except CaseSimilarityError as error:
-                self.logger.error(
-                    "Case Similarity could not complete "
-                    f"application_id={document_context.application_id}: "
-                    f"{safe_error_summary(error)}"
-                )
-
-        processing_results = self._send_case_similarity_results_to_next_queue(
-            tsp_ids,
-            positions_ready_for_next_queue,
-        )
-        self.logger.info(
-            f"Case Similarity batch completed {sum(processing_results)} of "
-            f"{len(tsp_ids)} source message(s)."
-        )
-        return processing_results
+        process_result = self._refresh_case_similarity_application(document_context)
+        self._send_case_similarity_result_to_next_queue(tsp_id)
+        return process_result
 
     def _refresh_case_similarity_application(self, document_context: DocumentContext) -> ProcessResult:
-        """Refresh one unique application and publish its changed TAH values.
+        """Refresh one application and publish its changed TAH values.
 
         Input: DocumentContext(tsp_id=100, application_id=20,
         analysis_group="Asylee")
@@ -160,45 +112,25 @@ class CaseSimilarityHandler:
             "kafka_event_count": kafka_event_count,
         }
 
-    def _send_case_similarity_results_to_next_queue(
-        self,
-        tsp_ids: list[TspId],
-        message_positions: list[int],
-    ) -> list[bool]:
-        """Send one downstream message for every successfully refreshed document.
+    def _send_case_similarity_result_to_next_queue(self, tsp_id: TspId) -> None:
+        """Send one completed document to API Transform.
 
-        Input: tsp_ids=[100, 101, 200], message_positions=[0, 1]
-        Output: [True, True, False] when documents 100 and 101 are accepted.
+        Input: tsp_id=100
 
-        Messages use the SQS batch API in groups of ten, but each tsp_id remains
-        a separate message for API Transform.
+        Raises:
+            QueueSendError: When SQS does not accept the message after retries.
         """
 
-        processing_results = [False] * len(tsp_ids)
-        for offset in range(0, len(message_positions), constants.SQS_SEND_BATCH_SIZE):
-            batch_positions = message_positions[offset : offset + constants.SQS_SEND_BATCH_SIZE]
-            message_batch = [
-                {
-                    "source": "P2",
-                    "tsp_id": str(tsp_ids[position]),
-                    "sent_by": "case-similarity",
-                }
-                for position in batch_positions
-            ]
-            send_result = self.aws_sqs.send_messages_in_batch(
-                queue_url=self.config.sent_sqs_endpoint,
-                batch=message_batch,
-                is_fifo=self.config.sent_sqs_endpoint.endswith(".fifo"),
-                message_group_id=None,
-                wait_time=constants.RETRY_SECONDS,
-                retries=constants.MAX_ATTEMPTS - 1,
-            )
-            if send_result.get("status") != "SUCCEEDED":
-                self.logger.error(
-                    f"API Transform SQS send failed for {len(batch_positions)} document message(s)."
-                )
-                continue
-            for position in batch_positions:
-                processing_results[position] = True
-
-        return processing_results
+        message_sent = self.aws_sqs.send_sqs_message(
+            send_queue_url=self.config.sent_sqs_endpoint,
+            message_body={
+                "source": "P2",
+                "tsp_id": str(tsp_id),
+                "sent_by": "case-similarity",
+            },
+            wait_time=constants.RETRY_SECONDS,
+            retries=constants.MAX_ATTEMPTS - 1,
+            is_fifo=self.config.sent_sqs_endpoint.endswith(".fifo"),
+        )
+        if not message_sent:
+            raise QueueSendError("API Transform SQS send failed")

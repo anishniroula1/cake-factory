@@ -1,9 +1,8 @@
 # Case Similarity Service
 
-Case Similarity is an SQS/PostgreSQL worker that collects up to 100 document
-messages and turns sentence-level relationships from `tsp.titan_matches` into
-application-level similar-case and TAH summaries. Documents that belong to the
-same application share one application-level refresh.
+Case Similarity is an SQS/PostgreSQL worker that processes one document message
+at a time. It turns sentence-level relationships from `tsp.titan_matches` into
+application-level similar-case and TAH summaries.
 
 Sentence Similarity has already completed the vector search before this service
 runs. Case Similarity does not create embeddings and does not query OpenSearch.
@@ -13,14 +12,12 @@ service.
 
 ## What the service does
 
-For each collected SQS batch, the service:
+For each SQS message, the service:
 
-1. Collects up to 100 messages. A smaller backlog waits 15 seconds so messages
-   for the same application can be processed together.
-2. Reads every `tsp_id` and loads its `application_id`, `a_number`, and
-   `analysis_group` from `tsp.text_similarity_input` in one query.
-3. Groups the documents by application and calls
-   `tsp.refresh_titan_similar_cases` once per unique source application.
+1. Reads one `tsp_id` from the message.
+2. Loads its `application_id`, `a_number`, and `analysis_group` from
+   `tsp.text_similarity_input`.
+3. Calls `tsp.refresh_titan_similar_cases` for that source application.
 4. Reads sentence relationships from `tsp.titan_matches`.
 5. Counts unique matching sentence pairs between the source application and
    every target application.
@@ -29,9 +26,8 @@ For each collected SQS batch, the service:
    `tsp.titan_similar_cases`.
 8. Updates the reverse relationship on every affected target application.
 9. Publishes new or changed TAH values to Kafka when live publishing is enabled.
-10. Sends one next-queue message for every completed `tsp_id`, using SQS batch
-    requests containing at most ten separate messages.
-11. Deletes each source message only after its application refresh and its own
+10. Sends one next-queue message for the completed `tsp_id`.
+11. Deletes the source message only after the application refresh and
     next-queue send succeed.
 
 If processing fails, the source message is not deleted. SQS can retry the
