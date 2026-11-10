@@ -329,13 +329,14 @@ directly in the correct application payload.
 #### `load_sentences()`
 
 Loads current sentences, combines all `tsp.titan_matches` bucket rows, and
-returns the 3,000 closest relationships for each sentence.
+returns the configured number of closest relationships for each sentence.
 
 ##### Details
 
 The query joins each source sentence to its document, expands every JSONB match
 bucket, orders the relationships from the smallest distance to the largest,
-and keeps the first 3,000. When only match data has changed, the method can
+and keeps the first `SENTENCE_MATCH_LIMIT` relationships. The environment
+setting defaults to 3,000. When only match data has changed, the method can
 return a smaller update instead of repeating unchanged sentence content.
 
 #### `_small_match()`

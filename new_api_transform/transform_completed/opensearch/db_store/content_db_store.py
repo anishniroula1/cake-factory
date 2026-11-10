@@ -172,8 +172,9 @@ LOAD_PUBLIC_TEMPLATES = text(
 class ContentDBStore:
     """Load documents, templates, sentences, and Titan-backed sentence matches."""
 
-    def __init__(self, session_factory: Callable[[], Session]) -> None:
+    def __init__(self, session_factory: Callable[[], Session], sentence_match_limit: int) -> None:
         self.session_factory = session_factory
+        self.sentence_match_limit = sentence_match_limit
 
     def load_sentence_payload_records(
         self, application_ids: list[int], reduce_kafka_size: bool
@@ -193,7 +194,7 @@ class ContentDBStore:
                 LOAD_SENTENCES,
                 {
                     "application_ids": application_ids,
-                    "sentence_match_limit": constants.SENTENCE_MATCH_LIMIT,
+                    "sentence_match_limit": self.sentence_match_limit,
                 },
             ).mappings().all()
         sentence_payloads_by_application: dict[int, list[dict]] = {}

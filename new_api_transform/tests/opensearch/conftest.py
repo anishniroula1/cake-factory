@@ -29,6 +29,7 @@ def service_config(monkeypatch) -> Config:
         kafka_compression="lz4",
         verbose_kafka_logging=False,
         reduce_kafka_size=False,
+        sentence_match_limit=3000,
     )
 
 

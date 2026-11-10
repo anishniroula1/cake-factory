@@ -25,6 +25,25 @@ def read_boolean(name: str, default: bool) -> bool:
     return value == "true"
 
 
+def read_integer(name: str, default: int, minimum: int = 1) -> int:
+    """Read a whole-number environment value and enforce its minimum.
+
+    Input: name="SENTENCE_MATCH_LIMIT", default=3000
+    Output: 3000 when the environment value is missing.
+
+    Raises:
+        ValueError: If the value is not a whole number or is below the minimum.
+    """
+
+    try:
+        value = int(os.getenv(name, str(default)).strip())
+    except ValueError as error:
+        raise ValueError(f"{name} must be a whole number") from error
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
+    return value
+
+
 @dataclass(frozen=True)
 class Config:
     # Database
@@ -55,6 +74,7 @@ class Config:
 
     # Transformation
     reduce_kafka_size: bool
+    sentence_match_limit: int
 
     @classmethod
     def from_environment(cls) -> Self:
@@ -84,6 +104,7 @@ class Config:
             kafka_compression=os.getenv("KAFKA_COMPRESSION", "lz4").strip(),
             verbose_kafka_logging=read_boolean("VERBOSE_KAFKA_LOGGING", False),
             reduce_kafka_size=read_boolean("REDUCE_KAFKA_SIZE", False),
+            sentence_match_limit=read_integer("SENTENCE_MATCH_LIMIT", 3000),
         )
         config.validate()
         return config

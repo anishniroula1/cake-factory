@@ -19,8 +19,8 @@ For each SQS message, the service:
 3. Loads the application record, confidence values, applicant details,
    addresses, and OCR flags.
 4. Loads every current document and sentence owned by the application.
-5. Combines all 16 `tsp.titan_matches` bucket rows and keeps the 3,000 closest
-   matches for each sentence.
+5. Combines all 16 `tsp.titan_matches` bucket rows and keeps the configured
+   number of closest matches for each sentence. The default is 3,000.
 6. Loads similar-application, similar-case, and TAH results from
    `tsp.titan_similar_cases`.
 7. Loads the newest public template for an Asylee application.
@@ -103,10 +103,11 @@ format:
 ```
 
 API Transform orders each sentence's relationships by distance and includes
-the closest 3,000. Distance `0.0` is an exact vector match, and smaller
-distances are better. When distances are equal, target `global_id` provides a
-stable order. The existing payload-size handling can still divide the
-application's sentence list across a create event and update events.
+the closest matches up to `SENTENCE_MATCH_LIMIT`, which defaults to 3,000.
+Distance `0.0` is an exact vector match, and smaller distances are better. When
+distances are equal, target `global_id` provides a stable order. The existing
+payload-size handling can still divide the application's sentence list across
+a create event and update events.
 
 ## Similar-case mapping
 
@@ -183,6 +184,7 @@ connection values in `.env`. For the local Kafka container, use:
 KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 KAFKA_SECURITY_PROTOCOL=PLAINTEXT
 KAFKA_ENV=local
+SENTENCE_MATCH_LIMIT=3000
 ```
 
 The PostgreSQL connection comes from Vault using these keys:
