@@ -175,13 +175,34 @@ model. It does not update `sentences_vector.sentence_key`.
    `is_form_language`.
 3. Calculate the meaningful word count from current sentence text and exclude
    sentences containing fewer than five words.
-4. Generate sentence keys in memory and keep one document per unique key.
+4. Generate sentence keys in memory, use each key as the OpenSearch `_id`, and
+   keep one document per unique key. The training document `_source` does not
+   store `sentenceKey`.
 5. Reuse vectors from `embeddings` when `embedding_type=2`.
 6. Check the training index and skip keys already present.
 7. Process 30-document jobs with up to 16 workers. Saved vectors bypass the
    embedding pipeline; missing vectors use the Bedrock pipeline.
 8. Refresh the training alias when new documents were written.
 9. Return success so the SQS processor can delete the source message.
+
+A training document is stored like this. `_id` is shown separately because it
+is OpenSearch metadata, not a field inside `_source`:
+
+```json
+{
+  "_id": "64-character-sha256-key",
+  "_source": {
+    "sentenceContent": "The applicant returned home after the interview.",
+    "sentenceContentVector": [0.01, 0.02],
+    "createdAt": "2026-10-30T12:00:00+00:00",
+    "updatedAt": "2026-10-30T12:00:00+00:00"
+  }
+}
+```
+
+When no saved vector is available, `sentenceContentVector` is omitted and the
+embedding pipeline creates it. `sentenceKey` is intentionally absent from the
+training `_source`.
 
 ## Tracer reference flow
 

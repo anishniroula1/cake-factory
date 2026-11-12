@@ -189,7 +189,6 @@ class TrainModelHandler:
             timestamp = sentence_vector_record.last_modified.isoformat()
             document: TrainingDocument = {
                 "_id": key,
-                "sentenceKey": key,
                 "sentenceContent": sentence_vector_record.sentence_content,
                 "createdAt": timestamp,
                 "updatedAt": timestamp,
@@ -236,10 +235,10 @@ class TrainModelHandler:
         if not documents:
             return 0
         batch_label = (
-            f"training keys {documents[0]['sentenceKey'][:12]} through "
-            f"{documents[-1]['sentenceKey'][:12]}"
+            f"training keys {documents[0]['_id'][:12]} through "
+            f"{documents[-1]['_id'][:12]}"
         )
-        keys = [document["sentenceKey"] for document in documents]
+        keys = [document["_id"] for document in documents]
         existing_keys = retry_operation(
             f"Check existing {batch_label}",
             self.training_opensearch_store.find_existing_sentence_keys,
@@ -250,7 +249,7 @@ class TrainModelHandler:
         new_documents = [
             document
             for document in documents
-            if document["sentenceKey"] not in existing_keys
+            if document["_id"] not in existing_keys
         ]
         saved_vectors = [
             document

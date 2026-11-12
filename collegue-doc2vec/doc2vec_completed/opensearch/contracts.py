@@ -156,10 +156,9 @@ class OccurrenceDocument(TypedDict):
 
 
 class TrainingDocument(TypedDict):
-    """Unique sentence document written to the IVF model training index."""
+    """IVF training document whose sentence key is used only as `_id`."""
 
     _id: str
-    sentenceKey: str
     sentenceContent: str
     createdAt: str
     updatedAt: str

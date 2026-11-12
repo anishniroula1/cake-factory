@@ -76,6 +76,7 @@ def test_train_model_reuses_vectors_and_indexes_only_unique_missing_keys(
     assert {
         document["sentenceContent"] for document in written_documents
     } == {saved_text, bedrock_text}
+    assert all("sentenceKey" not in document for document in written_documents)
 
 
 class HandlerFake:
