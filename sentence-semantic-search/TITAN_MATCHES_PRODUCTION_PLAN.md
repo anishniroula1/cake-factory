@@ -12,9 +12,6 @@ This document describes the production design implemented by these projects:
 | `new_api_transform` | Build and publish the final Titan application payload. |
 | `doc-delete-service` | Remove a document from OpenSearch and PostgreSQL without deleting shared catalog vectors. |
 
-The editable architecture diagram is
-[`TITAN_MATCHES_HIGH_LEVEL_ARCHITECTURE.drawio`](TITAN_MATCHES_HIGH_LEVEL_ARCHITECTURE.drawio).
-
 ## High-level runtime flow
 
 ```text
@@ -85,6 +82,84 @@ the relationships consumed by Case Similarity and API Transform.
 - The training index uses six primary shards.
 - IVF search currently uses `nprobes=64`.
 - The production IVF design uses `nlist=16384` and a representative training set before the catalogs are created.
+
+### How OpenSearch Faiss sentence similarity works
+
+OpenSearch uses Faiss to find sentences whose Titan vectors are close to one
+another. It does not compare sentence text word by word. The complete runtime
+path is:
+
+```text
+Source sentence
+  -> 512-value Titan embedding
+  -> Faiss IVF-SQ16 search in the matching analysis-group catalog
+  -> matching sentence keys
+  -> sentence_occurrences lookup
+  -> target global IDs, applications, and documents
+  -> bidirectional titan_matches relationships
+```
+
+#### 1. Train the IVF model
+
+Before the sentence catalogs are created, representative Titan embeddings are
+loaded into `sentence_semantic_training`. Faiss uses those vectors to divide
+the vector space into `nlist=16384` clusters. Sentences with similar vector
+meaning are expected to land in nearby clusters.
+
+This training happens once for the model. The Asylee and Refugee catalogs are
+separate, but both can use the same trained model because their vectors have
+the same 512-dimension Titan format.
+
+#### 2. Store unique sentence vectors
+
+Doc2Vec writes one catalog document per unique sentence key. Faiss assigns the
+vector to its nearest IVF cluster, and SQ16 reduces the vector storage needed
+inside the search index. Repeated sentence occurrences do not create repeated
+catalog vectors; their document locations are stored separately in
+`sentence_occurrences`.
+
+#### 3. Search only nearby clusters
+
+Sentence Similarity loads a source sentence's saved 512-value vector and
+selects the Asylee or Refugee catalog. Faiss probes the nearest 64 clusters
+(`nprobes=64`) instead of scanning every vector in the catalog. It then returns
+the candidates that satisfy the configured score and catalog filters.
+
+This is an approximate nearest-neighbor search. Increasing `nprobes` examines
+more clusters and may improve recall, but it also increases search time and
+OpenSearch work. Decreasing it is faster but can miss more valid candidates.
+
+#### 4. Apply sentence eligibility and the similarity threshold
+
+Source and target sentences must contain at least five words. Non-matchers,
+tracers, and form-language sentences are excluded. Separate catalogs prevent
+Asylee sentences from matching Refugee sentences.
+
+OpenSearch converts cosine similarity into a positive `_score`:
+
+```text
+OpenSearch score = (1 + cosine similarity) / 2
+cosine similarity = (2 * OpenSearch score) - 1
+saved distance = 1 - cosine similarity
+```
+
+For example, a result with `_score=0.95` has cosine similarity `0.90`, or a 90%
+match. The saved distance is `0.10`. The current 76% match threshold is sent to
+OpenSearch as minimum score `0.88` and produces a maximum accepted distance of
+`0.24`. A smaller distance is a better match, and distance `0.0` is exact.
+
+#### 5. Expand a unique sentence into real occurrences
+
+Faiss returns catalog sentence keys, not the final database relationships.
+Sentence Similarity searches `sentence_occurrences` for those keys to obtain
+the target `globalId`, `applicationId`, and `tspId`. It excludes occurrences
+owned by the source application, then PostgreSQL saves each accepted
+relationship in both directions in `tsp.titan_matches`.
+
+Example: source global ID `100` finds sentence key `abc` at 90% similarity.
+That key occurs as global IDs `200` and `300` in two other applications. The
+service saves `100 -> 200`, `200 -> 100`, `100 -> 300`, and `300 -> 100`, each
+with distance `0.10`.
 
 ### Occurrence document
 
@@ -235,7 +310,7 @@ already saved all three flags in the catalog and `sentences_vector`.
 5. Select the Asylee or Refugee catalog from the document's analysis group.
 6. Load all source catalog vectors. A missing catalog record raises a retryable readiness error.
 7. Use `retry_operation` for at most five catalog-load attempts with five seconds between attempts.
-8. Group source work in 100-sentence progress batches and process with up to 60 worker threads.
+8. Group source work in 30-sentence progress batches and process with up to 60 worker threads.
 9. Search the selected catalog at 76% cosine similarity and page every qualifying key.
 10. Expand the keys through `sentence_occurrences`, restricted to the same analysis group and excluding the source application.
 11. Collect all relationships, group them by source global ID, and save them after sentence searches finish.
@@ -250,9 +325,9 @@ already saved all three flags in the catalog and `sentences_vector`.
 | OpenSearch minimum score | 0.88 |
 | IVF `nprobes` | 64 |
 | Catalog and occurrence page size | 1,000 |
-| Source progress batch | 100 sentences |
+| Source progress batch | 30 sentences |
 | Worker threads | 60 |
-| Source SQS visibility timeout | 1 hour |
+| Source SQS visibility timeout | 2 hours |
 
 The vector query excludes target catalog records where `isNonMatcher`,
 `isTracer`, or `isFormLanguage` is true. The source application is excluded
@@ -363,7 +438,7 @@ shared by multiple applications is skipped because it cannot identify one
 application safely. Kafka acknowledgement is saved before the message is
 considered complete.
 
-Case Similarity uses a five-minute SQS visibility timeout and three bounded
+Case Similarity uses a two-hour SQS visibility timeout and three bounded
 attempts for retryable database, SQS, and Kafka boundaries.
 
 ## 4. API Transform
@@ -378,13 +453,28 @@ payload shape without the NER path.
 2. Load application, confidence, applicant, address, document, OCR, and section data.
 3. Load current application sentences from `tsp.sentences_vector`.
 4. Merge all 16 `tsp.titan_matches` buckets for each source sentence.
-5. Limit returned matches to the configured `SENTENCE_MATCH_LIMIT`, default 3,000 per source sentence.
-6. Load application-level results from `tsp.titan_similar_cases`.
-7. Map similar application IDs to A-numbers only where the existing payload requires them.
-8. Load the newest public template for Asylee applications.
-9. Build one or more Kafka-safe events with `embedding_model="TITAN"`.
-10. Publish to `rfs.ata.data_migration.api.events` and wait for every acknowledgement.
-11. Save Kafka audit/status data, send the next SQS event, and delete the source message.
+5. Order each sentence's matches by distance from smallest to largest.
+6. Return up to the configured `SENTENCE_MATCH_LIMIT`, which defaults to 3,000 matches per source sentence.
+7. Load application-level results from `tsp.titan_similar_cases`.
+8. Map similar application IDs to A-numbers only where the existing payload requires them.
+9. Load the newest public template for Asylee applications.
+10. Build one or more Kafka-safe events with `embedding_model="TITAN"`.
+11. Publish to `rfs.ata.data_migration.api.events` and wait for every acknowledgement.
+12. Save Kafka audit/status data, send the next SQS event, and delete the source message.
+
+### API match limit
+
+The match limit is applied independently to every source sentence. API
+Transform reads all 16 bucket rows first, orders the combined relationships by
+ascending distance, and then keeps the first `SENTENCE_MATCH_LIMIT` results.
+When two distances are equal, target `global_id` gives the results a stable
+order.
+
+With the default setting, one sentence sends at most 3,000 matches. Its
+`matches_count` reflects the number included in the payload. This limit changes
+only the outbound API payload: it does not delete relationships from
+`tsp.titan_matches` and does not change the complete relationship set used by
+Case Similarity.
 
 If the current `text_similarity_input` record is missing, the handler returns a
 successful zero-application result. When the receiving queue URL contains
@@ -459,37 +549,3 @@ The normal downstream message is:
 - Database transactions commit a complete logical write or roll it back.
 - Stable OpenSearch document IDs and PostgreSQL upserts make retries idempotent.
 - Logs include operational identifiers and counts but must not include sentence content, A-numbers, SQL parameters, or complete external response bodies.
-
-## Deployment order
-
-1. Deploy PostgreSQL helper functions, `tsp.titan_matches`, its indexes, and `tsp.titan_similar_cases`.
-2. Create the occurrence, tracer, and IVF training indexes.
-3. Load representative training vectors and train the shared 512-dimension IVF-SQ16 model.
-4. Wait until the model state is `created` with no training error.
-5. Create the Asylee and Refugee catalogs using the model ID and attach aliases.
-6. Backfill tracer references.
-7. Run Doc2Vec historical ingestion and reconcile OpenSearch/PostgreSQL counts.
-8. Enable Sentence Similarity, then Case Similarity, then API Transform.
-9. Enable live TAH Kafka publication after summary and receipt validation.
-10. Enable the Document Delete OpenSearch path after bidirectional-delete validation.
-
-## Production acceptance checks
-
-1. Both group aliases point to the intended IVF-SQ16 physical indexes.
-2. Every runtime vector contains 512 finite numeric values.
-3. Occurrence `globalId`, `applicationId`, and `tspId` fields are numeric.
-4. The same sentence key can exist independently in the Asylee and Refugee catalogs.
-5. Catalog classifications and `sentences_vector` classifications agree.
-6. Short or classified sentences do not create Titan sentence relationships.
-7. A 76% threshold is sent as OpenSearch minimum score `0.88`.
-8. Same-application and cross-analysis-group sentence relationships are absent.
-9. Every forward sentence relationship has the reverse relationship with the same distance.
-10. No empty `titan_matches` row exists.
-11. Generated `match_count` and `verbatim` values match each bucket's JSONB content.
-12. Case-summary lists are bidirectional and contain application IDs, not A-numbers.
-13. Applications with no case relationships have no stored summary row.
-14. Live TAH events publish only for a new or changed Kafka-confirmed value.
-15. API Transform enforces 3,000 matches per source sentence and marks events with `embedding_model="TITAN"`.
-16. Document Delete keeps shared catalog vectors and removes Titan relationships in both directions.
-17. Failed SQS messages are not deleted and reach the configured DLQ after redrive attempts.
-18. Relationship reconciliation for non-delete reprocessing is explicitly accepted or implemented before final cutover.
